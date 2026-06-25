@@ -71,7 +71,9 @@ def _load_raw(root: Path, registry: Registry) -> str:
     """Fetch a catalog's raw JSON (caching URL fetches under ``.agentry/repositories/``)."""
     if _is_url(registry.location):
         url = _normalize_url(registry.location)
-        req = urllib.request.Request(url, headers={"User-Agent": "agentry", "Accept": "application/json"})
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "agentry", "Accept": "application/json"}
+        )
         try:
             with urllib.request.urlopen(req) as resp:  # noqa: S310 (http(s) only, gated above)
                 raw = resp.read().decode("utf-8")
@@ -127,7 +129,9 @@ def parse_repo_url(url: str) -> tuple[str, str | None, str | None, str]:
     return clean, ref, subdir, name
 
 
-def add_entry(catalog_path: Path, name: str, entry: RepositoryEntry, *, force: bool = False) -> None:
+def add_entry(
+    catalog_path: Path, name: str, entry: RepositoryEntry, *, force: bool = False
+) -> None:
     """Insert ``entry`` under ``name`` into the JSON catalog at ``catalog_path``.
 
     Loads the existing catalog (or starts an empty one), rejects a duplicate ``name`` unless
@@ -147,8 +151,12 @@ def add_entry(catalog_path: Path, name: str, entry: RepositoryEntry, *, force: b
     if not isinstance(repos, dict):
         raise RegistryError(f"catalog {catalog_path}: 'repositories' must be a JSON object")
     if name in repos and not force:
-        raise RegistryError(f"repo '{name}' already exists in {catalog_path} (use --force to overwrite)")
-    repos[name] = entry.model_dump(mode="json", by_alias=True, exclude_none=True, exclude_defaults=False)
+        raise RegistryError(
+            f"repo '{name}' already exists in {catalog_path} (use --force to overwrite)"
+        )
+    repos[name] = entry.model_dump(
+        mode="json", by_alias=True, exclude_none=True, exclude_defaults=False
+    )
     # Drop noise the curated file never carries: empty target_profiles, absent expose.
     body = repos[name]
     if not body.get("target_profiles"):
@@ -201,10 +209,14 @@ def build_install_profiles(
         for ctype in present:
             existing = profiles.get(target, {}).get(ctype)
             base_dest = base.link.get(ctype) if base else None
-            dest = (existing.dest if existing and existing.dest else base_dest)
+            dest = existing.dest if existing and existing.dest else base_dest
             if dest is None:
                 continue  # target doesn't support this type as link — nothing to synthesize
-            strategy = Strategy.COPY if entry.copy_install else (existing.strategy if existing else Strategy.LINK)
+            strategy = (
+                Strategy.COPY
+                if entry.copy_install
+                else (existing.strategy if existing else Strategy.LINK)
+            )
             if entry.namespaced and ctype in _NAMESPACED_TYPES:
                 dest = _namespace_dest(dest, repo)
             # Skip a no-op that just restates the built-in link default.
@@ -214,7 +226,9 @@ def build_install_profiles(
     return profiles
 
 
-def find_repo(root: Path, config: Config, name: str) -> tuple[Registry, str, RepositoryEntry] | None:
+def find_repo(
+    root: Path, config: Config, name: str
+) -> tuple[Registry, str, RepositoryEntry] | None:
     """First catalog (in config order) that lists ``name``, with its entry."""
     for registry in config.repositories:
         catalog = load_catalog(root, registry)

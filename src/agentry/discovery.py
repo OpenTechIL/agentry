@@ -118,7 +118,7 @@ def _discover_from_descriptor(source_root: Path, descriptor: SourceDescriptor) -
         for entry in entries:
             requires = tuple(entry.requires)
             if entry.path:
-                p = (source_root / entry.path)
+                p = source_root / entry.path
                 if not p.exists():
                     continue
                 name = entry.name or _name_for(ctype, p)
@@ -129,7 +129,9 @@ def _discover_from_descriptor(source_root: Path, descriptor: SourceDescriptor) -
                 for match in sorted(source_root.glob(entry.glob)):
                     name = _name_for(ctype, match)
                     if (ctype, name) not in seen:
-                        found.append(Discovered(ctype, name, match, requires, _harness_for(ctype, name)))
+                        found.append(
+                            Discovered(ctype, name, match, requires, _harness_for(ctype, name))
+                        )
                         seen.add((ctype, name))
     return found
 
@@ -154,7 +156,9 @@ def _discover_by_convention(source_root: Path) -> list[Discovered]:
                     found.append(Discovered(ctype, entry.name, entry))
                     seen.add((ctype, entry.name))
             elif entry.is_file() and entry.suffix == layout.ext:
-                found.append(Discovered(ctype, entry.stem, entry, harness=_harness_for(ctype, entry.stem)))
+                found.append(
+                    Discovered(ctype, entry.stem, entry, harness=_harness_for(ctype, entry.stem))
+                )
                 seen.add((ctype, entry.stem))
 
     # A root-level `.mcp.json` (plugin convention) → one `mcp` component, unless an

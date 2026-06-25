@@ -71,7 +71,12 @@ class TargetSpec:
     link_merge: dict[ComponentType, LinkMergeDest] = field(default_factory=dict)
 
     def supports(self, ctype: ComponentType) -> bool:
-        return ctype in self.link or ctype in self.copy or ctype in self.merge or ctype in self.link_merge
+        return (
+            ctype in self.link
+            or ctype in self.copy
+            or ctype in self.merge
+            or ctype in self.link_merge
+        )
 
     def strategy(self, ctype: ComponentType) -> Strategy | None:
         if ctype in self.link_merge:
@@ -187,7 +192,9 @@ BUILTIN_TARGETS: dict[str, TargetSpec] = {
 }
 
 
-def _apply_profile(base: TargetSpec | None, name: str, rules: dict[ComponentType, ProfileRule]) -> TargetSpec:
+def _apply_profile(
+    base: TargetSpec | None, name: str, rules: dict[ComponentType, ProfileRule]
+) -> TargetSpec:
     link = dict(base.link) if base else {}
     copy = dict(base.copy) if base else {}
     merge = dict(base.merge) if base else {}

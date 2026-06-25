@@ -28,6 +28,7 @@ from .installers import merge as merge_inst
 from .lockfile import load_lock, save_lock
 from .manifest import load_manifest, save_manifest
 from .models import (
+    MERGE_TYPES,
     ComponentType,
     Config,
     GeneratorSpec,
@@ -37,7 +38,6 @@ from .models import (
     InstalledLinkMerge,
     InstalledMerge,
     Manifest,
-    MERGE_TYPES,
     SourceType,
     Strategy,
     Target,

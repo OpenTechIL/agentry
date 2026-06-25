@@ -34,14 +34,18 @@ class Strategy(str, Enum):
     """How a component is installed into a target tool."""
 
     LINK = "link"  # symlink a file/dir from the store into the tool's dir
-    COPY = "copy"  # copy a file/dir from the store into the tool's dir (self-contained, committable)
+    COPY = (
+        "copy"  # copy a file/dir from the store into the tool's dir (self-contained, committable)
+    )
     MERGE = "merge"  # inject a JSON fragment into the tool's config file
     GENERATE = "generate"  # run the component's own installer command; track produced files
     LINK_MERGE = "link+merge"  # symlink a script dir AND merge its config, rewriting paths
 
 
 #: File-based component types install via symlink; the rest merge into config.
-LINK_TYPES = frozenset({ComponentType.SKILL, ComponentType.AGENT, ComponentType.COMMAND, ComponentType.TOOL})
+LINK_TYPES = frozenset(
+    {ComponentType.SKILL, ComponentType.AGENT, ComponentType.COMMAND, ComponentType.TOOL}
+)
 MERGE_TYPES = frozenset({ComponentType.HOOK, ComponentType.MCP})
 
 #: Whether a component type is a directory (vs a single file) in a source repo.
@@ -150,7 +154,9 @@ class GeneratorSpec(BaseModel):
         if any(not c for c in self.setup):
             raise ValueError("each generator 'setup' entry must be a non-empty argv list")
         if not self.produces:
-            raise ValueError("generator 'produces' must list at least one path (needed for safe removal)")
+            raise ValueError(
+                "generator 'produces' must list at least one path (needed for safe removal)"
+            )
         for p in self.produces:
             _check_rel(f"generator produces entry '{p}'", p)
         return self

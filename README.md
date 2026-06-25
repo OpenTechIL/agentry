@@ -104,6 +104,14 @@ the `copy` flag (see [Third-party skills](#third-party-skills)).
 Target support varies by tool (e.g. Cursor is rules-only); unsupported combinations
 are skipped with a warning.
 
+**Per-harness config variants.** A repo may ship tool-specific hook/MCP fragments side
+by side — e.g. `hooks/hooks.json` (Claude), `hooks/hooks-cursor.json` (Cursor),
+`hooks/hooks-codex.json` (Codex). agentry reads the `-<harness>` suffix and routes each
+variant **only** to its matching target, so a Cursor or Codex fragment never lands in
+Claude's `settings.json`. The canonical, suffix-less file applies to every target that
+supports the type. As a final guard, a hook event Claude Code doesn't recognize is
+dropped from `.claude/settings.json` with a warning rather than written out.
+
 ### Configurable mappings
 
 Both sides of the mapping are data-driven:

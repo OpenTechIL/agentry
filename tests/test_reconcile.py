@@ -11,7 +11,15 @@ import pytest
 from agentry.config import ConfigStore
 from agentry.lockfile import load_lock
 from agentry.manifest import load_manifest
-from agentry.models import Component, ComponentType, ProfileRule, Source, SourceType, Strategy
+from agentry.models import (
+    Component,
+    ComponentType,
+    GeneratorSpec,
+    ProfileRule,
+    Source,
+    SourceType,
+    Strategy,
+)
 from agentry.reconcile import status, sync
 from agentry.targets import BUILTIN_TARGETS
 
@@ -51,7 +59,9 @@ def _wire_copy(project: Path, source: Path, *comps, dest_overrides: dict | None 
     store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(source)))
     for ctype, name in comps:
         store.add_component(Component(source="s", type=ctype, name=name, enabled=True))
-    store.merge_target_profiles(_copy_profile(*{c[0] for c in comps}, dest_overrides=dest_overrides))
+    store.merge_target_profiles(
+        _copy_profile(*{c[0] for c in comps}, dest_overrides=dest_overrides)
+    )
     store.save()
 
 
@@ -254,21 +264,18 @@ def test_subdir_persisted_in_config(project: Path, nested_source: Path):
 
 
 def test_subdir_must_be_relative_inside_repo():
-    import pytest
 
     with pytest.raises(ValueError, match="relative path inside the repo"):
         Source(name="s", type=SourceType.LOCAL, path="/x", subdir="../escape")
 
 
 def test_component_path_must_be_relative_inside_source():
-    import pytest
 
     with pytest.raises(ValueError, match="relative path inside the project"):
         Component(source="s", type=ComponentType.SKILL, name="x", path="../escape")
 
 
-def _generator_component(produces: str = ".claude/skills/fake/SKILL.md") -> "GeneratorSpec":
-    from agentry.models import GeneratorSpec
+def _generator_component(produces: str = ".claude/skills/fake/SKILL.md") -> GeneratorSpec:
 
     # A fake "graphify": writes a skill file into the project on its own.
     script = (
@@ -277,7 +284,9 @@ def _generator_component(produces: str = ".claude/skills/fake/SKILL.md") -> "Gen
         "os.makedirs(p, exist_ok=True);"
         f"open(os.path.join(os.getcwd(), {produces!r}),'w').write('# fake skill\\n')"
     )
-    return GeneratorSpec(command=[sys.executable, "-c", script], produces=[os.path.dirname(produces)])
+    return GeneratorSpec(
+        command=[sys.executable, "-c", script], produces=[os.path.dirname(produces)]
+    )
 
 
 def _wire_generator(project: Path, source: Path, spec) -> None:
@@ -340,22 +349,19 @@ def test_generate_persisted_in_config(project: Path, local_source: Path):
 
 
 def test_generate_produces_required():
-    import pytest
-
-    from agentry.models import GeneratorSpec
 
     with pytest.raises(ValueError, match="produces"):
         GeneratorSpec(command=["echo", "hi"], produces=[])
 
 
 def test_generate_and_path_mutually_exclusive():
-    import pytest
-
-    from agentry.models import GeneratorSpec
 
     with pytest.raises(ValueError, match="either 'path' or 'generate'"):
         Component(
-            source="s", type=ComponentType.SKILL, name="x", path=".",
+            source="s",
+            type=ComponentType.SKILL,
+            name="x",
+            path=".",
             generate=GeneratorSpec(command=["echo"], produces=["out"]),
         )
 
@@ -387,7 +393,9 @@ def test_wrapped_hooks_fragment_installs_flat(project: Path, tmp_path: Path):
         json.dumps(
             {
                 "description": "plugin metadata that is not a hook entry",
-                "hooks": {"Stop": [{"matcher": ".*", "hooks": [{"type": "command", "command": "node"}]}]},
+                "hooks": {
+                    "Stop": [{"matcher": ".*", "hooks": [{"type": "command", "command": "node"}]}]
+                },
             }
         )
     )
@@ -416,7 +424,9 @@ def _multi_harness_hooks_source(tmp_path: Path) -> Path:
     src = tmp_path / "mhsrc"
     (src / "hooks").mkdir(parents=True)
     (src / "hooks" / "hooks.json").write_text(
-        json.dumps({"hooks": {"SessionStart": [{"matcher": "startup", "hooks": [{"command": "claude"}]}]}})
+        json.dumps(
+            {"hooks": {"SessionStart": [{"matcher": "startup", "hooks": [{"command": "claude"}]}]}}
+        )
     )
     (src / "hooks" / "hooks-cursor.json").write_text(
         json.dumps({"version": 1, "hooks": {"sessionStart": [{"command": "cursor"}]}})
@@ -453,7 +463,14 @@ def test_foreign_harness_key_is_self_healed_on_sync(project: Path, tmp_path: Pat
     # records agentry as the owner of the camelCase one.
     (project / ".claude").mkdir(parents=True, exist_ok=True)
     (project / ".claude/settings.json").write_text(
-        json.dumps({"hooks": {"SessionStart": [{"command": "claude"}], "sessionStart": [{"command": "cursor"}]}})
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [{"command": "claude"}],
+                    "sessionStart": [{"command": "cursor"}],
+                }
+            }
+        )
     )
     from agentry.manifest import save_manifest
     from agentry.models import InstalledMerge
@@ -461,10 +478,18 @@ def test_foreign_harness_key_is_self_healed_on_sync(project: Path, tmp_path: Pat
     man = load_manifest(project)
     man.merges = [
         InstalledMerge(
-            component="s/hook/hooks", target="claude", file=".claude/settings.json", pointer="hooks", keys=["SessionStart"]
+            component="s/hook/hooks",
+            target="claude",
+            file=".claude/settings.json",
+            pointer="hooks",
+            keys=["SessionStart"],
         ),
         InstalledMerge(
-            component="s/hook/hooks-cursor", target="claude", file=".claude/settings.json", pointer="hooks", keys=["sessionStart"]
+            component="s/hook/hooks-cursor",
+            target="claude",
+            file=".claude/settings.json",
+            pointer="hooks",
+            keys=["sessionStart"],
         ),
     ]
     save_manifest(project, man)
@@ -482,7 +507,9 @@ def test_unknown_claude_hook_event_is_dropped_with_warning(project: Path, tmp_pa
     src = tmp_path / "badsrc"
     (src / "hooks").mkdir(parents=True)
     (src / "hooks" / "hooks.json").write_text(
-        json.dumps({"hooks": {"SessionStart": [{"command": "ok"}], "Frobnicate": [{"command": "no"}]}})
+        json.dumps(
+            {"hooks": {"SessionStart": [{"command": "ok"}], "Frobnicate": [{"command": "no"}]}}
+        )
     )
     _wire(project, src, (ComponentType.HOOK, "hooks"))
     res = sync(project)
@@ -507,7 +534,10 @@ def _hooks_source(tmp_path: Path) -> Path:
                         {
                             "matcher": ".*",
                             "hooks": [
-                                {"type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/graph.mjs"}
+                                {
+                                    "type": "command",
+                                    "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/graph.mjs",
+                                }
                             ],
                         }
                     ]
@@ -633,7 +663,9 @@ def test_link_merge_dest_change_removes_old_link(project: Path, tmp_path: Path):
     assert (project / ".claude/hooks/hooks").is_symlink()
 
     store = ConfigStore.load(project)
-    store.doc["target_profiles"]["claude"]["hook"]["dest"] = ".claude/hooks/agentry/{repo}@{ref}/{name}"
+    store.doc["target_profiles"]["claude"]["hook"]["dest"] = (
+        ".claude/hooks/agentry/{repo}@{ref}/{name}"
+    )
     store.doc["target_profiles"]["claude"]["hook"]["rewrite_to"] = (
         "${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}"
     )
@@ -652,7 +684,14 @@ def test_link_merge_warns_on_unrewritable_command(project: Path, tmp_path: Path)
             {
                 "hooks": {
                     "Stop": [
-                        {"hooks": [{"type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/elsewhere/x.mjs"}]}
+                        {
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": "node ${CLAUDE_PLUGIN_ROOT}/elsewhere/x.mjs",
+                                }
+                            ]
+                        }
                     ]
                 }
             }
@@ -671,7 +710,9 @@ def test_explicit_path_root_is_skill(project: Path, tmp_path: Path):
     (skill_repo / "SKILL.md").write_text("# cool\n")
     store = ConfigStore.load(project)
     store.add_source(Source(name="cs", type=SourceType.LOCAL, path=str(skill_repo)))
-    store.add_component(Component(source="cs", type=ComponentType.SKILL, name="cool-skill", path="."))
+    store.add_component(
+        Component(source="cs", type=ComponentType.SKILL, name="cool-skill", path=".")
+    )
     store.save()
 
     res = sync(project)

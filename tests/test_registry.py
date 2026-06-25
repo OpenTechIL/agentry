@@ -89,7 +89,9 @@ def test_build_install_profiles_copy_flips_strategy():
 
 def test_build_install_profiles_namespaces_command_and_agent_only():
     entry = RepositoryEntry(source=RegistrySource(url="x"), copy=False, namespaced=True)
-    profiles = reg.build_install_profiles(entry, "arckit", _comps(_C.COMMAND, _C.AGENT, _C.SKILL), {"claude"})
+    profiles = reg.build_install_profiles(
+        entry, "arckit", _comps(_C.COMMAND, _C.AGENT, _C.SKILL), {"claude"}
+    )
     claude = profiles["claude"]
     assert claude[_C.COMMAND].strategy is Strategy.LINK
     assert claude[_C.COMMAND].dest == ".claude/commands/arckit/{name}.md"
@@ -264,7 +266,10 @@ def _multi_repo(tmp_path: Path) -> Path:
 
 
 def _write_multi_catalog(tmp_path: Path, source: Path) -> Path:
-    catalog = {"version": 1, "repositories": {"demo": {"source": {"type": "local", "path": str(source)}}}}
+    catalog = {
+        "version": 1,
+        "repositories": {"demo": {"source": {"type": "local", "path": str(source)}}},
+    }
     path = tmp_path / "repositories.json"
     path.write_text(json.dumps(catalog))
     return path
@@ -385,7 +390,10 @@ def test_add_catalog_repo_writes_target_profiles_idempotent(tmp_path, monkeypatc
     res2 = runner.invoke(app, ["add", "demo"])
     assert res2.exit_code == 0, res2.output
     cfg2 = ConfigStore.load(project).parsed()
-    assert cfg2.target_profiles["claude"][ComponentType.HOOK].rewrite_to == "${CLAUDE_PROJECT_DIR}/custom"
+    assert (
+        cfg2.target_profiles["claude"][ComponentType.HOOK].rewrite_to
+        == "${CLAUDE_PROJECT_DIR}/custom"
+    )
 
 
 def test_normalize_github_web_url():
@@ -456,7 +464,13 @@ def test_registry_add_derives_name_and_infers_ref_subdir(tmp_path):
     catalog = tmp_path / "repositories.json"
     result = runner.invoke(
         app,
-        ["registry", "add", "https://github.com/acme/widget/tree/dev/plugins/x", "--file", str(catalog)],
+        [
+            "registry",
+            "add",
+            "https://github.com/acme/widget/tree/dev/plugins/x",
+            "--file",
+            str(catalog),
+        ],
     )
     assert result.exit_code == 0, result.output
     entry = json.loads(catalog.read_text())["repositories"]["widget"]
@@ -471,29 +485,54 @@ def test_registry_add_derives_name_and_infers_ref_subdir(tmp_path):
 def test_registry_add_summary_and_duplicate(tmp_path):
     catalog = tmp_path / "repositories.json"
     runner.invoke(
-        app, ["registry", "add", "https://github.com/o/r", "cool", "--summary", "hi", "--file", str(catalog)]
+        app,
+        [
+            "registry",
+            "add",
+            "https://github.com/o/r",
+            "cool",
+            "--summary",
+            "hi",
+            "--file",
+            str(catalog),
+        ],
     )
     assert json.loads(catalog.read_text())["repositories"]["cool"]["summary"] == "hi"
 
-    dup = runner.invoke(app, ["registry", "add", "https://github.com/o/r2", "cool", "--file", str(catalog)])
+    dup = runner.invoke(
+        app, ["registry", "add", "https://github.com/o/r2", "cool", "--file", str(catalog)]
+    )
     assert dup.exit_code == 1
     # The original entry is untouched (no partial overwrite).
-    assert json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"] == "https://github.com/o/r"
+    assert (
+        json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"]
+        == "https://github.com/o/r"
+    )
 
     forced = runner.invoke(
-        app, ["registry", "add", "https://github.com/o/r2", "cool", "--force", "--file", str(catalog)]
+        app,
+        ["registry", "add", "https://github.com/o/r2", "cool", "--force", "--file", str(catalog)],
     )
     assert forced.exit_code == 0
-    assert json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"] == "https://github.com/o/r2"
+    assert (
+        json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"]
+        == "https://github.com/o/r2"
+    )
 
 
 def test_registry_add_discover(tmp_path, monkeypatch, git_source):
     # Re-init the fixture repo on an explicit `main` branch so --ref main checks out.
     import subprocess
 
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.x",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e.x"}
-    subprocess.run(["git", "branch", "-m", "main"], cwd=git_source, check=True, env={**os.environ, **env})
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@e.x",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@e.x",
+    }
+    subprocess.run(
+        ["git", "branch", "-m", "main"], cwd=git_source, check=True, env={**os.environ, **env}
+    )
 
     workdir = tmp_path / "work"
     workdir.mkdir()

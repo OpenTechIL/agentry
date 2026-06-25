@@ -36,6 +36,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the caller (`reconcile`) now owns placeholder substitution via `_link_merge_vars`/`_expand`.
 
 ### Fixed
+- Per-harness hook/MCP fragments are now routed only to their matching target. A repo
+  shipping tool-specific variants side by side (e.g. superpowers' `hooks/hooks.json`,
+  `hooks/hooks-cursor.json`, `hooks/hooks-codex.json`) no longer merges the Cursor/Codex
+  variants into Claude's `.claude/settings.json` — previously Cursor's camelCase
+  `sessionStart` (which Claude Code rejects) and Codex's colliding `SessionStart` leaked
+  in. Discovery tags a `<base>-<harness>` fragment with its harness (`discovery.harness_suffix`,
+  `KNOWN_HARNESS_SLUGS`); reconcile skips variants whose harness isn't the target. As
+  defense-in-depth, hook events outside `CLAUDE_HOOK_EVENTS` are dropped from Claude's
+  settings with a warning. The fix self-heals affected projects on the next `agy sync`,
+  and `agy add` no longer records foreign-harness variants for inactive targets.
 - A changed link+merge `dest` template now removes the stale symlink at the old path during
   reconcile, instead of leaving an orphaned link behind.
 - `registry.add_entry` writes catalog JSON with `ensure_ascii=False`, keeping non-ASCII
