@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentry"
+version = "0.1.0"
+description = "A dependency manager for AI coding agents — install skills, agents, commands, tools, hooks and MCP servers per project."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "agentry contributors" }]
+keywords = ["ai", "agents", "claude-code", "opencode", "cursor", "mcp", "skills", "dependency-manager", "cli"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Build Tools",
+]
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "pydantic>=2.6",
+    "ruamel.yaml>=0.18",
+]
+
+[project.optional-dependencies]
+tui = ["textual>=0.60"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+[project.urls]
+Homepage = "https://github.com/opentech/agentry"
+Documentation = "https://github.com/opentech/agentry/tree/main/docs"
+Repository = "https://github.com/opentech/agentry"
+Issues = "https://github.com/opentech/agentry/issues"
+
+[project.scripts]
+agy = "agentry.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentry"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

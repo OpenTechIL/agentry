@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="96" viewBox="0 0 320 96" role="img" aria-label="agentry logo">
+  <title>agentry</title>
+  <!-- mark: [ › ] — a registry bracket enclosing an agent chevron -->
+  <g fill="none" stroke="#5A4FCF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+    <!-- left bracket -->
+    <path d="M28 22 H16 V74 H28" />
+    <!-- right bracket -->
+    <path d="M68 22 H80 V74 H68" />
+    <!-- chevron (agent prompt) -->
+    <path d="M40 36 L52 48 L40 60" stroke="#22D3EE" />
+  </g>
+  <!-- wordmark -->
+  <text x="100" y="60" font-family="JetBrains Mono, SF Mono, ui-monospace, monospace"
+        font-size="40" font-weight="700" fill="#1E1E2E" letter-spacing="-1">agentry</text>
+  <text x="101" y="80" font-family="Inter, -apple-system, sans-serif"
+        font-size="13" fill="#5A4FCF" letter-spacing="3">AI AGENT DEPENDENCIES</text>
+</svg>
