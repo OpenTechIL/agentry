@@ -16,7 +16,7 @@ from __future__ import annotations
 from enum import Enum
 from pathlib import Path
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class ComponentType(str, Enum):
@@ -34,13 +34,18 @@ class Strategy(str, Enum):
     """How a component is installed into a target tool."""
 
     LINK = "link"  # symlink a file/dir from the store into the tool's dir
+    COPY = (
+        "copy"  # copy a file/dir from the store into the tool's dir (self-contained, committable)
+    )
     MERGE = "merge"  # inject a JSON fragment into the tool's config file
     GENERATE = "generate"  # run the component's own installer command; track produced files
     LINK_MERGE = "link+merge"  # symlink a script dir AND merge its config, rewriting paths
 
 
 #: File-based component types install via symlink; the rest merge into config.
-LINK_TYPES = frozenset({ComponentType.SKILL, ComponentType.AGENT, ComponentType.COMMAND, ComponentType.TOOL})
+LINK_TYPES = frozenset(
+    {ComponentType.SKILL, ComponentType.AGENT, ComponentType.COMMAND, ComponentType.TOOL}
+)
 MERGE_TYPES = frozenset({ComponentType.HOOK, ComponentType.MCP})
 
 #: Whether a component type is a directory (vs a single file) in a source repo.
@@ -86,6 +91,13 @@ class Target:
 
 
 BUILTIN_TARGET_NAMES: frozenset[str] = frozenset({Target.CLAUDE, Target.OPENCODE, Target.CURSOR})
+
+#: AI-harness slugs that, used as a filename suffix (e.g. ``hooks-cursor.json``), mark a
+#: config fragment as belonging to that harness rather than the canonical (Claude) one.
+#: Used only for MERGE_TYPES (hooks/mcp) to route per-harness variants to their target.
+KNOWN_HARNESS_SLUGS: frozenset[str] = frozenset(
+    {"claude", "opencode", "cursor", "codex", "gemini", "kimi", "pi", "windsurf"}
+)
 
 
 # -- config ---------------------------------------------------------------
@@ -142,7 +154,9 @@ class GeneratorSpec(BaseModel):
         if any(not c for c in self.setup):
             raise ValueError("each generator 'setup' entry must be a non-empty argv list")
         if not self.produces:
-            raise ValueError("generator 'produces' must list at least one path (needed for safe removal)")
+            raise ValueError(
+                "generator 'produces' must list at least one path (needed for safe removal)"
+            )
         for p in self.produces:
             _check_rel(f"generator produces entry '{p}'", p)
         return self
@@ -197,8 +211,8 @@ class ProfileRule(BaseModel):
 
     @model_validator(mode="after")
     def _check(self) -> ProfileRule:
-        if self.strategy is Strategy.LINK and not self.dest:
-            raise ValueError("link profile rule requires 'dest'")
+        if self.strategy in (Strategy.LINK, Strategy.COPY) and not self.dest:
+            raise ValueError(f"{self.strategy.value} profile rule requires 'dest'")
         if self.strategy is Strategy.MERGE and not (self.file and self.pointer):
             raise ValueError("merge profile rule requires 'file' and 'pointer'")
         if self.strategy is Strategy.LINK_MERGE and not (self.dest and self.file and self.pointer):
@@ -353,9 +367,20 @@ class RepositoryEntry(BaseModel):
     with it present, only the listed components are enabled.
     """
 
+    # ``copy`` in JSON; the attribute is renamed to avoid shadowing ``BaseModel.copy``.
+    model_config = ConfigDict(populate_by_name=True)
+
     summary: str | None = None
     source: RegistrySource
     expose: list[ExposeEntry] | None = None
+    # Install file/dir components by *copying* (self-contained, committable) instead of the
+    # default *symlink*. Opt-in per repo; link stays the built-in default. Resolved into
+    # concrete copy profile rules at ``agy add`` time (see registry.build_install_profiles).
+    copy_install: bool = Field(default=False, alias="copy")
+    # Nest command + agent installs under a ``<repo>/`` subfolder so Claude Code namespaces
+    # the slash commands (``.claude/commands/<repo>/adr.md`` -> ``/<repo>:adr``). Skills are
+    # left flat (Claude only discovers ``.claude/skills/<name>/SKILL.md``).
+    namespaced: bool = True
     # Per-repo target-profile overrides merged into the project's config on ``agy add``.
     # Lets a plugin repo declare how its hooks/mcp install (e.g. a claude hook link+merge
     # rewriting ${CLAUDE_PLUGIN_ROOT}) so the curated install works without manual config.
@@ -407,6 +432,14 @@ class InstalledLink(BaseModel):
     path: str  # the symlink path, relative to project root
 
 
+class InstalledCopy(BaseModel):
+    """A file/dir agentry copied into a target dir (copy strategy)."""
+
+    component: str  # component ref
+    target: str
+    path: str  # the copied path, relative to project root
+
+
 class InstalledMerge(BaseModel):
     """Config keys agentry injected (merge strategy)."""
 
@@ -441,6 +474,7 @@ class Manifest(BaseModel):
 
     version: int = 1
     links: list[InstalledLink] = Field(default_factory=list)
+    copies: list[InstalledCopy] = Field(default_factory=list)
     merges: list[InstalledMerge] = Field(default_factory=list)
     generated: list[InstalledGenerated] = Field(default_factory=list)
     link_merges: list[InstalledLinkMerge] = Field(default_factory=list)

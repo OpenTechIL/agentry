@@ -25,12 +25,14 @@ app = typer.Typer(
     no_args_is_help=True,
     help="agentry (agy) — a dependency manager for AI coding agents.",
 )
-source_app = typer.Typer(no_args_is_help=True, help="Manage component sources (git repos / local dirs).")
+source_app = typer.Typer(
+    no_args_is_help=True, help="Manage component sources (git repos / local dirs)."
+)
 app.add_typer(source_app, name="source")
-repo_app = typer.Typer(no_args_is_help=True, help="Manage repository catalogs (curated source repos).")
-app.add_typer(repo_app, name="repo")
-registry_app = typer.Typer(no_args_is_help=True, help="Author the curated repository catalog (repositories.json).")
-app.add_typer(registry_app, name="registry")
+catalog_app = typer.Typer(
+    no_args_is_help=True, help="Manage catalogs (curated repository indexes)."
+)
+app.add_typer(catalog_app, name="catalog")
 
 console = Console()
 err = Console(stderr=True)
@@ -75,7 +77,9 @@ def _parse_ref(ref: str) -> tuple[str, ComponentType, str]:
     try:
         ctype = ComponentType(ctype_raw)
     except ValueError:
-        err.print(f"[red]Unknown type '{ctype_raw}'. Choose from: {', '.join(t.value for t in ComponentType)}[/red]")
+        err.print(
+            f"[red]Unknown type '{ctype_raw}'. Choose from: {', '.join(t.value for t in ComponentType)}[/red]"
+        )
         raise typer.Exit(1)
     return source, ctype, name
 
@@ -111,7 +115,9 @@ def _print_result(res: SyncResult) -> None:
         console.print("  [dim]already up to date[/dim]")
 
 
-def _add_from_catalog(repo: str, names: list[str], *, types: list[ComponentType], allow_run: bool) -> None:
+def _add_from_catalog(
+    repo: str, names: list[str], *, types: list[ComponentType], allow_run: bool
+) -> None:
     """Resolve a repo name via the configured catalogs and install all/selected components.
 
     ``names`` (from a ``<repo>@a,b`` ref) and ``types`` (from ``--type``) narrow what is
@@ -131,7 +137,7 @@ def _add_from_catalog(repo: str, names: list[str], *, types: list[ComponentType]
     if match is None:
         err.print(
             f"[red]No catalog lists '{repo}'.[/red]\n"
-            "Add one with `agy repo add <name> <file-or-url>`, or use the full "
+            "Add one with `agy catalog add <name> <file-or-url>`, or use the full "
             "<source>/<type>/<name> form."
         )
         raise typer.Exit(1)
@@ -147,7 +153,9 @@ def _add_from_catalog(repo: str, names: list[str], *, types: list[ComponentType]
     if existing is None:
         store.add_source(src)
     elif (existing.url or existing.path) != (src.url or src.path):
-        err.print(f"[red]A different source named '{repo}' already exists; rename or remove it first.[/red]")
+        err.print(
+            f"[red]A different source named '{repo}' already exists; rename or remove it first.[/red]"
+        )
         raise typer.Exit(1)
 
     # Resolve into the store so we can discover what the repo provides.
@@ -165,9 +173,14 @@ def _add_from_catalog(repo: str, names: list[str], *, types: list[ComponentType]
             for e in entry.expose
         ]
     else:
+        # Drop per-harness merge variants (e.g. hooks-cursor.json) for harnesses that
+        # aren't active targets, so a claude-only install doesn't record foreign-harness
+        # fragments it would never use. reconcile skips them regardless; this is hygiene.
+        active = set(config.active_targets())
         available = [
             Component(source=repo, type=d.type, name=d.name)
             for d in discovery.discover(effective_root(_root(), src))
+            if d.harness is None or d.harness in active
         ]
     if not available:
         err.print(f"[yellow]Repository '{repo}' provided no installable components.[/yellow]")
@@ -185,10 +198,15 @@ def _add_from_catalog(repo: str, names: list[str], *, types: list[ComponentType]
 
     for comp in comps:
         store.add_component(comp)
-    if entry.target_profiles and store.merge_target_profiles(entry.target_profiles):
-        console.print("  [dim]added target_profiles from catalog (install overrides for this repo)[/dim]")
+    profiles = reg.build_install_profiles(entry, repo, comps, config.active_targets())
+    if profiles and store.merge_target_profiles(profiles):
+        console.print(
+            "  [dim]added target_profiles from catalog (install overrides for this repo)[/dim]"
+        )
     store.save()
-    console.print(f"[green]Added[/green] {repo} [dim]({len(comps)} component(s) from catalog)[/dim]")
+    console.print(
+        f"[green]Added[/green] {repo} [dim]({len(comps)} component(s) from catalog)[/dim]"
+    )
     _do_sync(allow_run=allow_run)
 
 
@@ -204,7 +222,9 @@ def _select_components(
     missing = wanted - {c.name for c in selected}
     if missing:
         scope = f" of type {', '.join(t.value for t in types)}" if types else ""
-        err.print(f"[red]Repository '{repo}' has no component{scope} named: {', '.join(sorted(missing))}.[/red]")
+        err.print(
+            f"[red]Repository '{repo}' has no component{scope} named: {', '.join(sorted(missing))}.[/red]"
+        )
         raise typer.Exit(1)
     return selected
 
@@ -214,10 +234,14 @@ def _interactive_pick(available: list[Component]) -> list[Component]:
     console.print(f"[bold]{len(available)} component(s) available:[/bold]")
     for i, c in enumerate(available, 1):
         console.print(f"  [cyan]{i:>2}[/cyan]  [magenta]{c.type.value}[/magenta]/{c.name}")
-    answer = Prompt.ask(
-        "Install which? [dim](numbers comma-separated, 'a' for all, or a type name)[/dim]",
-        default="a",
-    ).strip().lower()
+    answer = (
+        Prompt.ask(
+            "Install which? [dim](numbers comma-separated, 'a' for all, or a type name)[/dim]",
+            default="a",
+        )
+        .strip()
+        .lower()
+    )
     if answer in ("a", "all", ""):
         return available
     try:  # a type name installs that whole type
@@ -367,7 +391,9 @@ def search_components(
 
 @app.command()
 def add(
-    ref: str = typer.Argument(..., help="Catalog repo (<repo> or <repo>@name[,name]) or full ref <source>/<type>/<name>"),
+    ref: str = typer.Argument(
+        ..., help="Catalog repo (<repo> or <repo>@name[,name]) or full ref <source>/<type>/<name>"
+    ),
     type_: list[str] = typer.Option(
         None,
         "--type",
@@ -415,7 +441,9 @@ def add(
         return
 
     if type_:
-        err.print("[red]--type applies only to catalog refs, not a full <source>/<type>/<name> ref.[/red]")
+        err.print(
+            "[red]--type applies only to catalog refs, not a full <source>/<type>/<name> ref.[/red]"
+        )
         raise typer.Exit(1)
     source, ctype, name = _parse_ref(ref)
     store = _load()
@@ -431,7 +459,9 @@ def add(
                 command=shlex.split(generate_command),
                 produces=list(produces or []),
             )
-        comp = Component(source=source, type=ctype, name=name, enabled=True, path=path, generate=generate)
+        comp = Component(
+            source=source, type=ctype, name=name, enabled=True, path=path, generate=generate
+        )
     except ValueError as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
@@ -574,7 +604,9 @@ def source_add(
     ref: str = typer.Option("main", "--ref", "-r", help="Git branch/tag/commit."),
     local: bool = typer.Option(False, "--local", help="Treat location as a local directory."),
     subdir: str = typer.Option(
-        None, "--subdir", help="Subdirectory within the source where components live (monorepo support)."
+        None,
+        "--subdir",
+        help="Subdirectory within the source where components live (monorepo support).",
     ),
 ) -> None:
     """Register a source, download it, and sync."""
@@ -620,25 +652,31 @@ def source_list() -> None:
     table.add_column("locked")
     for s in config.sources:
         entry = lock.entry(s.name)
-        locked = (entry.resolved[:12] if entry else "[dim]—[/dim]")
-        table.add_row(s.name, s.type.value, s.url or s.path or "", s.ref if s.type is SourceType.GIT else "—", locked)
+        locked = entry.resolved[:12] if entry else "[dim]—[/dim]"
+        table.add_row(
+            s.name,
+            s.type.value,
+            s.url or s.path or "",
+            s.ref if s.type is SourceType.GIT else "—",
+            locked,
+        )
     if config.sources:
         console.print(table)
     else:
         console.print("[dim]No sources configured.[/dim]")
 
 
-# -- repo (catalog) sub-commands -----------------------------------------
+# -- catalog sub-commands ------------------------------------------------
 
 
-@repo_app.command("add")
-def repo_add(
+@catalog_app.command("add")
+def catalog_add(
     name: str = typer.Argument(..., help="Logical name for the catalog."),
     location: str = typer.Argument(
         ..., help="Catalog file path or http(s) URL (a github.com blob URL works directly)."
     ),
 ) -> None:
-    """Register a repository catalog so `agy add <repo-name>` can resolve a whole repo."""
+    """Register a catalog so `agy add <repo-name>` can resolve a whole repo."""
     from .models import Registry
 
     store = _load()
@@ -651,9 +689,9 @@ def repo_add(
     console.print(f"[green]Added catalog[/green] {name} → [dim]{location}[/dim]")
 
 
-@repo_app.command("remove")
-def repo_remove(name: str = typer.Argument(..., help="Catalog name to remove.")) -> None:
-    """Remove a repository catalog (does not uninstall repos already added from it)."""
+@catalog_app.command("remove")
+def catalog_remove(name: str = typer.Argument(..., help="Catalog name to remove.")) -> None:
+    """Remove a catalog (does not uninstall repos already added from it)."""
     store = _load()
     if not store.remove_repository(name):
         err.print(f"[yellow]No such catalog: {name}[/yellow]")
@@ -662,15 +700,15 @@ def repo_remove(name: str = typer.Argument(..., help="Catalog name to remove."))
     console.print(f"[red]Removed catalog[/red] {name}")
 
 
-@repo_app.command("list")
-def repo_list() -> None:
+@catalog_app.command("list")
+def catalog_list() -> None:
     """List configured catalogs and the repos they offer."""
     from . import registry as reg
 
     store = _load()
     config = store.parsed()
     if not config.repositories:
-        console.print("[dim]No catalogs configured. Add one with `agy repo add`.[/dim]")
+        console.print("[dim]No catalogs configured. Add one with `agy catalog add`.[/dim]")
         return
     table = Table(title="Catalogs")
     table.add_column("catalog", style="cyan")
@@ -698,18 +736,31 @@ def repo_list() -> None:
 DEFAULT_CATALOG = Path("registry/repositories.json")
 
 
-@registry_app.command("add")
-def registry_add(
-    git_url: str = typer.Argument(..., help="Git repo URL (a github.com/owner/repo[/tree/<ref>/<subdir>] URL works)."),
-    name: str = typer.Argument(None, help="Repo name in the catalog (default: derived from the URL)."),
-    ref: str = typer.Option(None, "--ref", help="Git ref (default: main, or inferred from a /tree/<ref> URL)."),
-    subdir: str = typer.Option(None, "--subdir", help="Component subdir within the repo (or inferred from the URL)."),
+@app.command("publish")
+def publish(
+    git_url: str = typer.Argument(
+        ...,
+        help="Git repo URL (a github.com/owner/repo or .../tree/<ref>/<subdir> URL works).",
+    ),
+    name: str = typer.Argument(
+        None, help="Repo name in the catalog (default: derived from the URL)."
+    ),
+    ref: str = typer.Option(
+        None, "--ref", help="Git ref (default: main, or inferred from a /tree/<ref> URL)."
+    ),
+    subdir: str = typer.Option(
+        None, "--subdir", help="Component subdir within the repo (or inferred from the URL)."
+    ),
     summary: str = typer.Option(None, "--summary", help="One-line summary for the entry."),
-    discover: bool = typer.Option(False, "--discover", help="Clone the repo and pre-fill `expose` from discovered components."),
+    discover: bool = typer.Option(
+        False, "--discover", help="Clone the repo and pre-fill `expose` from discovered components."
+    ),
     file: Path = typer.Option(DEFAULT_CATALOG, "--file", help="Catalog file to edit."),
-    force: bool = typer.Option(False, "--force", help="Overwrite an existing entry of the same name."),
+    force: bool = typer.Option(
+        False, "--force", help="Overwrite an existing entry of the same name."
+    ),
 ) -> None:
-    """Add a git/GitHub repo as an entry in a curated catalog (repositories.json)."""
+    """Publish a git/GitHub repo as an entry in a catalog file (registry/repositories.json)."""
     from . import discovery
     from . import registry as reg
     from .models import ExposeEntry, RegistrySource, RepositoryEntry, Source

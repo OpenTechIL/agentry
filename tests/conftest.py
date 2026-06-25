@@ -47,11 +47,17 @@ def nested_source(tmp_path: Path) -> Path:
 @pytest.fixture
 def git_source(tmp_path: Path) -> Path:
     src = make_source(tmp_path / "gitsrc")
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.x",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e.x"}
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@e.x",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@e.x",
+    }
     subprocess.run(["git", "init", "-q"], cwd=src, check=True)
     subprocess.run(["git", "add", "-A"], cwd=src, check=True)
-    subprocess.run(["git", "commit", "-qm", "init"], cwd=src, check=True, env={**_base_env(), **env})
+    subprocess.run(
+        ["git", "commit", "-qm", "init"], cwd=src, check=True, env={**_base_env(), **env}
+    )
     return src
 
 

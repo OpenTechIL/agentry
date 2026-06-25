@@ -50,9 +50,7 @@ class ConfigStore:
     def load(cls, root: Path) -> ConfigStore:
         path = cls.path_for(root)
         if not path.is_file():
-            raise FileNotFoundError(
-                f"No {CONFIG_NAME} found in {root}. Run `agy init` first."
-            )
+            raise FileNotFoundError(f"No {CONFIG_NAME} found in {root}. Run `agy init` first.")
         doc = _yaml().load(path.read_text(encoding="utf-8")) or CommentedMap()
         return cls(root, doc)
 

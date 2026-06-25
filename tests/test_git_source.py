@@ -24,8 +24,13 @@ def test_git_resolve_and_update(project: Path, git_source: Path):
 
     # Advance the source by a commit.
     (git_source / "skills" / "code-reviewer" / "SKILL.md").write_text("# v2\n")
-    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.x",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e.x"}
+    env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@e.x",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@e.x",
+    }
     subprocess.run(["git", "commit", "-qam", "v2"], cwd=git_source, check=True, env=env)
 
     # sync (no update) keeps the pinned SHA.

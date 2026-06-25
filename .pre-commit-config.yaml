@@ -1,0 +1,20 @@
+# Run `uv run pre-commit install` once to enable these hooks locally.
+# The ruff hooks use the same rules as CI (configured in pyproject.toml) so
+# there is no drift between local commits and the pipeline.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff-format
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files

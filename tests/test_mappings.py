@@ -20,7 +20,6 @@ from agentry.models import (
 from agentry.reconcile import sync
 from agentry.targets import resolve_targets, unresolved_targets
 
-
 # -- source descriptor ---------------------------------------------------
 
 
@@ -89,7 +88,11 @@ def test_builtin_targets_resolved():
 def test_profile_override_existing_target():
     cfg = Config(
         target_profiles={
-            "claude": {ComponentType.TOOL: ProfileRule(strategy=Strategy.LINK, dest=".claude/plugins/tools/{name}")}
+            "claude": {
+                ComponentType.TOOL: ProfileRule(
+                    strategy=Strategy.LINK, dest=".claude/plugins/tools/{name}"
+                )
+            }
         }
     )
     specs = resolve_targets(cfg)

@@ -20,6 +20,7 @@ from pathlib import Path
 from . import deps, discovery
 from .config import ConfigStore
 from .gitignore import ensure_gitignore
+from .installers import copy as copy_inst
 from .installers import generate as gen_inst
 from .installers import link as link_inst
 from .installers import link_merge as link_merge_inst
@@ -27,9 +28,11 @@ from .installers import merge as merge_inst
 from .lockfile import load_lock, save_lock
 from .manifest import load_manifest, save_manifest
 from .models import (
+    MERGE_TYPES,
     ComponentType,
     Config,
     GeneratorSpec,
+    InstalledCopy,
     InstalledGenerated,
     InstalledLink,
     InstalledLinkMerge,
@@ -37,13 +40,28 @@ from .models import (
     Manifest,
     SourceType,
     Strategy,
+    Target,
 )
 from .resolver import effective_root
-from .targets import LinkMergeDest, MergeDest, resolve_targets, unresolved_targets
+from .targets import (
+    LinkMergeDest,
+    MergeDest,
+    filter_claude_hook_events,
+    resolve_targets,
+    unresolved_targets,
+)
 
 
 @dataclass
 class DesiredLink:
+    component: str
+    target: str
+    path: str
+    artifact: Path
+
+
+@dataclass
+class DesiredCopy:
     component: str
     target: str
     path: str
@@ -92,7 +110,7 @@ class SyncResult:
 
 def compute_desired(
     root: Path, config: Config, warnings: list[str]
-) -> tuple[list[DesiredLink], list[DesiredMerge], list[DesiredGenerate], list[DesiredLinkMerge]]:
+) -> tuple[list[DesiredLink], list[DesiredCopy], list[DesiredMerge], list[DesiredGenerate], list[DesiredLinkMerge]]:
     specs = resolve_targets(config)
     for missing in unresolved_targets(config, specs):
         warnings.append(f"target '{missing}' is undefined — add it under target_profiles in .agentry.yml")
@@ -105,6 +123,7 @@ def compute_desired(
             indexes[src.name] = discovery.index(sp)
 
     links: list[DesiredLink] = []
+    copies: list[DesiredCopy] = []
     merges: list[DesiredMerge] = []
     generates: list[DesiredGenerate] = []
     link_merges: list[DesiredLinkMerge] = []
@@ -137,12 +156,21 @@ def compute_desired(
             spec = specs.get(tname)
             if spec is None:
                 continue  # already warned via unresolved_targets
+            # Per-harness merge fragments (e.g. hooks-cursor.json) install only into the
+            # matching target; skip foreign harnesses so a Cursor/Codex variant never
+            # lands in another tool's config (e.g. Claude's settings.json).
+            if comp.type in MERGE_TYPES:
+                h = discovery.harness_suffix(comp.name)
+                if h is not None and h != tname:
+                    continue
             strat = spec.strategy(comp.type)
             if strat is None:
                 warnings.append(f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped")
                 continue
             if strat is Strategy.LINK:
                 links.append(DesiredLink(comp.ref, tname, spec.link_dest(comp.type, comp.name), artifact))
+            elif strat is Strategy.COPY:
+                copies.append(DesiredCopy(comp.ref, tname, spec.copy_dest(comp.type, comp.name), artifact))
             elif strat is Strategy.LINK_MERGE:
                 lm = _compute_link_merge(comp, src, tname, spec.link_merge_dest(comp.type), artifact, warnings)
                 if lm is not None:
@@ -154,8 +182,18 @@ def compute_desired(
                 except (ValueError, OSError) as exc:
                     warnings.append(f"{comp.ref}: {exc}")
                     continue
+                # Defense-in-depth: never write an unrecognized hook event into Claude's
+                # settings.json (Claude Code rejects unknown events and ignores the file).
+                if comp.type is ComponentType.HOOK and tname == Target.CLAUDE:
+                    entries, dropped = filter_claude_hook_events(entries)
+                    for bad in dropped:
+                        warnings.append(
+                            f"{comp.ref}: hook event '{bad}' is not a recognized Claude Code event — skipped"
+                        )
+                    if not entries:
+                        continue
                 merges.append(DesiredMerge(comp.ref, tname, dest, entries, list(entries)))
-    return links, merges, generates, link_merges
+    return links, copies, merges, generates, link_merges
 
 
 def _link_merge_vars(comp, src) -> dict[str, str]:
@@ -233,10 +271,11 @@ def sync(root: Path, *, update: bool = False, allow_run: bool = False) -> SyncRe
     # 2. Desired vs. installed. The augmented config carries synthesized sources and
     #    transitive components so reconcile treats them like any declared dependency.
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    links, merges, generates, link_merges = compute_desired(root, augmented, result.warnings)
+    links, copies, merges, generates, link_merges = compute_desired(root, augmented, result.warnings)
     manifest = load_manifest(root)
 
     _reconcile_links(root, links, manifest, result)
+    _reconcile_copies(root, copies, manifest, result)
     _reconcile_merges(root, merges, manifest, result)
     _reconcile_generated(root, generates, manifest, result, allow_run=allow_run, update=update)
     _reconcile_link_merges(root, link_merges, manifest, result)
@@ -273,6 +312,34 @@ def _reconcile_links(root: Path, desired: list[DesiredLink], manifest: Manifest,
             result.updated.append(f"link {path}")
         if path not in have:
             manifest.links.append(InstalledLink(component=d.component, target=d.target, path=path))
+            have.add(path)
+
+
+def _reconcile_copies(root: Path, desired: list[DesiredCopy], manifest: Manifest, result: SyncResult) -> None:
+    desired_by_path = {d.path: d for d in desired}
+
+    kept: list[InstalledCopy] = []
+    for inst in manifest.copies:
+        if inst.path not in desired_by_path:
+            if copy_inst.remove_copy(root, inst.path):
+                result.removed.append(f"copy {inst.path}")
+        else:
+            kept.append(inst)
+    manifest.copies = kept
+
+    have = {inst.path for inst in manifest.copies}
+    for path, d in desired_by_path.items():
+        try:
+            status = copy_inst.install_copy(root, d.artifact, path, managed=path in have)
+        except FileExistsError as exc:
+            result.warnings.append(str(exc))
+            continue
+        if status == "created":
+            result.created.append(f"copy {path}")
+        elif status == "updated":
+            result.updated.append(f"copy {path}")
+        if path not in have:
+            manifest.copies.append(InstalledCopy(component=d.component, target=d.target, path=path))
             have.add(path)
 
 
@@ -415,11 +482,13 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
     graph, _ = deps.resolve_graph(root, config, load_lock(root))
     warnings.extend(graph.warnings)
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    links, merges, generates, link_merges = compute_desired(root, augmented, warnings)
+    links, copies, merges, generates, link_merges = compute_desired(root, augmented, warnings)
 
     rows: list[StatusRow] = []
     for d in links:
         rows.append(StatusRow(d.component, d.target, d.path, link_inst.link_state(root, d.artifact, d.path)))
+    for d in copies:
+        rows.append(StatusRow(d.component, d.target, d.path, copy_inst.copy_state(root, d.artifact, d.path)))
     for d in merges:
         rows.append(
             StatusRow(d.component, d.target, f"{d.dest.file}:{d.dest.pointer}", merge_inst.merge_state(root, d.dest, d.keys))

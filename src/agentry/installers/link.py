@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 
 from ..resolver import store_dir
+from ._paths import prune_empty_parents
 
 
 def _link_target(artifact: Path, dest: Path) -> str:
@@ -65,7 +66,7 @@ def remove_link(root: Path, dest_rel: str) -> bool:
     dest = root / dest_rel
     if is_managed_link(root, dest):
         dest.unlink()
-        _prune_empty_parents(root, dest.parent)
+        prune_empty_parents(root, dest.parent)
         return True
     return False
 
@@ -78,12 +79,3 @@ def link_state(root: Path, artifact: Path, dest_rel: str) -> str:
     if not is_managed_link(root, dest):
         return "drift"
     return "ok" if os.readlink(dest) == _link_target(artifact, dest) else "drift"
-
-
-def _prune_empty_parents(root: Path, directory: Path) -> None:
-    """Remove now-empty managed parent dirs (e.g. .claude/skills) up to root."""
-    root = root.resolve()
-    cur = directory.resolve()
-    while cur != root and cur.is_dir() and not any(cur.iterdir()):
-        cur.rmdir()
-        cur = cur.parent

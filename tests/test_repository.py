@@ -57,7 +57,7 @@ def test_add_whole_repo_installs_skill_and_mcp(tmp_path, monkeypatch):
     cat = _catalog(tmp_path, _repo_with_skill_and_mcp(tmp_path))
     monkeypatch.chdir(project)
 
-    assert runner.invoke(app, ["repo", "add", "c", str(cat)]).exit_code == 0
+    assert runner.invoke(app, ["catalog", "add", "c", str(cat)]).exit_code == 0
     res = runner.invoke(app, ["add", "toolkit"])
     assert res.exit_code == 0, res.output
 
@@ -83,7 +83,7 @@ def test_add_repo_with_expose_mcp_only(tmp_path, monkeypatch):
         expose=[{"type": "mcp", "name": "mcp"}],
     )
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "c", str(cat)])
+    runner.invoke(app, ["catalog", "add", "c", str(cat)])
     res = runner.invoke(app, ["add", "toolkit"])
     assert res.exit_code == 0, res.output
 
@@ -109,11 +109,11 @@ def test_catalog_persisted_and_listed(tmp_path, monkeypatch):
     ConfigStore.create(project, ["claude"]).save()
     cat = _catalog(tmp_path, _repo_with_skill_and_mcp(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "c", str(cat)])
+    runner.invoke(app, ["catalog", "add", "c", str(cat)])
 
     cfg = ConfigStore.load(project).parsed()
     assert cfg.repositories and cfg.repositories[0].location == str(cat)
-    out = runner.invoke(app, ["repo", "list"]).output
+    out = runner.invoke(app, ["catalog", "list"]).output
     assert "toolkit" in out and "whole repo" in out
 
 

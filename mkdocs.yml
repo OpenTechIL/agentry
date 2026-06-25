@@ -1,0 +1,51 @@
+site_name: agentry
+site_description: A dependency manager for AI coding agents.
+site_url: https://opentech.github.io/agentry/
+repo_url: https://github.com/opentech/agentry
+repo_name: opentech/agentry
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+theme:
+  name: material
+  logo: branding/logo.svg
+  favicon: branding/logo.svg
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.instant
+    - navigation.top
+    - navigation.sections
+    - content.code.copy
+    - content.action.edit
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Knowledge base: knowledge-base.md
+  - Branding: branding-kit.md
+  - Contributing: https://github.com/opentech/agentry/blob/main/CONTRIBUTING.md
+  - Changelog: https://github.com/opentech/agentry/blob/main/CHANGELOG.md
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/opentech/agentry

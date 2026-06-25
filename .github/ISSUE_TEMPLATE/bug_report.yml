@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in agentry isn't working as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for taking the time to file a bug! Please fill in the details below.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Commands you ran (e.g. `agy sync`) and the relevant parts of your `.agentry.yml`.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: agy version
+      description: Output of `agy --version` (or the git commit if running from source).
+    validations:
+      required: true
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target AI tool
+      description: Which target were you installing into?
+      multiple: true
+      options:
+        - Claude Code
+        - OpenCode
+        - Cursor
+        - Custom target_profile
+        - Not applicable
+  - type: input
+    id: env
+    attributes:
+      label: OS & Python version
+      placeholder: "macOS 14 / Python 3.12"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / output
+      description: Any error output. This is automatically formatted as code.
+      render: shell

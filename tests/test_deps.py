@@ -13,8 +13,10 @@ from agentry.models import Component, ComponentType, Source, SourceType
 from agentry.reconcile import sync
 
 _ENV = {
-    "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.x",
-    "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e.x",
+    "GIT_AUTHOR_NAME": "t",
+    "GIT_AUTHOR_EMAIL": "t@e.x",
+    "GIT_COMMITTER_NAME": "t",
+    "GIT_COMMITTER_EMAIL": "t@e.x",
 }
 
 
@@ -41,10 +43,15 @@ def test_same_source_dependency(tmp_path: Path):
     repo.mkdir()
     _skill(repo, "a")
     _skill(repo, "b")
-    _descriptor(repo, {"skill": [
-        {"name": "a", "path": "skills/a", "requires": [{"type": "skill", "name": "b"}]},
-        {"name": "b", "path": "skills/b"},
-    ]})
+    _descriptor(
+        repo,
+        {
+            "skill": [
+                {"name": "a", "path": "skills/a", "requires": [{"type": "skill", "name": "b"}]},
+                {"name": "b", "path": "skills/b"},
+            ]
+        },
+    )
     url = _git_init(repo)
 
     proj = tmp_path / "proj"
@@ -72,10 +79,18 @@ def test_cross_repo_transitive_lock_only(tmp_path: Path):
     liba = tmp_path / "liba"
     liba.mkdir()
     _skill(liba, "a")
-    _descriptor(liba, {"skill": [
-        {"name": "a", "path": "skills/a",
-         "requires": [{"type": "skill", "name": "b", "url": url_b, "ref": "main"}]},
-    ]})
+    _descriptor(
+        liba,
+        {
+            "skill": [
+                {
+                    "name": "a",
+                    "path": "skills/a",
+                    "requires": [{"type": "skill", "name": "b", "url": url_b, "ref": "main"}],
+                },
+            ]
+        },
+    )
     url_a = _git_init(liba)
 
     proj = tmp_path / "proj"
@@ -108,19 +123,35 @@ def test_recursive_three_levels(tmp_path: Path):
     libb = tmp_path / "libb"
     libb.mkdir()
     _skill(libb, "b")
-    _descriptor(libb, {"skill": [
-        {"name": "b", "path": "skills/b",
-         "requires": [{"type": "skill", "name": "c", "url": url_c}]},
-    ]})
+    _descriptor(
+        libb,
+        {
+            "skill": [
+                {
+                    "name": "b",
+                    "path": "skills/b",
+                    "requires": [{"type": "skill", "name": "c", "url": url_c}],
+                },
+            ]
+        },
+    )
     url_b = _git_init(libb)
 
     liba = tmp_path / "liba"
     liba.mkdir()
     _skill(liba, "a")
-    _descriptor(liba, {"skill": [
-        {"name": "a", "path": "skills/a",
-         "requires": [{"type": "skill", "name": "b", "url": url_b}]},
-    ]})
+    _descriptor(
+        liba,
+        {
+            "skill": [
+                {
+                    "name": "a",
+                    "path": "skills/a",
+                    "requires": [{"type": "skill", "name": "b", "url": url_b}],
+                },
+            ]
+        },
+    )
     url_a = _git_init(liba)
 
     proj = tmp_path / "proj"
@@ -147,13 +178,31 @@ def test_cycle_terminates(tmp_path: Path):
     url_b = f"file://{libb}"
 
     _skill(liba, "a")
-    _descriptor(liba, {"skill": [
-        {"name": "a", "path": "skills/a", "requires": [{"type": "skill", "name": "b", "url": url_b}]},
-    ]})
+    _descriptor(
+        liba,
+        {
+            "skill": [
+                {
+                    "name": "a",
+                    "path": "skills/a",
+                    "requires": [{"type": "skill", "name": "b", "url": url_b}],
+                },
+            ]
+        },
+    )
     _skill(libb, "b")
-    _descriptor(libb, {"skill": [
-        {"name": "b", "path": "skills/b", "requires": [{"type": "skill", "name": "a", "url": url_a}]},
-    ]})
+    _descriptor(
+        libb,
+        {
+            "skill": [
+                {
+                    "name": "b",
+                    "path": "skills/b",
+                    "requires": [{"type": "skill", "name": "a", "url": url_a}],
+                },
+            ]
+        },
+    )
     _git_init(liba)
     _git_init(libb)
 
@@ -183,19 +232,35 @@ def test_version_conflict_raises(tmp_path: Path):
     liba = tmp_path / "liba"
     liba.mkdir()
     _skill(liba, "a")
-    _descriptor(liba, {"skill": [
-        {"name": "a", "path": "skills/a",
-         "requires": [{"type": "skill", "name": "b", "url": url_b, "ref": "main"}]},
-    ]})
+    _descriptor(
+        liba,
+        {
+            "skill": [
+                {
+                    "name": "a",
+                    "path": "skills/a",
+                    "requires": [{"type": "skill", "name": "b", "url": url_b, "ref": "main"}],
+                },
+            ]
+        },
+    )
     url_a = _git_init(liba)
 
     libx = tmp_path / "libx"
     libx.mkdir()
     _skill(libx, "x")
-    _descriptor(libx, {"skill": [
-        {"name": "x", "path": "skills/x",
-         "requires": [{"type": "skill", "name": "b", "url": url_b, "ref": "v2"}]},
-    ]})
+    _descriptor(
+        libx,
+        {
+            "skill": [
+                {
+                    "name": "x",
+                    "path": "skills/x",
+                    "requires": [{"type": "skill", "name": "b", "url": url_b, "ref": "v2"}],
+                },
+            ]
+        },
+    )
     url_x = _git_init(libx)
 
     proj = tmp_path / "proj"
@@ -218,10 +283,15 @@ def test_graph_edges_and_transitive(tmp_path: Path):
     repo.mkdir()
     _skill(repo, "a")
     _skill(repo, "b")
-    _descriptor(repo, {"skill": [
-        {"name": "a", "path": "skills/a", "requires": [{"type": "skill", "name": "b"}]},
-        {"name": "b", "path": "skills/b"},
-    ]})
+    _descriptor(
+        repo,
+        {
+            "skill": [
+                {"name": "a", "path": "skills/a", "requires": [{"type": "skill", "name": "b"}]},
+                {"name": "b", "path": "skills/b"},
+            ]
+        },
+    )
     url = _git_init(repo)
 
     proj = tmp_path / "proj"

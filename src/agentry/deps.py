@@ -74,7 +74,9 @@ def _synth_name(url: str, taken: set[str]) -> str:
     return f"{base}-{suffix}"
 
 
-def resolve_graph(root: Path, config: Config, lock: Lock, *, update: bool = False) -> tuple[DepGraph, Lock]:
+def resolve_graph(
+    root: Path, config: Config, lock: Lock, *, update: bool = False
+) -> tuple[DepGraph, Lock]:
     """Resolve every source and the transitive component closure.
 
     Returns the augmented :class:`DepGraph` and a freshly-built :class:`Lock` (config
@@ -108,7 +110,9 @@ def resolve_graph(root: Path, config: Config, lock: Lock, *, update: bool = Fals
     # 2. Walk the dependency closure from the enabled roots.
     roots: dict[str, Component] = {c.ref: c for c in config.components if c.enabled}
     trans: dict[str, tuple[Component, set[str]]] = {}
-    work: deque[_Node] = deque(_Node(c, tuple(c.applies_to(config.targets))) for c in roots.values())
+    work: deque[_Node] = deque(
+        _Node(c, tuple(c.applies_to(config.targets))) for c in roots.values()
+    )
     visited: set[str] = set()
 
     while work:
@@ -124,7 +128,13 @@ def resolve_graph(root: Path, config: Config, lock: Lock, *, update: bool = Fals
 
         for dep in discovery.requires_for(effective_root(root, src), comp.type, comp.name):
             dep_src = _resolve_dep_source(
-                dep, comp.ref, comp.source, sources_by_name, url_index, ensure_resolved, graph.warnings
+                dep,
+                comp.ref,
+                comp.source,
+                sources_by_name,
+                url_index,
+                ensure_resolved,
+                graph.warnings,
             )
             if dep_src is None:
                 continue
@@ -147,7 +157,10 @@ def resolve_graph(root: Path, config: Config, lock: Lock, *, update: bool = Fals
                 trans[dep_ref][1].update(child_targets)
             else:
                 dep_comp = Component(
-                    source=dep_src.name, type=dep.type, name=dep.name, enabled=True,
+                    source=dep_src.name,
+                    type=dep.type,
+                    name=dep.name,
+                    enabled=True,
                     targets=sorted(child_targets),
                 )
                 trans[dep_ref] = (dep_comp, child_targets)
@@ -178,7 +191,9 @@ def _resolve_dep_source(
     if dep.source:
         src = sources_by_name.get(dep.source)
         if src is None:
-            warnings.append(f"{requester_ref} requires source '{dep.source}', which is not configured")
+            warnings.append(
+                f"{requester_ref} requires source '{dep.source}', which is not configured"
+            )
             return None
         if dep.ref and src.type is SourceType.GIT and src.ref != dep.ref:
             raise DependencyError(

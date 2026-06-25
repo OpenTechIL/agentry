@@ -4,6 +4,25 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ---
 
+## 2026-06-25 — Command rename: `repo`/`registry` → `catalog`/`publish`
+
+**Context:** Consolidated the confusing command trio for OSS release. The consumer side
+(`agy repo add`/`remove`/`list` — register/browse a catalog) became the **`agy catalog`**
+group. The producer side (`agy registry add` — author an entry in `registry/repositories.json`)
+became the flat top-level **`agy publish`** command. Hard rename — the old `repo` and
+`registry` command names are gone (no aliases). `agy source` is unchanged.
+
+**Findings:**
+
+- **Only the CLI surface changed.** The `.agentry.yml` `repositories:` key, the `Registry`
+  model, and the `registry.py` module keep their names — renaming the config key would break
+  existing files, and the module/model are user-invisible. So "catalog" is the user-facing
+  noun while "registry"/"repositories" persist internally; this is intentional, not drift.
+- **`agy publish` is a flat command, not a group.** It was the lone `registry add` subcommand,
+  so collapsing the group to one verb drops the redundant `add` token (`agy publish <url>`).
+
+---
+
 ## 2026-06-25 — Catalog consolidation & link+merge dest templating
 
 **Context:** Merged the skill-registry system (`skills.json` / `registries:` / `agy registry`) into the repository catalog (`repositories.json` / `repositories:` / `agy repo`) as the single name-based resolution path, and added install-time component selection. Paired with link+merge destination templating that namespaces linked dirs per repo+ref.
@@ -43,5 +62,23 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 - **A browser `…/tree/<ref>/<subdir>` URL is parsed for `ref`+`subdir`.** `parse_repo_url` is the repo-URL counterpart to the existing `_normalize_url` (which rewrites *raw-JSON* catalog URLs). Both let the same pasted browser URL serve different inputs; keep them separate.
 
 - **Test gotcha: the `git_source` fixture inits on the default branch, not `main`.** The `--discover` test must `git branch -m main` on the fixture repo so the command's default `--ref main` checks out.
+
+---
+
+## 2026-06-25 — Per-harness hook/MCP fragment routing
+
+**Context:** `agy add superpowers` wrote an invalid `hooks.sessionStart` (camelCase) key into `.claude/settings.json`, which Claude Code rejects. Root-caused and fixed; not a casing bug in agentry.
+
+**Findings:**
+
+- **Convention discovery surfaces *every* `hooks/*.json` as a separate HOOK component, and all of them merge into the single Claude target.** superpowers ships per-harness variants side by side — `hooks/hooks.json` (Claude, `SessionStart`), `hooks/hooks-codex.json` (Codex, `${PLUGIN_ROOT}`), `hooks/hooks-cursor.json` (Cursor, camelCase `sessionStart`). agentry faithfully copied all three into `.claude/settings.json`; the Cursor variant's `sessionStart` is invalid there, and the Codex variant silently collided on `SessionStart` (last-writer-wins in `merge.install_merge`). The manifest recorded all three.
+
+- **Two distinct failure modes need two distinct guards.** A foreign-harness fragment can fail by (a) an *invalid key* (Cursor's `sessionStart`) or (b) a *valid key with wrong content* (Codex's `SessionStart` pointing at `${PLUGIN_ROOT}`/`session-start-codex`). A Claude-event allowlist (`targets.CLAUDE_HOOK_EVENTS` / `filter_claude_hook_events`) only catches (a). Filename-suffix affinity routing (`discovery.harness_suffix`, `<base>-<harness>` → harness, gated to `MERGE_TYPES`) catches both by skipping the variant for any non-matching target. Both layers ship; affinity is the primary fix, the event filter is defense-in-depth.
+
+- **`harness_suffix` must require the hyphen *and* a known slug.** Matching a bare stem would misroute a legit `mcp/codex.json` (an MCP server literally named "codex"). Rule: `name.rpartition("-")` with a non-empty base and suffix ∈ `KNOWN_HARNESS_SLUGS`. Gate it to `MERGE_TYPES` only, or a skill like `using-superpowers` would be wrongly treated as a variant.
+
+- **The fix self-heals already-broken projects with no config migration.** reconcile recomputes affinity from `comp.name` (not a persisted field), so a previously-added `hooks-cursor` component is dropped from the *desired* merge set on the next `sync`. The existing prune path in `_reconcile_merges` (manifest-owned keys absent from desired → `remove_merge`) then deletes the stale `sessionStart` automatically. Verified live: re-running `agy sync` on the affected repo removed both `sessionStart` and the duplicate codex `SessionStart`, keeping only the canonical entry.
+
+- **`agy add` add-time hygiene is separate from reconcile-time correctness.** `_add_from_catalog` now also drops harness-variant components whose harness isn't an active target, so a claude-only install never *records* `hooks-cursor`/`hooks-codex` in `.agentry.yml`. This is purely cosmetic — reconcile already makes them harmless — but keeps the config and interactive picker clean.
 
 ---

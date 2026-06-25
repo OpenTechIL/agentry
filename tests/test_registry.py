@@ -11,7 +11,16 @@ from typer.testing import CliRunner
 from agentry import registry as reg
 from agentry.cli import app
 from agentry.config import ConfigStore
-from agentry.models import ComponentType, Config, Registry
+from agentry.models import (
+    Component,
+    ComponentType,
+    Config,
+    ProfileRule,
+    Registry,
+    RegistrySource,
+    RepositoryEntry,
+    Strategy,
+)
 
 runner = CliRunner()
 
@@ -62,6 +71,70 @@ def _write_catalog(tmp_path: Path, skill_repo: Path) -> Path:
     return path
 
 
+_C = ComponentType
+
+
+def _comps(*ctypes: ComponentType) -> list[Component]:
+    return [Component(source="arckit", type=t, name="x") for t in ctypes]
+
+
+def test_build_install_profiles_copy_flips_strategy():
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=True, namespaced=False)
+    profiles = reg.build_install_profiles(entry, "arckit", _comps(_C.COMMAND, _C.SKILL), {"claude"})
+    cmd = profiles["claude"][_C.COMMAND]
+    assert cmd.strategy is Strategy.COPY and cmd.dest == ".claude/commands/{name}.md"
+    assert profiles["claude"][_C.SKILL].strategy is Strategy.COPY
+    assert profiles["claude"][_C.SKILL].dest == ".claude/skills/{name}"
+
+
+def test_build_install_profiles_namespaces_command_and_agent_only():
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=False, namespaced=True)
+    profiles = reg.build_install_profiles(
+        entry, "arckit", _comps(_C.COMMAND, _C.AGENT, _C.SKILL), {"claude"}
+    )
+    claude = profiles["claude"]
+    assert claude[_C.COMMAND].strategy is Strategy.LINK
+    assert claude[_C.COMMAND].dest == ".claude/commands/arckit/{name}.md"
+    assert claude[_C.AGENT].dest == ".claude/agents/arckit/{name}.md"
+    # Skill stays flat → no synthesized rule (built-in link default applies).
+    assert _C.SKILL not in claude
+
+
+def test_build_install_profiles_copy_and_namespaced_combined():
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=True, namespaced=True)
+    profiles = reg.build_install_profiles(entry, "myrepo", _comps(_C.COMMAND), {"claude"})
+    cmd = profiles["claude"][_C.COMMAND]
+    assert cmd.strategy is Strategy.COPY and cmd.dest == ".claude/commands/myrepo/{name}.md"
+
+
+def test_build_install_profiles_noop_when_flags_off():
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=False, namespaced=False)
+    profiles = reg.build_install_profiles(entry, "arckit", _comps(_C.COMMAND, _C.SKILL), {"claude"})
+    assert profiles == {}
+
+
+def test_build_install_profiles_preserves_explicit_rules():
+    entry = RepositoryEntry(
+        source=RegistrySource(url="x"),
+        copy=False,
+        namespaced=True,
+        target_profiles={
+            "claude": {
+                _C.HOOK: ProfileRule(
+                    strategy=Strategy.LINK_MERGE,
+                    dest=".claude/hooks/{name}",
+                    file=".claude/settings.json",
+                    pointer="hooks",
+                )
+            }
+        },
+    )
+    profiles = reg.build_install_profiles(entry, "arckit", _comps(_C.COMMAND, _C.HOOK), {"claude"})
+    # The explicit hook rule survives untouched; the command gets namespaced.
+    assert profiles["claude"][_C.HOOK].strategy is Strategy.LINK_MERGE
+    assert profiles["claude"][_C.COMMAND].dest == ".claude/commands/arckit/{name}.md"
+
+
 def test_load_catalog_and_find(tmp_path: Path):
     catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     config = Config(repositories=[Registry(name="r", location=str(catalog_path))])
@@ -92,7 +165,7 @@ def test_add_exposed_link_skill(tmp_path, monkeypatch):
     catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     monkeypatch.chdir(project)
 
-    assert runner.invoke(app, ["repo", "add", "r", str(catalog_path)]).exit_code == 0
+    assert runner.invoke(app, ["catalog", "add", "r", str(catalog_path)]).exit_code == 0
     result = runner.invoke(app, ["add", "cool"])
     assert result.exit_code == 0, result.output
 
@@ -111,7 +184,7 @@ def test_add_exposed_generate_skill_gated(tmp_path, monkeypatch):
     ConfigStore.create(project, ["claude"]).save()
     catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "r", str(catalog_path)])
+    runner.invoke(app, ["catalog", "add", "r", str(catalog_path)])
 
     # Without --allow-run: added but not executed.
     res = runner.invoke(app, ["add", "fake"])
@@ -131,7 +204,7 @@ def test_add_unknown_repo_errors(tmp_path, monkeypatch):
     ConfigStore.create(project, ["claude"]).save()
     catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "r", str(catalog_path)])
+    runner.invoke(app, ["catalog", "add", "r", str(catalog_path)])
     res = runner.invoke(app, ["add", "ghost"])
     assert res.exit_code == 1
     assert "No catalog lists 'ghost'" in res.output
@@ -193,7 +266,10 @@ def _multi_repo(tmp_path: Path) -> Path:
 
 
 def _write_multi_catalog(tmp_path: Path, source: Path) -> Path:
-    catalog = {"version": 1, "repositories": {"demo": {"source": {"type": "local", "path": str(source)}}}}
+    catalog = {
+        "version": 1,
+        "repositories": {"demo": {"source": {"type": "local", "path": str(source)}}},
+    }
     path = tmp_path / "repositories.json"
     path.write_text(json.dumps(catalog))
     return path
@@ -205,7 +281,7 @@ def _setup_multi(tmp_path, monkeypatch) -> Path:
     ConfigStore.create(project, ["claude"]).save()
     catalog = _write_multi_catalog(tmp_path, _multi_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "c", str(catalog)])
+    runner.invoke(app, ["catalog", "add", "c", str(catalog)])
     return project
 
 
@@ -299,7 +375,7 @@ def test_add_catalog_repo_writes_target_profiles_idempotent(tmp_path, monkeypatc
     ConfigStore.create(project, ["claude"]).save()
     catalog = _write_hook_catalog(tmp_path, _plugin_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "curated", str(catalog)])
+    runner.invoke(app, ["catalog", "add", "curated", str(catalog)])
 
     res = runner.invoke(app, ["add", "demo"])
     assert res.exit_code == 0, res.output
@@ -314,7 +390,10 @@ def test_add_catalog_repo_writes_target_profiles_idempotent(tmp_path, monkeypatc
     res2 = runner.invoke(app, ["add", "demo"])
     assert res2.exit_code == 0, res2.output
     cfg2 = ConfigStore.load(project).parsed()
-    assert cfg2.target_profiles["claude"][ComponentType.HOOK].rewrite_to == "${CLAUDE_PROJECT_DIR}/custom"
+    assert (
+        cfg2.target_profiles["claude"][ComponentType.HOOK].rewrite_to
+        == "${CLAUDE_PROJECT_DIR}/custom"
+    )
 
 
 def test_normalize_github_web_url():
@@ -341,13 +420,13 @@ def test_repo_catalog_persisted_and_listed_via_url(tmp_path, monkeypatch):
     ConfigStore.create(project, ["claude"]).save()
     monkeypatch.chdir(project)
     url = "https://github.com/acme/cat/blob/main/repositories.json"
-    runner.invoke(app, ["repo", "add", "curated", url])
+    runner.invoke(app, ["catalog", "add", "curated", url])
 
     cfg = ConfigStore.load(project).parsed()
     assert cfg.repositories and cfg.repositories[0].location == url
 
 
-# -- `agy registry add` (catalog authoring) -------------------------------
+# -- `agy publish` (catalog authoring) -------------------------------
 
 
 def test_parse_repo_url_plain_and_tree():
@@ -367,10 +446,10 @@ def test_parse_repo_url_plain_and_tree():
     assert name == "widget"
 
 
-def test_registry_add_minimal(tmp_path):
+def test_publish_minimal(tmp_path):
     catalog = tmp_path / "repositories.json"
     result = runner.invoke(
-        app, ["registry", "add", "https://github.com/o/r", "cool", "--file", str(catalog)]
+        app, ["publish", "https://github.com/o/r", "cool", "--file", str(catalog)]
     )
     assert result.exit_code == 0, result.output
     doc = json.loads(catalog.read_text())
@@ -381,11 +460,16 @@ def test_registry_add_minimal(tmp_path):
     assert "summary" not in entry
 
 
-def test_registry_add_derives_name_and_infers_ref_subdir(tmp_path):
+def test_publish_derives_name_and_infers_ref_subdir(tmp_path):
     catalog = tmp_path / "repositories.json"
     result = runner.invoke(
         app,
-        ["registry", "add", "https://github.com/acme/widget/tree/dev/plugins/x", "--file", str(catalog)],
+        [
+            "publish",
+            "https://github.com/acme/widget/tree/dev/plugins/x",
+            "--file",
+            str(catalog),
+        ],
     )
     assert result.exit_code == 0, result.output
     entry = json.loads(catalog.read_text())["repositories"]["widget"]
@@ -397,32 +481,54 @@ def test_registry_add_derives_name_and_infers_ref_subdir(tmp_path):
     }
 
 
-def test_registry_add_summary_and_duplicate(tmp_path):
+def test_publish_summary_and_duplicate(tmp_path):
     catalog = tmp_path / "repositories.json"
     runner.invoke(
-        app, ["registry", "add", "https://github.com/o/r", "cool", "--summary", "hi", "--file", str(catalog)]
+        app,
+        [
+            "publish",
+            "https://github.com/o/r",
+            "cool",
+            "--summary",
+            "hi",
+            "--file",
+            str(catalog),
+        ],
     )
     assert json.loads(catalog.read_text())["repositories"]["cool"]["summary"] == "hi"
 
-    dup = runner.invoke(app, ["registry", "add", "https://github.com/o/r2", "cool", "--file", str(catalog)])
+    dup = runner.invoke(app, ["publish", "https://github.com/o/r2", "cool", "--file", str(catalog)])
     assert dup.exit_code == 1
     # The original entry is untouched (no partial overwrite).
-    assert json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"] == "https://github.com/o/r"
+    assert (
+        json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"]
+        == "https://github.com/o/r"
+    )
 
     forced = runner.invoke(
-        app, ["registry", "add", "https://github.com/o/r2", "cool", "--force", "--file", str(catalog)]
+        app,
+        ["publish", "https://github.com/o/r2", "cool", "--force", "--file", str(catalog)],
     )
     assert forced.exit_code == 0
-    assert json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"] == "https://github.com/o/r2"
+    assert (
+        json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"]
+        == "https://github.com/o/r2"
+    )
 
 
-def test_registry_add_discover(tmp_path, monkeypatch, git_source):
+def test_publish_discover(tmp_path, monkeypatch, git_source):
     # Re-init the fixture repo on an explicit `main` branch so --ref main checks out.
     import subprocess
 
-    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.x",
-           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e.x"}
-    subprocess.run(["git", "branch", "-m", "main"], cwd=git_source, check=True, env={**os.environ, **env})
+    env = {
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@e.x",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@e.x",
+    }
+    subprocess.run(
+        ["git", "branch", "-m", "main"], cwd=git_source, check=True, env={**os.environ, **env}
+    )
 
     workdir = tmp_path / "work"
     workdir.mkdir()
@@ -430,7 +536,7 @@ def test_registry_add_discover(tmp_path, monkeypatch, git_source):
     catalog = workdir / "repositories.json"
     result = runner.invoke(
         app,
-        ["registry", "add", f"file://{git_source}", "demo", "--discover", "--file", str(catalog)],
+        ["publish", f"file://{git_source}", "demo", "--discover", "--file", str(catalog)],
     )
     assert result.exit_code == 0, result.output
     expose = json.loads(catalog.read_text())["repositories"]["demo"]["expose"]
