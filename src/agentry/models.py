@@ -209,11 +209,12 @@ class ProfileRule(BaseModel):
 
 
 class Registry(BaseModel):
-    """A skill index the project consults: a local file path or an http(s) URL.
+    """A catalog the project consults: a local file path or an http(s) URL.
 
-    The index maps a bare skill name to its source + install method, so ``agy add <name>``
-    can resolve everything without the user knowing the repo URL or path/generate flags.
-    The local-file and hosted-server forms are interchangeable (same JSON contract).
+    The catalog (``repositories.json``) maps a bare repo name to its source + curated
+    components, so ``agy add <name>`` can resolve everything without the user knowing the
+    repo URL or path/generate flags. The local-file and hosted-server forms are
+    interchangeable (same JSON contract).
     """
 
     name: str
@@ -227,8 +228,8 @@ class Config(BaseModel):
     targets: list[str] = Field(default_factory=lambda: [Target.CLAUDE])
     sources: list[Source] = Field(default_factory=list)
     components: list[Component] = Field(default_factory=list)
-    registries: list[Registry] = Field(default_factory=list)
-    # Repository catalogs (``repositories.json``): named source repos resolved whole.
+    # Repository catalogs (``repositories.json``): named source repos resolved whole or
+    # narrowed to selected components at ``agy add`` time.
     repositories: list[Registry] = Field(default_factory=list)
     # Override built-in target maps or define entirely new tools (data-driven).
     target_profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
@@ -303,11 +304,11 @@ class SourceDescriptor(BaseModel):
     provides: dict[ComponentType, list[ProvidesEntry]] = Field(default_factory=dict)
 
 
-# -- registry index (served by a file or a future hosted server) ----------
+# -- repository catalog (served by a file or a future hosted server) ------
 
 
 class RegistrySource(BaseModel):
-    """Where a registry-listed skill comes from (a git repo or a local dir)."""
+    """Where a catalog-listed repo comes from (a git repo or a local dir)."""
 
     type: SourceType = SourceType.GIT
     url: str | None = None
@@ -322,34 +323,6 @@ class RegistrySource(BaseModel):
         if self.type is SourceType.LOCAL and not self.path:
             raise ValueError("registry source of type 'local' requires a path")
         return self
-
-
-class RegistrySkill(BaseModel):
-    """One entry under ``skills`` in a registry index — resolves to a Source + Component."""
-
-    summary: str | None = None
-    source: RegistrySource
-    install: Strategy = Strategy.LINK  # link | generate
-    path: str | None = None  # link: explicit artifact path within the source
-    generate: GeneratorSpec | None = None  # generate: self-installer spec
-
-    @model_validator(mode="after")
-    def _check(self) -> RegistrySkill:
-        if self.install is Strategy.GENERATE and self.generate is None:
-            raise ValueError("registry skill with install='generate' requires a 'generate' spec")
-        if self.install is Strategy.MERGE:
-            raise ValueError("registry skills support install 'link' or 'generate', not 'merge'")
-        return self
-
-
-class RegistryIndex(BaseModel):
-    """A skill index — the JSON contract a registry file or hosted server serves."""
-
-    version: int = 1
-    skills: dict[str, RegistrySkill] = Field(default_factory=dict)
-
-
-# -- repository catalog (the "rethought" registry: repos, not single skills) ----
 
 
 class ExposeEntry(BaseModel):
@@ -383,6 +356,10 @@ class RepositoryEntry(BaseModel):
     summary: str | None = None
     source: RegistrySource
     expose: list[ExposeEntry] | None = None
+    # Per-repo target-profile overrides merged into the project's config on ``agy add``.
+    # Lets a plugin repo declare how its hooks/mcp install (e.g. a claude hook link+merge
+    # rewriting ${CLAUDE_PLUGIN_ROOT}) so the curated install works without manual config.
+    target_profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
 
 
 class RepositoryIndex(BaseModel):

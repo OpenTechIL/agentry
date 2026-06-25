@@ -8,7 +8,53 @@
         "url": "https://github.com/tractorjuice/arc-kit",
         "ref": "main",
         "subdir": "plugins/arckit-claude"
+      },
+      "target_profiles": {
+        "claude": {
+          "hook": {
+            "strategy": "link+merge",
+            "dest": ".claude/hooks/agentry/{repo}@{ref}/{name}",
+            "file": ".claude/settings.json",
+            "pointer": "hooks",
+            "rewrite_from": "${CLAUDE_PLUGIN_ROOT}/hooks",
+            "rewrite_to": "${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}"
+          }
+        }
       }
+    },
+    "ui-ux-pro-max": {
+      "summary": "UI/UX design intelligence: 50+ styles, color palettes, font pairings, UX guidelines across 10 stacks.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/nextlevelbuilder/ui-ux-pro-max-skill",
+        "ref": "main"
+      },
+      "expose": [
+        {
+          "type": "skill",
+          "name": "ui-ux-pro-max",
+          "path": ".claude/skills/ui-ux-pro-max"
+        }
+      ]
+    },
+    "graphify": {
+      "summary": "Turn a codebase into a navigable knowledge graph.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/safishamsi/graphify",
+        "ref": "main"
+      },
+      "expose": [
+        {
+          "type": "skill",
+          "name": "graphify",
+          "generate": {
+            "setup": [["uv", "tool", "install", "graphifyy"]],
+            "command": ["graphify", "install", "--project"],
+            "produces": [".claude/skills/graphify"]
+          }
+        }
+      ]
     }
   }
 }

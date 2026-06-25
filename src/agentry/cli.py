@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.prompt import Prompt
 from rich.table import Table
 from rich.tree import Tree
 
@@ -25,8 +27,6 @@ app = typer.Typer(
 )
 source_app = typer.Typer(no_args_is_help=True, help="Manage component sources (git repos / local dirs).")
 app.add_typer(source_app, name="source")
-registry_app = typer.Typer(no_args_is_help=True, help="Manage skill registries (index files / URLs).")
-app.add_typer(registry_app, name="registry")
 repo_app = typer.Typer(no_args_is_help=True, help="Manage repository catalogs (curated source repos).")
 app.add_typer(repo_app, name="repo")
 
@@ -78,6 +78,20 @@ def _parse_ref(ref: str) -> tuple[str, ComponentType, str]:
     return source, ctype, name
 
 
+def _parse_types(values: list[str] | None) -> list[ComponentType]:
+    """Validate ``--type`` values against :class:`ComponentType` (skill/agent/command/hook/mcp…)."""
+    out: list[ComponentType] = []
+    for v in values or []:
+        try:
+            out.append(ComponentType(v.strip()))
+        except ValueError:
+            err.print(
+                f"[red]Unknown type '{v}'. Choose from: {', '.join(t.value for t in ComponentType)}[/red]"
+            )
+            raise typer.Exit(1)
+    return out
+
+
 def _print_result(res: SyncResult) -> None:
     for name, sha in res.resolved.items():
         console.print(f"  [dim]resolved[/dim] {name} → [cyan]{sha[:12]}[/cyan]")
@@ -95,32 +109,43 @@ def _print_result(res: SyncResult) -> None:
         console.print("  [dim]already up to date[/dim]")
 
 
-def _add_from_catalog(name: str, *, allow_run: bool) -> None:
-    """Resolve a repo name via the configured catalogs and install it (whole-repo or curated)."""
+def _add_from_catalog(repo: str, names: list[str], *, types: list[ComponentType], allow_run: bool) -> None:
+    """Resolve a repo name via the configured catalogs and install all/selected components.
+
+    ``names`` (from a ``<repo>@a,b`` ref) and ``types`` (from ``--type``) narrow what is
+    installed; with neither, a TTY gets an interactive picker and a non-TTY installs everything.
+    """
     from . import discovery
     from . import registry as reg
     from .resolver import ResolveError, effective_root, resolve
 
     store = _load()
     config = store.parsed()
-    match = reg.find_repo(_root(), config, name) if config.repositories else None
+    try:
+        match = reg.find_repo(_root(), config, repo) if config.repositories else None
+    except reg.RegistryError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
     if match is None:
-        # Not a catalog repo — fall back to the skill-registry resolution path.
-        _add_from_registry(name, allow_run=allow_run)
-        return
+        err.print(
+            f"[red]No catalog lists '{repo}'.[/red]\n"
+            "Add one with `agy repo add <name> <file-or-url>`, or use the full "
+            "<source>/<type>/<name> form."
+        )
+        raise typer.Exit(1)
 
     _, _, entry = match
     rs = entry.source
     src = (
-        Source(name=name, type=SourceType.GIT, url=rs.url, ref=rs.ref, subdir=rs.subdir)
+        Source(name=repo, type=SourceType.GIT, url=rs.url, ref=rs.ref, subdir=rs.subdir)
         if rs.type is SourceType.GIT
-        else Source(name=name, type=SourceType.LOCAL, path=rs.path, subdir=rs.subdir)
+        else Source(name=repo, type=SourceType.LOCAL, path=rs.path, subdir=rs.subdir)
     )
-    existing = config.source(name)
+    existing = config.source(repo)
     if existing is None:
         store.add_source(src)
     elif (existing.url or existing.path) != (src.url or src.path):
-        err.print(f"[red]A different source named '{name}' already exists; rename or remove it first.[/red]")
+        err.print(f"[red]A different source named '{repo}' already exists; rename or remove it first.[/red]")
         raise typer.Exit(1)
 
     # Resolve into the store so we can discover what the repo provides.
@@ -130,70 +155,80 @@ def _add_from_catalog(name: str, *, allow_run: bool) -> None:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
 
+    # The repo's available components: the curated `expose` set if present (it also carries
+    # path/generate for artifacts discovery can't infer), else everything discovery finds.
     if entry.expose:
-        comps = [
-            Component(source=name, type=e.type, name=e.name, path=e.path, generate=e.generate)
+        available = [
+            Component(source=repo, type=e.type, name=e.name, path=e.path, generate=e.generate)
             for e in entry.expose
         ]
     else:
-        comps = [
-            Component(source=name, type=d.type, name=d.name)
+        available = [
+            Component(source=repo, type=d.type, name=d.name)
             for d in discovery.discover(effective_root(_root(), src))
         ]
-    if not comps:
-        err.print(f"[yellow]Repository '{name}' provided no installable components.[/yellow]")
+    if not available:
+        err.print(f"[yellow]Repository '{repo}' provided no installable components.[/yellow]")
         raise typer.Exit(1)
+
+    if names or types:
+        comps = _select_components(repo, available, names, types)
+    elif sys.stdin.isatty():
+        comps = _interactive_pick(available)
+    else:
+        comps = available
+    if not comps:
+        console.print("[dim]Nothing selected.[/dim]")
+        raise typer.Exit(0)
+
     for comp in comps:
         store.add_component(comp)
+    if entry.target_profiles and store.merge_target_profiles(entry.target_profiles):
+        console.print("  [dim]added target_profiles from catalog (install overrides for this repo)[/dim]")
     store.save()
-    console.print(f"[green]Added[/green] {name} [dim]({len(comps)} component(s) from catalog)[/dim]")
+    console.print(f"[green]Added[/green] {repo} [dim]({len(comps)} component(s) from catalog)[/dim]")
     _do_sync(allow_run=allow_run)
 
 
-def _add_from_registry(name: str, *, allow_run: bool) -> None:
-    """Resolve a bare skill name via the configured registries and install it."""
-    from . import registry as reg
+def _select_components(
+    repo: str, available: list[Component], names: list[str], types: list[ComponentType]
+) -> list[Component]:
+    """Narrow ``available`` by ``--type`` then by ``@name``; exit on a name that matches nothing."""
+    pool = [c for c in available if c.type in types] if types else available
+    if not names:
+        return pool
+    wanted = set(names)
+    selected = [c for c in pool if c.name in wanted]
+    missing = wanted - {c.name for c in selected}
+    if missing:
+        scope = f" of type {', '.join(t.value for t in types)}" if types else ""
+        err.print(f"[red]Repository '{repo}' has no component{scope} named: {', '.join(sorted(missing))}.[/red]")
+        raise typer.Exit(1)
+    return selected
 
-    store = _load()
-    config = store.parsed()
-    if not config.registries:
-        err.print(
-            f"[red]'{name}' is not a component ref and no registries are configured.[/red]\n"
-            "Add one with `agy registry add <name> <file-or-url>`, or use the full "
-            "<source>/<type>/<name> form."
-        )
-        raise typer.Exit(1)
-    try:
-        match = reg.find(_root(), config, name)
-    except reg.RegistryError as exc:
-        err.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1)
-    if match is None:
-        err.print(f"[red]No skill named '{name}' in any configured registry.[/red]")
-        raise typer.Exit(1)
 
-    _, skill = match
-    rs = skill.source
-    src = (
-        Source(name=name, type=SourceType.GIT, url=rs.url, ref=rs.ref, subdir=rs.subdir)
-        if rs.type is SourceType.GIT
-        else Source(name=name, type=SourceType.LOCAL, path=rs.path, subdir=rs.subdir)
-    )
-    existing = config.source(name)
-    if existing is None:
-        store.add_source(src)
-    elif (existing.url or existing.path) != (src.url or src.path):
-        err.print(f"[red]A different source named '{name}' already exists; rename or remove it first.[/red]")
-        raise typer.Exit(1)
-
-    comp = Component(
-        source=name, type=ComponentType.SKILL, name=name, enabled=True,
-        path=skill.path, generate=skill.generate,
-    )
-    store.add_component(comp)
-    store.save()
-    console.print(f"[green]Added[/green] {name} [dim](from registry)[/dim]")
-    _do_sync(allow_run=allow_run)
+def _interactive_pick(available: list[Component]) -> list[Component]:
+    """Prompt the user to pick from ``available``; default installs everything."""
+    console.print(f"[bold]{len(available)} component(s) available:[/bold]")
+    for i, c in enumerate(available, 1):
+        console.print(f"  [cyan]{i:>2}[/cyan]  [magenta]{c.type.value}[/magenta]/{c.name}")
+    answer = Prompt.ask(
+        "Install which? [dim](numbers comma-separated, 'a' for all, or a type name)[/dim]",
+        default="a",
+    ).strip().lower()
+    if answer in ("a", "all", ""):
+        return available
+    try:  # a type name installs that whole type
+        ctype = ComponentType(answer)
+        return [c for c in available if c.type is ctype]
+    except ValueError:
+        pass
+    picks: list[Component] = []
+    for tok in answer.split(","):
+        tok = tok.strip()
+        if tok.isdigit() and 1 <= int(tok) <= len(available):
+            picks.append(available[int(tok) - 1])
+    return picks
 
 
 def _do_sync(*, update: bool = False, allow_run: bool = False) -> None:
@@ -289,47 +324,55 @@ def list_components() -> None:
 
 @app.command(name="search")
 def search_components(
-    query: str = typer.Argument(None, help="Filter registry skills by name/summary substring."),
+    query: str = typer.Argument(None, help="Filter catalog repos by name/summary substring."),
 ) -> None:
-    """Search registries for installable skills (and show locally-discovered components)."""
+    """Search catalogs for installable repos (and show locally-discovered components)."""
     from . import registry as reg
 
     store = _load()
     config = store.parsed()
     q = (query or "").lower()
     matched = False
-    if config.registries:
+    if config.repositories:
         try:
-            skills = reg.list_skills(_root(), config)
+            repos = reg.list_repos(_root(), config)
         except reg.RegistryError as exc:
             err.print(f"[yellow]! {exc}[/yellow]")
-            skills = []
+            repos = []
         rows = [
-            (sname, rname, entry)
-            for rname, sname, entry in skills
-            if not q or q in sname.lower() or q in (entry.summary or "").lower()
+            (rname, cname, entry)
+            for cname, rname, entry in repos
+            if not q or q in rname.lower() or q in (entry.summary or "").lower()
         ]
         if rows:
             matched = True
-            table = Table(title="Registry skills")
-            table.add_column("skill", style="cyan")
-            table.add_column("registry", style="dim")
-            table.add_column("install")
+            table = Table(title="Catalog repositories")
+            table.add_column("repo", style="cyan")
+            table.add_column("catalog", style="dim")
+            table.add_column("components")
             table.add_column("summary", style="dim")
-            for sname, rname, entry in rows:
-                table.add_row(sname, rname, entry.install.value, entry.summary or "")
+            for rname, cname, entry in rows:
+                scope = f"{len(entry.expose)} curated" if entry.expose else "whole repo"
+                table.add_row(rname, cname, scope, entry.summary or "")
             console.print(table)
-            console.print("  [dim]install with `agy add <skill>`[/dim]")
+            console.print("  [dim]install with `agy add <repo>`[/dim]")
     if not query:
         # No filter: also fall back to the local component listing.
         list_components()
     elif not matched:
-        console.print(f"[dim]No registry skills match '{query}'.[/dim]")
+        console.print(f"[dim]No catalog repos match '{query}'.[/dim]")
 
 
 @app.command()
 def add(
-    ref: str = typer.Argument(..., help="Component ref: <source>/<type>/<name>"),
+    ref: str = typer.Argument(..., help="Catalog repo (<repo> or <repo>@name[,name]) or full ref <source>/<type>/<name>"),
+    type_: list[str] = typer.Option(
+        None,
+        "--type",
+        "-T",
+        help="Catalog refs only: install only components of this type "
+        "(skill/agent/command/hook/mcp). Repeatable.",
+    ),
     path: str = typer.Option(
         None,
         "--path",
@@ -356,15 +399,22 @@ def add(
 ) -> None:
     """Enable a component and install it.
 
-    REF is either a full component ref ``<source>/<type>/<name>`` or, when registries are
-    configured, a bare skill name to resolve from them (e.g. ``agy add graphify``).
+    REF is one of: a catalog repo name (``agy add arckit`` — whole repo), a catalog repo with
+    selected components (``agy add arckit@code-review,lint``), or a full component ref
+    ``<source>/<type>/<name>``. ``--type`` filters a catalog install by component type.
     """
     import shlex
 
+    # A catalog ref never contains '/'; a manual <source>/<type>/<name> ref never contains '@'.
     if "/" not in ref:
-        _add_from_catalog(ref, allow_run=allow_run)
+        repo, _, names_raw = ref.partition("@")
+        names = [n.strip() for n in names_raw.split(",") if n.strip()] if names_raw else []
+        _add_from_catalog(repo, names, types=_parse_types(type_), allow_run=allow_run)
         return
 
+    if type_:
+        err.print("[red]--type applies only to catalog refs, not a full <source>/<type>/<name> ref.[/red]")
+        raise typer.Exit(1)
     source, ctype, name = _parse_ref(ref)
     store = _load()
     if store.parsed().source(source) is None:
@@ -576,77 +626,15 @@ def source_list() -> None:
         console.print("[dim]No sources configured.[/dim]")
 
 
-# -- registry sub-commands -----------------------------------------------
-
-
-@registry_app.command("add")
-def registry_add(
-    name: str = typer.Argument(..., help="Logical name for the registry."),
-    location: str = typer.Argument(..., help="Index file path or http(s) URL."),
-) -> None:
-    """Register a skill index so `agy add <skill-name>` can resolve from it."""
-    from .models import Registry
-
-    store = _load()
-    try:
-        store.add_registry(Registry(name=name, location=location))
-    except ValueError as exc:
-        err.print(f"[red]{exc}[/red]")
-        raise typer.Exit(1)
-    store.save()
-    console.print(f"[green]Added registry[/green] {name} → [dim]{location}[/dim]")
-
-
-@registry_app.command("remove")
-def registry_remove(name: str = typer.Argument(..., help="Registry name to remove.")) -> None:
-    """Remove a registry (does not uninstall skills already added from it)."""
-    store = _load()
-    if not store.remove_registry(name):
-        err.print(f"[yellow]No such registry: {name}[/yellow]")
-        raise typer.Exit(1)
-    store.save()
-    console.print(f"[red]Removed registry[/red] {name}")
-
-
-@registry_app.command("list")
-def registry_list() -> None:
-    """List configured registries and the skills they offer."""
-    from . import registry as reg
-
-    store = _load()
-    config = store.parsed()
-    if not config.registries:
-        console.print("[dim]No registries configured. Add one with `agy registry add`.[/dim]")
-        return
-    table = Table(title="Registries")
-    table.add_column("registry", style="cyan")
-    table.add_column("location", style="dim")
-    for r in config.registries:
-        table.add_row(r.name, r.location)
-    console.print(table)
-    try:
-        skills = reg.list_skills(_root(), config)
-    except reg.RegistryError as exc:
-        err.print(f"[yellow]! {exc}[/yellow]")
-        return
-    if skills:
-        st = Table(title="Available skills")
-        st.add_column("skill", style="cyan")
-        st.add_column("registry", style="dim")
-        st.add_column("install")
-        st.add_column("summary", style="dim")
-        for rname, sname, entry in skills:
-            st.add_row(sname, rname, entry.install.value, entry.summary or "")
-        console.print(st)
-
-
 # -- repo (catalog) sub-commands -----------------------------------------
 
 
 @repo_app.command("add")
 def repo_add(
     name: str = typer.Argument(..., help="Logical name for the catalog."),
-    location: str = typer.Argument(..., help="Catalog file path or http(s) URL."),
+    location: str = typer.Argument(
+        ..., help="Catalog file path or http(s) URL (a github.com blob URL works directly)."
+    ),
 ) -> None:
     """Register a repository catalog so `agy add <repo-name>` can resolve a whole repo."""
     from .models import Registry

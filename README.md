@@ -52,9 +52,9 @@ agy add team-skills/mcp/github                  # merge an MCP server into .mcp.
 # a repo that *is* a skill (no skills/<name>/ layout)? point at its root:
 agy source add cool https://github.com/some/cool-skill
 agy add cool/skill/cool-skill --path .
-# or resolve a skill by name from a registry (see "Third-party skills" below):
-agy registry add default https://skills.example.com/index.json
-agy add graphify
+# or resolve a repo by name from a catalog (see "Third-party skills" below):
+agy repo add default https://catalog.example.com/repositories.json
+agy add graphify                                # whole repo, or pick: arckit@code-review --type skill
 agy status                                      # check install state / drift
 agy disable team-skills/mcp/github              # uninstall, keep the declaration
 agy sync                                        # reconcile to match config + lock
@@ -69,11 +69,11 @@ agy update                                      # re-resolve refs, rewrite the l
 | `agy source add NAME LOCATION [--ref R] [--local] [--subdir DIR]` | Register a git/local source, download, sync |
 | `agy source remove NAME` | Remove a source and uninstall its components |
 | `agy source list` | List sources with their locked revision |
-| `agy registry add NAME LOCATION` | Register a skill index (file or URL) for name-based installs |
-| `agy registry remove NAME` / `registry list` | Manage registries; list offered skills |
-| `agy list` / `agy search [QUERY]` | Show discovered components + registry skills (filter by QUERY) |
+| `agy repo add NAME LOCATION` | Register a repository catalog (file or URL) for name-based installs |
+| `agy repo remove NAME` / `repo list` | Manage catalogs; list offered repos |
+| `agy list` / `agy search [QUERY]` | Show discovered components + catalog repos (filter by QUERY) |
 | `agy add <source>/<type>/<name> [--path P]` | Enable a component and install it (`--path` = explicit artifact location) |
-| `agy add <skill-name>` | Resolve a bare skill name from the registries and install it |
+| `agy add <repo>[@name[,name]] [--type T]...` | Resolve a catalog repo and install all / selected / by-type components |
 | `agy sync --allow-run` | Sync, permitting `generate` components to run their own installer |
 | `agy remove <source>/<type>/<name>` | Remove a component and uninstall it |
 | `agy enable / disable <ref>` | Toggle a component's `enabled` flag, then sync |
@@ -155,46 +155,58 @@ ways to install them, project-local into `.claude/skills/`:
    exact commands and skips them. `agy remove` deletes only the recorded `--produces`
    paths. (graphify's exact PyPI name/flags may differ — check its README.)
 
-3. **Registries (name-based, the "artifactory" model)** — a registry is an index file or
-   URL mapping skill names to their source + install method, so you don't need to know the
-   repo URL or flags:
+3. **Catalogs (name-based, the "artifactory" model)** — a catalog is a JSON file or URL
+   mapping repo names to their source (and optional curated components), so you don't need to
+   know the repo URL or flags. `agy add <repo>` resolves and installs; you choose what:
 
    ```bash
-   agy registry add default https://skills.example.com/index.json
-   agy search graph          # browse offered skills
-   agy add graphify          # resolves source + install method from the index
+   agy repo add default https://catalog.example.com/repositories.json
+   agy search graph                 # browse offered repos
+   agy add arckit                   # whole repo: every component it provides
+   agy add arckit --type skill      # only skills (repeatable: --type command …)
+   agy add arckit@code-review,lint  # only the named components
    ```
 
-   A **starter index** ships in this repo at [`registry/skills.json`](registry/skills.json)
-   with curated skills (e.g. [`ui-ux-pro-max`](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill),
-   `graphify`). Point a registry at it and install by name:
+   Selection: a bare `agy add <repo>` in a terminal opens an interactive picker; with no TTY
+   it installs everything. `--type` (skill/agent/command/hook/mcp) and `@name` narrow it.
+
+   A **starter catalog** ships in this repo at
+   [`registry/repositories.json`](registry/repositories.json) with curated repos (e.g.
+   [`ui-ux-pro-max`](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill), `graphify`,
+   `arckit`). Point a catalog at it and install by name:
 
    ```bash
-   agy registry add curated /path/to/agentry/registry/skills.json
+   agy repo add curated /path/to/agentry/registry/repositories.json
    agy add ui-ux-pro-max     # link-installs from .claude/skills/ui-ux-pro-max in that repo
    ```
 
-   The index is plain JSON — the same shape a hosted registry server would serve, so a
-   local file and a future server are interchangeable:
+   The catalog is plain JSON — the same shape a hosted catalog server would serve, so a
+   local file and a future server are interchangeable. A conventional-layout repo needs only
+   a `source`; `expose` declares curated components (and carries the `path`/`generate` for
+   artifacts discovery can't infer):
 
    ```json
    {
      "version": 1,
-     "skills": {
+     "repositories": {
+       "arckit": {
+         "summary": "Architecture governance toolkit (skills, agents, commands, …)",
+         "source": { "type": "git", "url": "https://github.com/tractorjuice/arc-kit", "ref": "main", "subdir": "plugins/arckit-claude" }
+       },
        "graphify": {
          "summary": "Codebase → knowledge graph",
          "source": { "type": "git", "url": "https://github.com/safishamsi/graphify", "ref": "main" },
-         "install": "generate",
-         "generate": {
-           "setup":   ["uv tool install graphifyy"],
-           "command": ["graphify", "install", "--project"],
-           "produces": [".claude/skills/graphify"]
-         }
-       },
-       "cool-skill": {
-         "source": { "type": "git", "url": "https://github.com/some/cool-skill", "ref": "v1" },
-         "install": "link",
-         "path": "."
+         "expose": [
+           {
+             "type": "skill",
+             "name": "graphify",
+             "generate": {
+               "setup":   [["uv", "tool", "install", "graphifyy"]],
+               "command": ["graphify", "install", "--project"],
+               "produces": [".claude/skills/graphify"]
+             }
+           }
+         ]
        }
      }
    }

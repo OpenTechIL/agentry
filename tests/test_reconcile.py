@@ -405,6 +405,65 @@ def test_link_merge_reversible(project: Path, tmp_path: Path):
     assert after["hooks"]["Stop"] == [{"matcher": "x"}]  # hand-added kept
 
 
+def test_link_merge_namespaces_dest_by_repo_and_ref(project: Path, tmp_path: Path):
+    # A profile dest with {repo}/{ref} placeholders namespaces the linked dir per source,
+    # avoiding the {name}="hooks" collision and recording provenance in the path.
+    source = _hooks_source(tmp_path)  # local source dir basename -> "hooksrc"
+    store = ConfigStore.load(project)
+    store.doc["target_profiles"] = {
+        "claude": {
+            "hook": {
+                "strategy": "link+merge",
+                "dest": ".claude/hooks/agentry/{repo}@{ref}/{name}",
+                "file": ".claude/settings.json",
+                "pointer": "hooks",
+                "rewrite_from": "${CLAUDE_PLUGIN_ROOT}/hooks",
+                "rewrite_to": "${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}",
+            }
+        }
+    }
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(source)))
+    store.add_component(Component(source="s", type=ComponentType.HOOK, name="hooks", path="hooks"))
+    store.save()
+
+    res = sync(project)
+    assert not res.warnings
+
+    link = project / ".claude/hooks/agentry/hooksrc@main/hooks"
+    assert link.is_symlink()
+    assert (link / "graph.mjs").read_text() == "export default () => {}\n"
+
+    settings = json.loads((project / ".claude/settings.json").read_text())
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert cmd == "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/hooksrc@main/hooks/graph.mjs"
+
+    # Disabling removes the symlink and prunes the now-empty namespace dirs.
+    store = ConfigStore.load(project)
+    store.set_enabled("s/hook/hooks", False)
+    store.save()
+    sync(project)
+    assert not (project / ".claude/hooks/agentry/hooksrc@main/hooks").exists()
+    assert not (project / ".claude/hooks/agentry").exists()  # pruned up the tree
+
+
+def test_link_merge_dest_change_removes_old_link(project: Path, tmp_path: Path):
+    # Changing the dest template between syncs must move the symlink, not orphan the old one.
+    _wire_link_merge_hooks(project, _hooks_source(tmp_path))  # dest = .claude/hooks/{name}
+    sync(project)
+    assert (project / ".claude/hooks/hooks").is_symlink()
+
+    store = ConfigStore.load(project)
+    store.doc["target_profiles"]["claude"]["hook"]["dest"] = ".claude/hooks/agentry/{repo}@{ref}/{name}"
+    store.doc["target_profiles"]["claude"]["hook"]["rewrite_to"] = (
+        "${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}"
+    )
+    store.save()
+    sync(project)
+
+    assert (project / ".claude/hooks/agentry/hooksrc@main/hooks").is_symlink()
+    assert not (project / ".claude/hooks/hooks").exists()  # old link removed, not orphaned
+
+
 def test_link_merge_warns_on_unrewritable_command(project: Path, tmp_path: Path):
     src = tmp_path / "hooksrc"
     (src / "hooks").mkdir(parents=True)

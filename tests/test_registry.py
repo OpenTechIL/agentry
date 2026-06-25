@@ -10,82 +10,88 @@ from typer.testing import CliRunner
 from agentry import registry as reg
 from agentry.cli import app
 from agentry.config import ConfigStore
-from agentry.models import Config, Registry
+from agentry.models import ComponentType, Config, Registry
 
 runner = CliRunner()
 
 
 def _skill_repo(tmp_path: Path) -> Path:
+    """A repo whose skill lives at a non-conventional path (needs an `expose` entry)."""
     repo = tmp_path / "cool"
-    repo.mkdir()
-    (repo / "SKILL.md").write_text("# cool\n")
+    (repo / ".claude" / "skills" / "cool").mkdir(parents=True)
+    (repo / ".claude" / "skills" / "cool" / "SKILL.md").write_text("# cool\n")
     return repo
 
 
-def _write_index(tmp_path: Path, skill_repo: Path) -> Path:
+def _write_catalog(tmp_path: Path, skill_repo: Path) -> Path:
+    """A catalog with two exposed skills: one linked by path, one self-installing via generate."""
     script = (
         "import os;p=os.path.join(os.getcwd(), '.claude/skills/fake');"
         "os.makedirs(p, exist_ok=True);"
         "open(os.path.join(p,'SKILL.md'),'w').write('# fake\\n')"
     )
-    index = {
+    catalog = {
         "version": 1,
-        "skills": {
+        "repositories": {
             "cool": {
                 "summary": "a cool skill",
                 "source": {"type": "local", "path": str(skill_repo)},
-                "install": "link",
-                "path": ".",
+                "expose": [
+                    {"type": "skill", "name": "cool", "path": ".claude/skills/cool"},
+                ],
             },
             "fake": {
                 "summary": "self-installer",
                 "source": {"type": "local", "path": str(skill_repo)},
-                "install": "generate",
-                "generate": {
-                    "command": [sys.executable, "-c", script],
-                    "produces": [".claude/skills/fake"],
-                },
+                "expose": [
+                    {
+                        "type": "skill",
+                        "name": "fake",
+                        "generate": {
+                            "command": [sys.executable, "-c", script],
+                            "produces": [".claude/skills/fake"],
+                        },
+                    }
+                ],
             },
         },
     }
-    path = tmp_path / "index.json"
-    path.write_text(json.dumps(index))
+    path = tmp_path / "repositories.json"
+    path.write_text(json.dumps(catalog))
     return path
 
 
-def test_load_index_and_find(tmp_path: Path):
-    skill_repo = _skill_repo(tmp_path)
-    index_path = _write_index(tmp_path, skill_repo)
-    config = Config(registries=[Registry(name="r", location=str(index_path))])
+def test_load_catalog_and_find(tmp_path: Path):
+    catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
+    config = Config(repositories=[Registry(name="r", location=str(catalog_path))])
 
-    idx = reg.load_index(tmp_path, config.registries[0])
-    assert set(idx.skills) == {"cool", "fake"}
+    idx = reg.load_catalog(tmp_path, config.repositories[0])
+    assert set(idx.repositories) == {"cool", "fake"}
 
-    match = reg.find(tmp_path, config, "cool")
-    assert match is not None and match[1].path == "."
-    assert reg.find(tmp_path, config, "nope") is None
+    match = reg.find_repo(tmp_path, config, "cool")
+    assert match is not None and match[2].expose[0].path == ".claude/skills/cool"
+    assert reg.find_repo(tmp_path, config, "nope") is None
 
-    listed = {name for _, name, _ in reg.list_skills(tmp_path, config)}
+    listed = {name for _, name, _ in reg.list_repos(tmp_path, config)}
     assert listed == {"cool", "fake"}
 
 
-def test_invalid_index_errors(tmp_path: Path):
+def test_invalid_catalog_errors(tmp_path: Path):
     bad = tmp_path / "bad.json"
     bad.write_text("{ not json")
-    config = Config(registries=[Registry(name="r", location=str(bad))])
+    config = Config(repositories=[Registry(name="r", location=str(bad))])
     with pytest.raises(reg.RegistryError, match="invalid index"):
-        reg.load_index(tmp_path, config.registries[0])
+        reg.load_catalog(tmp_path, config.repositories[0])
 
 
-def test_add_link_skill_from_registry(tmp_path, monkeypatch):
+def test_add_exposed_link_skill(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     ConfigStore.create(project, ["claude"]).save()
-    skill_repo = _skill_repo(tmp_path)
-    index_path = _write_index(tmp_path, skill_repo)
+    catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     monkeypatch.chdir(project)
 
-    assert runner.invoke(app, ["registry", "add", "r", str(index_path)]).exit_code == 0
+    assert runner.invoke(app, ["repo", "add", "r", str(catalog_path)]).exit_code == 0
     result = runner.invoke(app, ["add", "cool"])
     assert result.exit_code == 0, result.output
 
@@ -95,17 +101,16 @@ def test_add_link_skill_from_registry(tmp_path, monkeypatch):
     # Resolved into a real source + component in config.
     cfg = ConfigStore.load(project).parsed()
     assert cfg.source("cool") is not None
-    assert cfg.find_component("cool/skill/cool").path == "."
+    assert cfg.find_component("cool/skill/cool").path == ".claude/skills/cool"
 
 
-def test_add_generate_skill_gated(tmp_path, monkeypatch):
+def test_add_exposed_generate_skill_gated(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     ConfigStore.create(project, ["claude"]).save()
-    skill_repo = _skill_repo(tmp_path)
-    index_path = _write_index(tmp_path, skill_repo)
+    catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["registry", "add", "r", str(index_path)])
+    runner.invoke(app, ["repo", "add", "r", str(catalog_path)])
 
     # Without --allow-run: added but not executed.
     res = runner.invoke(app, ["add", "fake"])
@@ -119,53 +124,223 @@ def test_add_generate_skill_gated(tmp_path, monkeypatch):
     assert (project / ".claude/skills/fake/SKILL.md").read_text() == "# fake\n"
 
 
-def test_add_unknown_skill_errors(tmp_path, monkeypatch):
+def test_add_unknown_repo_errors(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     ConfigStore.create(project, ["claude"]).save()
-    index_path = _write_index(tmp_path, _skill_repo(tmp_path))
+    catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["registry", "add", "r", str(index_path)])
+    runner.invoke(app, ["repo", "add", "r", str(catalog_path)])
     res = runner.invoke(app, ["add", "ghost"])
     assert res.exit_code == 1
-    assert "No skill named 'ghost'" in res.output
+    assert "No catalog lists 'ghost'" in res.output
 
 
-def test_add_bare_name_without_registries_errors(tmp_path, monkeypatch):
+def test_add_bare_name_without_catalogs_errors(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
     ConfigStore.create(project, ["claude"]).save()
     monkeypatch.chdir(project)
     res = runner.invoke(app, ["add", "graphify"])
     assert res.exit_code == 1
-    assert "no registries are configured" in res.output
+    assert "No catalog lists 'graphify'" in res.output
 
 
-def test_shipped_curated_index_is_valid():
-    # The starter registry committed at registry/skills.json must parse and expose
-    # the curated skills with sane install methods.
-    from agentry.models import RegistryIndex
-    from agentry.models import Strategy
+def test_shipped_catalog_is_valid():
+    # The starter catalog committed at registry/repositories.json must parse and expose the
+    # curated repos with sane install methods.
+    from agentry.models import RepositoryIndex
 
-    path = Path(__file__).resolve().parent.parent / "registry" / "skills.json"
-    idx = RegistryIndex.model_validate(json.loads(path.read_text()))
-    assert "ui-ux-pro-max" in idx.skills
-    ui = idx.skills["ui-ux-pro-max"]
-    assert ui.install is Strategy.LINK and ui.path == ".claude/skills/ui-ux-pro-max"
-    gph = idx.skills["graphify"]
-    assert gph.install is Strategy.GENERATE and gph.generate.produces == [".claude/skills/graphify"]
+    path = Path(__file__).resolve().parent.parent / "registry" / "repositories.json"
+    idx = RepositoryIndex.model_validate(json.loads(path.read_text()))
+    assert {"arckit", "ui-ux-pro-max", "graphify"} <= set(idx.repositories)
+
+    ui = idx.repositories["ui-ux-pro-max"].expose[0]
+    assert ui.type is ComponentType.SKILL and ui.path == ".claude/skills/ui-ux-pro-max"
+    gph = idx.repositories["graphify"].expose[0]
+    assert gph.generate is not None and gph.generate.produces == [".claude/skills/graphify"]
 
 
-def test_registry_persisted_and_listed(tmp_path, monkeypatch):
+def test_shipped_repositories_catalog_has_arckit_hook_profile():
+    # The curated repositories.json must declare arckit's claude hook link+merge profile so
+    # `agy add arckit` rewrites ${CLAUDE_PLUGIN_ROOT} instead of merging it in verbatim.
+    from agentry.models import RepositoryIndex, Strategy
+
+    path = Path(__file__).resolve().parent.parent / "registry" / "repositories.json"
+    idx = RepositoryIndex.model_validate(json.loads(path.read_text()))
+    arckit = idx.repositories["arckit"]
+    rule = arckit.target_profiles["claude"][ComponentType.HOOK]
+    assert rule.strategy is Strategy.LINK_MERGE
+    assert rule.rewrite_from == "${CLAUDE_PLUGIN_ROOT}/hooks"
+    assert rule.dest == ".claude/hooks/agentry/{repo}@{ref}/{name}"
+    assert rule.rewrite_to == "${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}"
+
+
+# -- multi-component repo: install-time selection -------------------------
+
+
+def _multi_repo(tmp_path: Path) -> Path:
+    """A conventional-layout repo with one skill, one command, one agent (all discoverable)."""
+    repo = tmp_path / "plugin"
+    (repo / "skills" / "alpha").mkdir(parents=True)
+    (repo / "skills" / "alpha" / "SKILL.md").write_text("# alpha\n")
+    (repo / "commands").mkdir(parents=True)
+    (repo / "commands" / "beta.md").write_text("# beta\n")
+    (repo / "agents").mkdir(parents=True)
+    (repo / "agents" / "gamma.md").write_text("# gamma\n")
+    return repo
+
+
+def _write_multi_catalog(tmp_path: Path, source: Path) -> Path:
+    catalog = {"version": 1, "repositories": {"demo": {"source": {"type": "local", "path": str(source)}}}}
+    path = tmp_path / "repositories.json"
+    path.write_text(json.dumps(catalog))
+    return path
+
+
+def _setup_multi(tmp_path, monkeypatch) -> Path:
     project = tmp_path / "proj"
     project.mkdir()
     ConfigStore.create(project, ["claude"]).save()
-    index_path = _write_index(tmp_path, _skill_repo(tmp_path))
+    catalog = _write_multi_catalog(tmp_path, _multi_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["registry", "add", "r", str(index_path)])
+    runner.invoke(app, ["repo", "add", "c", str(catalog)])
+    return project
+
+
+def _enabled_refs(project: Path) -> set[str]:
+    return {c.ref for c in ConfigStore.load(project).parsed().components if c.enabled}
+
+
+def test_add_select_single_component(tmp_path, monkeypatch):
+    project = _setup_multi(tmp_path, monkeypatch)
+    res = runner.invoke(app, ["add", "demo@alpha"])
+    assert res.exit_code == 0, res.output
+    assert _enabled_refs(project) == {"demo/skill/alpha"}
+
+
+def test_add_select_multiple_components(tmp_path, monkeypatch):
+    project = _setup_multi(tmp_path, monkeypatch)
+    res = runner.invoke(app, ["add", "demo@alpha,beta"])
+    assert res.exit_code == 0, res.output
+    assert _enabled_refs(project) == {"demo/skill/alpha", "demo/command/beta"}
+
+
+def test_add_select_unknown_component_errors(tmp_path, monkeypatch):
+    _setup_multi(tmp_path, monkeypatch)
+    res = runner.invoke(app, ["add", "demo@ghost"])
+    assert res.exit_code == 1
+    assert "no component" in res.output.lower() and "ghost" in res.output
+
+
+def test_add_type_filter(tmp_path, monkeypatch):
+    project = _setup_multi(tmp_path, monkeypatch)
+    res = runner.invoke(app, ["add", "demo", "--type", "skill"])
+    assert res.exit_code == 0, res.output
+    assert _enabled_refs(project) == {"demo/skill/alpha"}
+
+
+def test_add_unknown_type_errors(tmp_path, monkeypatch):
+    _setup_multi(tmp_path, monkeypatch)
+    res = runner.invoke(app, ["add", "demo", "--type", "bogus"])
+    assert res.exit_code == 1
+    assert "Unknown type 'bogus'" in res.output
+
+
+def test_add_bare_repo_no_tty_installs_all(tmp_path, monkeypatch):
+    project = _setup_multi(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+    res = runner.invoke(app, ["add", "demo"])
+    assert res.exit_code == 0, res.output
+    assert _enabled_refs(project) == {"demo/skill/alpha", "demo/command/beta", "demo/agent/gamma"}
+
+
+# -- catalog plumbing (unchanged behaviour) -------------------------------
+
+
+def _plugin_repo(tmp_path: Path) -> Path:
+    """A minimal local source with one discoverable component (so `agy add` succeeds)."""
+    repo = tmp_path / "plugin"
+    (repo / "skills" / "demo").mkdir(parents=True)
+    (repo / "skills" / "demo" / "SKILL.md").write_text("# demo\n")
+    return repo
+
+
+def _write_hook_catalog(tmp_path: Path, source: Path) -> Path:
+    catalog = {
+        "version": 1,
+        "repositories": {
+            "demo": {
+                "source": {"type": "local", "path": str(source)},
+                "target_profiles": {
+                    "claude": {
+                        "hook": {
+                            "strategy": "link+merge",
+                            "dest": ".claude/hooks/{name}",
+                            "file": ".claude/settings.json",
+                            "pointer": "hooks",
+                            "rewrite_from": "${CLAUDE_PLUGIN_ROOT}/hooks",
+                            "rewrite_to": "${CLAUDE_PROJECT_DIR}/.claude/hooks/{name}",
+                        }
+                    }
+                },
+            }
+        },
+    }
+    path = tmp_path / "repositories.json"
+    path.write_text(json.dumps(catalog))
+    return path
+
+
+def test_add_catalog_repo_writes_target_profiles_idempotent(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    catalog = _write_hook_catalog(tmp_path, _plugin_repo(tmp_path))
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["repo", "add", "curated", str(catalog)])
+
+    res = runner.invoke(app, ["add", "demo"])
+    assert res.exit_code == 0, res.output
+    cfg = ConfigStore.load(project).parsed()
+    rule = cfg.target_profiles["claude"][ComponentType.HOOK]
+    assert rule.rewrite_from == "${CLAUDE_PLUGIN_ROOT}/hooks"
+
+    # A user customizes the written rule; re-adding the repo must not clobber it.
+    store = ConfigStore.load(project)
+    store.doc["target_profiles"]["claude"]["hook"]["rewrite_to"] = "${CLAUDE_PROJECT_DIR}/custom"
+    store.save()
+    res2 = runner.invoke(app, ["add", "demo"])
+    assert res2.exit_code == 0, res2.output
+    cfg2 = ConfigStore.load(project).parsed()
+    assert cfg2.target_profiles["claude"][ComponentType.HOOK].rewrite_to == "${CLAUDE_PROJECT_DIR}/custom"
+
+
+def test_normalize_github_web_url():
+    # github.com blob/raw web URLs are rewritten to raw.githubusercontent.com so a URL
+    # pasted from the browser actually serves the JSON.
+    assert (
+        reg._normalize_url("https://github.com/acme/cat/blob/main/registry/repositories.json")
+        == "https://raw.githubusercontent.com/acme/cat/main/registry/repositories.json"
+    )
+    assert (
+        reg._normalize_url("https://github.com/acme/cat/raw/v2/repositories.json")
+        == "https://raw.githubusercontent.com/acme/cat/v2/repositories.json"
+    )
+    # Already-raw and non-GitHub URLs pass through untouched.
+    raw = "https://raw.githubusercontent.com/acme/cat/main/repositories.json"
+    assert reg._normalize_url(raw) == raw
+    other = "https://example.com/repositories.json"
+    assert reg._normalize_url(other) == other
+
+
+def test_repo_catalog_persisted_and_listed_via_url(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    monkeypatch.chdir(project)
+    url = "https://github.com/acme/cat/blob/main/repositories.json"
+    runner.invoke(app, ["repo", "add", "curated", url])
 
     cfg = ConfigStore.load(project).parsed()
-    assert cfg.registries and cfg.registries[0].location == str(index_path)
-
-    out = runner.invoke(app, ["registry", "list"]).output
-    assert "cool" in out and "fake" in out
+    assert cfg.repositories and cfg.repositories[0].location == url

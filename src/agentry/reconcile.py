@@ -35,6 +35,7 @@ from .models import (
     InstalledLinkMerge,
     InstalledMerge,
     Manifest,
+    SourceType,
     Strategy,
 )
 from .resolver import effective_root
@@ -143,7 +144,7 @@ def compute_desired(
             if strat is Strategy.LINK:
                 links.append(DesiredLink(comp.ref, tname, spec.link_dest(comp.type, comp.name), artifact))
             elif strat is Strategy.LINK_MERGE:
-                lm = _compute_link_merge(comp, tname, spec.link_merge_dest(comp.type), artifact, warnings)
+                lm = _compute_link_merge(comp, src, tname, spec.link_merge_dest(comp.type), artifact, warnings)
                 if lm is not None:
                     link_merges.append(lm)
             else:
@@ -157,7 +158,38 @@ def compute_desired(
     return links, merges, generates, link_merges
 
 
-def _compute_link_merge(comp, tname: str, lmdest: LinkMergeDest, artifact: Path, warnings: list[str]):
+def _link_merge_vars(comp, src) -> dict[str, str]:
+    """Path-template substitutions for a link+merge destination.
+
+    ``{name}``   component name (e.g. ``hooks``)
+    ``{source}`` the configured source/catalog name (e.g. ``arckit``)
+    ``{repo}``   the source repo basename — git URL or local path tail (e.g. ``arc-kit``)
+    ``{ref}``    the requested git ref, ``/`` flattened to ``-`` (e.g. ``main``)
+    These let a profile namespace linked dirs per repo+ref —
+    ``.claude/hooks/agentry/{repo}@{ref}/{name}`` — instead of colliding on ``{name}``.
+    """
+    locator = src.url if src.type is SourceType.GIT else src.path
+    repo = comp.source
+    if locator:
+        repo = locator.rstrip("/").rsplit("/", 1)[-1]
+        if repo.endswith(".git"):
+            repo = repo[:-4]
+    ref = (src.ref or "main").replace("/", "-")
+    return {"name": comp.name, "source": comp.source, "repo": repo, "ref": ref}
+
+
+def _expand(template: str, variables: dict[str, str]) -> str:
+    """Substitute ``{key}`` placeholders by literal replacement.
+
+    Not ``str.format``: rewrite targets often embed other ``${...}`` shell vars (e.g.
+    ``${CLAUDE_PROJECT_DIR}``) that ``format`` would misread as fields.
+    """
+    for key, value in variables.items():
+        template = template.replace("{" + key + "}", value)
+    return template
+
+
+def _compute_link_merge(comp, src, tname: str, lmdest: LinkMergeDest, artifact: Path, warnings: list[str]):
     """Resolve a link+merge component: the script dir to link + the rewritten fragment.
 
     ``artifact`` is the script directory (``--path hooks``) or, if a file was resolved,
@@ -175,10 +207,12 @@ def _compute_link_merge(comp, tname: str, lmdest: LinkMergeDest, artifact: Path,
     except (ValueError, OSError) as exc:
         warnings.append(f"{comp.ref}: {exc}")
         return None
-    rewritten, leftovers = link_merge_inst.rewrite_fragment(entries, lmdest, comp.name)
+    variables = _link_merge_vars(comp, src)
+    link_path = _expand(lmdest.link_dest, variables)
+    rewrite_to = _expand(lmdest.rewrite_to, variables)
+    rewritten, leftovers = link_merge_inst.rewrite_fragment(entries, lmdest.rewrite_from, rewrite_to)
     for cmd in leftovers:
         warnings.append(f"{comp.ref}: command not rewritten, may not resolve: {cmd}")
-    link_path = lmdest.link_dest.format(name=comp.name)
     return DesiredLinkMerge(comp.ref, tname, link_path, link_src, lmdest.merge, rewritten, list(rewritten))
 
 
@@ -340,6 +374,9 @@ def _reconcile_link_merges(
             stale = [key_ for key_ in old.keys if key_ not in d.keys]
             if stale:
                 merge_inst.remove_merge(root, d.dest, stale)
+            # The dest template (e.g. {repo}@{ref}) may have moved the link — drop the old one.
+            if old.link_path != d.link_path:
+                link_inst.remove_link(root, old.link_path)
         try:
             link_status = link_inst.install_link(root, d.artifact, d.link_path)
         except FileExistsError as exc:

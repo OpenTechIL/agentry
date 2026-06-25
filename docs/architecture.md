@@ -94,12 +94,13 @@ component can resolve it directly, bypassing discovery:
   the source root is the skill). Handled in `reconcile.compute_desired`.
 - `generate:` on a component installs via the generate strategy instead of an artifact.
 
-**Registries (`registry.py`).** A `registries:` list in `.agentry.yml` points at JSON
-indexes (a local file or an http(s) URL) that map a bare skill name to its source + install
-method. `agy add <name>` consults them in order and synthesizes the same Source + Component
-a user would hand-write — so registries add resolution only, no new install mechanics. The
-index is the JSON contract a hosted "artifactory" server would serve, so file and server are
-interchangeable. URL indexes are cached under `.agentry/registries/`.
+**Catalogs (`registry.py`).** A `repositories:` list in `.agentry.yml` points at JSON
+catalogs (a local file or an http(s) URL) that map a bare repo name to its source + optional
+curated components. `agy add <repo>` consults them in order and synthesizes the same Sources +
+Components a user would hand-write, installing all of them, a `@name`-selected subset, or a
+`--type`-filtered subset — so catalogs add resolution only, no new install mechanics. The
+catalog is the JSON contract a hosted "artifactory" server would serve, so file and server are
+interchangeable. URL catalogs are cached under `.agentry/repositories/`.
 
 **Dependencies (`requires`).** A descriptor entry may declare components it needs. Each
 `requires` item points at another component by `type` + `name`, living in one of three
@@ -227,7 +228,7 @@ targets.py      per-tool capability map (TargetSpec)
 discovery.py    scan a source for available components + their `requires` (LAYOUT)
 resolver.py     download/checkout into the store; resolve refs → SHA/hash
 deps.py         transitive dependency closure (recursive, version-aware) → augmented graph
-registry.py     resolve a bare skill name via external indexes (file/URL) → Source + Component
+registry.py     resolve a bare repo name via external catalogs (file/URL) → Sources + Components
 manifest.py     .agentry/.manifest.json read/write
 installers/
   link.py       symlink create/remove/state (lexical, store-scoped)
@@ -248,8 +249,8 @@ gitignore.py    ensure .agentry/ is ignored
 
 ## 10. Deferred (future phases)
 
-- **Hosted registry server** — the registry index format and name-based `agy add`/`agy search`
-  ship today against file/URL indexes (`registry.py`); a hosted catalog server + publish flow
+- **Hosted catalog server** — the catalog format and name-based `agy add`/`agy search`
+  ship today against file/URL catalogs (`registry.py`); a hosted catalog server + publish flow
   (serving the same JSON contract) is the remaining piece.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
 - **Hook array-merge** — richer merging for event-keyed hook arrays beyond the named-key contract.

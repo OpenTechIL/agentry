@@ -1,0 +1,40 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [Unreleased] — 2026-06-25
+
+### Added
+- `agy add <repo>@name[,name]` to install only selected components from a catalog repo,
+  and `--type/-T` (repeatable: skill/agent/command/hook/mcp) to filter a catalog install by
+  component type. A bare `agy add <repo>` opens an interactive picker in a TTY and installs
+  everything otherwise.
+- Path templating for link+merge profile destinations: `{name}`, `{source}`, `{repo}`
+  (repo basename), and `{ref}` (git ref, `/` flattened to `-`). Lets a profile namespace
+  linked dirs per repo+ref, e.g. `.claude/hooks/agentry/{repo}@{ref}/{name}`, instead of
+  colliding on `{name}`.
+
+### Changed
+- Consolidated the skill-registry and repository-catalog systems into a single catalog:
+  `repositories.json` / `repositories:` / `agy repo` is now the only name-based resolution
+  path. `agy add <name>` resolves a repo from the configured catalogs.
+- `agy search` now searches catalog repositories (name/summary) instead of registry skills.
+- Migrated the starter `ui-ux-pro-max` and `graphify` entries into
+  `registry/repositories.json` as `expose` entries (carrying their `path`/`generate`).
+- Reworked `link_merge.rewrite_fragment` to take an already-expanded `rewrite_to` prefix;
+  the caller (`reconcile`) now owns placeholder substitution via `_link_merge_vars`/`_expand`.
+
+### Fixed
+- A changed link+merge `dest` template now removes the stale symlink at the old path during
+  reconcile, instead of leaving an orphaned link behind.
+
+### Removed
+- The skill registry: `registry/skills.json`, the `registries:` config key, the
+  `agy registry` command group, the `RegistrySkill`/`RegistryIndex` models, the
+  `load_index`/`find`/`list_skills` resolver functions, and the
+  `add_registry`/`remove_registry` config mutators.

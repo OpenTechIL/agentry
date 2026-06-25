@@ -13,7 +13,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from .models import Component, Config, Registry, Source, SourceType
+from .models import Component, ComponentType, Config, ProfileRule, Registry, Source, SourceType
 
 CONFIG_NAME = ".agentry.yml"
 LOCK_NAME = ".agentry.lock"
@@ -107,21 +107,6 @@ class ConfigStore:
         comps[:] = [c for c in comps if c.get("source") != name]
         return len(sources) != before
 
-    def add_registry(self, registry: Registry) -> None:
-        regs = self._seq("registries")
-        if any(r.get("name") == registry.name for r in regs):
-            raise ValueError(f"registry '{registry.name}' already exists")
-        item = CommentedMap()
-        item["name"] = registry.name
-        item["location"] = registry.location
-        regs.append(item)
-
-    def remove_registry(self, name: str) -> bool:
-        regs = self._seq("registries")
-        before = len(regs)
-        regs[:] = [r for r in regs if r.get("name") != name]
-        return len(regs) != before
-
     def add_repository(self, registry: Registry) -> None:
         repos = self._seq("repositories")
         if any(r.get("name") == registry.name for r in repos):
@@ -136,6 +121,29 @@ class ConfigStore:
         before = len(repos)
         repos[:] = [r for r in repos if r.get("name") != name]
         return len(repos) != before
+
+    def merge_target_profiles(self, profiles: dict[str, dict[ComponentType, ProfileRule]]) -> bool:
+        """Merge per-target profile rules into ``target_profiles``, never clobbering existing.
+
+        Keyed by ``target -> ComponentType.value -> rule``. A rule is written only when that
+        ``(target, type)`` slot is absent, so a user-customized profile (or a re-add of the
+        same repo) is left untouched. Returns True if anything was written.
+        """
+        if not profiles:
+            return False
+        if "target_profiles" not in self.doc or self.doc["target_profiles"] is None:
+            self.doc["target_profiles"] = CommentedMap()
+        root = self.doc["target_profiles"]
+        changed = False
+        for target, rules in profiles.items():
+            tmap = root.setdefault(target, CommentedMap())
+            for ctype, rule in rules.items():
+                key = ctype.value if isinstance(ctype, ComponentType) else str(ctype)
+                if key in tmap:
+                    continue  # respect an existing/user-customized rule
+                tmap[key] = _profile_rule_map(rule)
+                changed = True
+        return changed
 
     def add_component(self, comp: Component) -> None:
         comps = self._seq("components")
@@ -187,6 +195,17 @@ class ConfigStore:
 
 def _comp_ref(c: dict) -> str:
     return f"{c.get('source')}/{c.get('type')}/{c.get('name')}"
+
+
+def _profile_rule_map(rule: ProfileRule) -> CommentedMap:
+    """Serialize a :class:`ProfileRule` to a CommentedMap of its set (non-None) fields."""
+    item = CommentedMap()
+    item["strategy"] = rule.strategy.value
+    for field in ("dest", "file", "pointer", "rewrite_from", "rewrite_to"):
+        value = getattr(rule, field)
+        if value is not None:
+            item[field] = value
+    return item
 
 
 def _plain(obj):

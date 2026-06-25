@@ -15,8 +15,6 @@ Removal undoes both halves; the manifest records the link path and the owned mer
 
 from __future__ import annotations
 
-from ..targets import LinkMergeDest
-
 
 def _rewrite_strings(value, frm: str, to: str):
     """Deep-copy ``value`` replacing every occurrence of ``frm`` with ``to`` in strings."""
@@ -51,21 +49,20 @@ def _collect_leftovers(value, token: str, out: list[str]) -> None:
             _collect_leftovers(v, token, out)
 
 
-def rewrite_fragment(fragment: dict, dest: LinkMergeDest, name: str) -> tuple[dict, list[str]]:
+def rewrite_fragment(fragment: dict, rewrite_from: str, to: str) -> tuple[dict, list[str]]:
     """Rewrite command paths in ``fragment`` and report any still-unresolved references.
 
-    Returns ``(rewritten_fragment, leftover_strings)``. ``leftover_strings`` are command
-    strings that still reference the original plugin variable after rewriting — they will
-    not resolve from the merged config and should be surfaced as a warning.
+    ``to`` is the already-expanded destination prefix (the caller substitutes ``{name}``,
+    ``{source}``, ``{repo}`` and ``{ref}`` — it owns the source context). Returns
+    ``(rewritten_fragment, leftover_strings)``; ``leftover_strings`` are command strings
+    that still reference the original plugin variable after rewriting — they will not
+    resolve from the merged config and should be surfaced as a warning.
     """
-    if not dest.rewrite_from:
+    if not rewrite_from:
         return fragment, []
-    # Substitute {name} literally — rewrite_to often contains other ${...} shell vars
-    # (e.g. ${CLAUDE_PROJECT_DIR}) that str.format would misread as fields.
-    to = dest.rewrite_to.replace("{name}", name)
-    rewritten = _rewrite_strings(fragment, dest.rewrite_from, to)
+    rewritten = _rewrite_strings(fragment, rewrite_from, to)
     leftovers: list[str] = []
-    token = _plugin_var(dest.rewrite_from)
+    token = _plugin_var(rewrite_from)
     if token:
         _collect_leftovers(rewritten, token, leftovers)
     return rewritten, leftovers

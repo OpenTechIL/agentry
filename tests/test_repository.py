@@ -95,27 +95,6 @@ def test_add_repo_with_expose_mcp_only(tmp_path, monkeypatch):
     assert cfg.find_component("toolkit/skill/reviewer") is None
 
 
-def test_bare_name_falls_back_to_skills_registry(tmp_path, monkeypatch):
-    # No catalogs, but a skills registry lists the name → old behavior still works.
-    project = tmp_path / "proj"
-    project.mkdir()
-    ConfigStore.create(project, ["claude"]).save()
-    skill_repo = tmp_path / "cool"
-    skill_repo.mkdir()
-    (skill_repo / "SKILL.md").write_text("# cool\n")
-    index = {
-        "version": 1,
-        "skills": {"cool": {"source": {"type": "local", "path": str(skill_repo)}, "install": "link", "path": "."}},
-    }
-    index_path = tmp_path / "skills.json"
-    index_path.write_text(json.dumps(index))
-    monkeypatch.chdir(project)
-    runner.invoke(app, ["registry", "add", "r", str(index_path)])
-    res = runner.invoke(app, ["add", "cool"])
-    assert res.exit_code == 0, res.output
-    assert (project / ".claude/skills/cool").is_symlink()
-
-
 def test_invalid_catalog_errors(tmp_path: Path):
     bad = tmp_path / "bad.json"
     bad.write_text("{ not json")
