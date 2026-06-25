@@ -53,7 +53,9 @@ def git_source(tmp_path: Path) -> Path:
         "GIT_COMMITTER_NAME": "t",
         "GIT_COMMITTER_EMAIL": "t@e.x",
     }
-    subprocess.run(["git", "init", "-q"], cwd=src, check=True)
+    # Pin the initial branch so the test's ref="main" resolves regardless of the
+    # runner's init.defaultBranch (CI defaults to "master", not "main").
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=src, check=True)
     subprocess.run(["git", "add", "-A"], cwd=src, check=True)
     subprocess.run(
         ["git", "commit", "-qm", "init"], cwd=src, check=True, env={**_base_env(), **env}
