@@ -42,7 +42,5 @@ jobs:
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
-      - name: Install project (dev extras)
-        run: uv pip install --system -e ".[dev]"
       - name: Run tests
-        run: pytest --cov=agentry --cov-report=term-missing
+        run: uv run --extra dev pytest --cov=agentry --cov-report=term-missing

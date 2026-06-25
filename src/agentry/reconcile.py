@@ -110,10 +110,18 @@ class SyncResult:
 
 def compute_desired(
     root: Path, config: Config, warnings: list[str]
-) -> tuple[list[DesiredLink], list[DesiredCopy], list[DesiredMerge], list[DesiredGenerate], list[DesiredLinkMerge]]:
+) -> tuple[
+    list[DesiredLink],
+    list[DesiredCopy],
+    list[DesiredMerge],
+    list[DesiredGenerate],
+    list[DesiredLinkMerge],
+]:
     specs = resolve_targets(config)
     for missing in unresolved_targets(config, specs):
-        warnings.append(f"target '{missing}' is undefined — add it under target_profiles in .agentry.yml")
+        warnings.append(
+            f"target '{missing}' is undefined — add it under target_profiles in .agentry.yml"
+        )
 
     # Build a (type, name) -> path index per source.
     indexes: dict[str, dict[tuple[ComponentType, str], Path]] = {}
@@ -144,7 +152,9 @@ def compute_desired(
             # Explicit artifact path: resolve directly under the source root, skipping discovery.
             artifact = effective_root(root, src) / comp.path
             if not artifact.exists():
-                warnings.append(f"{comp.ref}: path '{comp.path}' not found in source '{comp.source}'")
+                warnings.append(
+                    f"{comp.ref}: path '{comp.path}' not found in source '{comp.source}'"
+                )
                 continue
         else:
             artifact = indexes.get(comp.source, {}).get((comp.type, comp.name))
@@ -165,14 +175,22 @@ def compute_desired(
                     continue
             strat = spec.strategy(comp.type)
             if strat is None:
-                warnings.append(f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped")
+                warnings.append(
+                    f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped"
+                )
                 continue
             if strat is Strategy.LINK:
-                links.append(DesiredLink(comp.ref, tname, spec.link_dest(comp.type, comp.name), artifact))
+                links.append(
+                    DesiredLink(comp.ref, tname, spec.link_dest(comp.type, comp.name), artifact)
+                )
             elif strat is Strategy.COPY:
-                copies.append(DesiredCopy(comp.ref, tname, spec.copy_dest(comp.type, comp.name), artifact))
+                copies.append(
+                    DesiredCopy(comp.ref, tname, spec.copy_dest(comp.type, comp.name), artifact)
+                )
             elif strat is Strategy.LINK_MERGE:
-                lm = _compute_link_merge(comp, src, tname, spec.link_merge_dest(comp.type), artifact, warnings)
+                lm = _compute_link_merge(
+                    comp, src, tname, spec.link_merge_dest(comp.type), artifact, warnings
+                )
                 if lm is not None:
                     link_merges.append(lm)
             else:
@@ -227,7 +245,9 @@ def _expand(template: str, variables: dict[str, str]) -> str:
     return template
 
 
-def _compute_link_merge(comp, src, tname: str, lmdest: LinkMergeDest, artifact: Path, warnings: list[str]):
+def _compute_link_merge(
+    comp, src, tname: str, lmdest: LinkMergeDest, artifact: Path, warnings: list[str]
+):
     """Resolve a link+merge component: the script dir to link + the rewritten fragment.
 
     ``artifact`` is the script directory (``--path hooks``) or, if a file was resolved,
@@ -238,7 +258,9 @@ def _compute_link_merge(comp, src, tname: str, lmdest: LinkMergeDest, artifact: 
     else:
         link_src, config = artifact.parent, artifact
     if not config.is_file():
-        warnings.append(f"{comp.ref}: link+merge config '{config.name}' not found in '{comp.source}'")
+        warnings.append(
+            f"{comp.ref}: link+merge config '{config.name}' not found in '{comp.source}'"
+        )
         return None
     try:
         entries = merge_inst.select_entries(merge_inst.load_fragment(config), lmdest.merge)
@@ -248,10 +270,14 @@ def _compute_link_merge(comp, src, tname: str, lmdest: LinkMergeDest, artifact: 
     variables = _link_merge_vars(comp, src)
     link_path = _expand(lmdest.link_dest, variables)
     rewrite_to = _expand(lmdest.rewrite_to, variables)
-    rewritten, leftovers = link_merge_inst.rewrite_fragment(entries, lmdest.rewrite_from, rewrite_to)
+    rewritten, leftovers = link_merge_inst.rewrite_fragment(
+        entries, lmdest.rewrite_from, rewrite_to
+    )
     for cmd in leftovers:
         warnings.append(f"{comp.ref}: command not rewritten, may not resolve: {cmd}")
-    return DesiredLinkMerge(comp.ref, tname, link_path, link_src, lmdest.merge, rewritten, list(rewritten))
+    return DesiredLinkMerge(
+        comp.ref, tname, link_path, link_src, lmdest.merge, rewritten, list(rewritten)
+    )
 
 
 # -- apply ---------------------------------------------------------------
@@ -271,7 +297,9 @@ def sync(root: Path, *, update: bool = False, allow_run: bool = False) -> SyncRe
     # 2. Desired vs. installed. The augmented config carries synthesized sources and
     #    transitive components so reconcile treats them like any declared dependency.
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    links, copies, merges, generates, link_merges = compute_desired(root, augmented, result.warnings)
+    links, copies, merges, generates, link_merges = compute_desired(
+        root, augmented, result.warnings
+    )
     manifest = load_manifest(root)
 
     _reconcile_links(root, links, manifest, result)
@@ -287,7 +315,9 @@ def sync(root: Path, *, update: bool = False, allow_run: bool = False) -> SyncRe
     return result
 
 
-def _reconcile_links(root: Path, desired: list[DesiredLink], manifest: Manifest, result: SyncResult) -> None:
+def _reconcile_links(
+    root: Path, desired: list[DesiredLink], manifest: Manifest, result: SyncResult
+) -> None:
     desired_by_path = {d.path: d for d in desired}
 
     kept: list[InstalledLink] = []
@@ -315,7 +345,9 @@ def _reconcile_links(root: Path, desired: list[DesiredLink], manifest: Manifest,
             have.add(path)
 
 
-def _reconcile_copies(root: Path, desired: list[DesiredCopy], manifest: Manifest, result: SyncResult) -> None:
+def _reconcile_copies(
+    root: Path, desired: list[DesiredCopy], manifest: Manifest, result: SyncResult
+) -> None:
     desired_by_path = {d.path: d for d in desired}
 
     kept: list[InstalledCopy] = []
@@ -343,7 +375,9 @@ def _reconcile_copies(root: Path, desired: list[DesiredCopy], manifest: Manifest
             have.add(path)
 
 
-def _reconcile_merges(root: Path, desired: list[DesiredMerge], manifest: Manifest, result: SyncResult) -> None:
+def _reconcile_merges(
+    root: Path, desired: list[DesiredMerge], manifest: Manifest, result: SyncResult
+) -> None:
     def key(component: str, target: str) -> tuple[str, str]:
         return (component, target)
 
@@ -368,7 +402,13 @@ def _reconcile_merges(root: Path, desired: list[DesiredMerge], manifest: Manifes
         if not existed:
             result.created.append(f"merge {d.dest.file}:{d.dest.pointer} ({', '.join(d.keys)})")
         new_records.append(
-            InstalledMerge(component=d.component, target=d.target, file=d.dest.file, pointer=d.dest.pointer, keys=d.keys)
+            InstalledMerge(
+                component=d.component,
+                target=d.target,
+                file=d.dest.file,
+                pointer=d.dest.pointer,
+                keys=d.keys,
+            )
         )
     manifest.merges = new_records
 
@@ -413,7 +453,9 @@ def _reconcile_generated(
             result.warnings.append(f"{ref}: {exc}")
             continue
         if ref not in have:
-            manifest.generated.append(InstalledGenerated(component=ref, target=d.target, paths=list(d.spec.produces)))
+            manifest.generated.append(
+                InstalledGenerated(component=ref, target=d.target, paths=list(d.spec.produces))
+            )
             have.add(ref)
         result.created.append(f"generated {ref} ({', '.join(d.spec.produces)})")
 
@@ -457,8 +499,12 @@ def _reconcile_link_merges(
             result.updated.append(f"link+merge {d.link_path}")
         new_records.append(
             InstalledLinkMerge(
-                component=d.component, target=d.target, link_path=d.link_path,
-                file=d.dest.file, pointer=d.dest.pointer, keys=d.keys,
+                component=d.component,
+                target=d.target,
+                link_path=d.link_path,
+                file=d.dest.file,
+                pointer=d.dest.pointer,
+                keys=d.keys,
             )
         )
     manifest.link_merges = new_records
@@ -486,12 +532,21 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
 
     rows: list[StatusRow] = []
     for d in links:
-        rows.append(StatusRow(d.component, d.target, d.path, link_inst.link_state(root, d.artifact, d.path)))
+        rows.append(
+            StatusRow(d.component, d.target, d.path, link_inst.link_state(root, d.artifact, d.path))
+        )
     for d in copies:
-        rows.append(StatusRow(d.component, d.target, d.path, copy_inst.copy_state(root, d.artifact, d.path)))
+        rows.append(
+            StatusRow(d.component, d.target, d.path, copy_inst.copy_state(root, d.artifact, d.path))
+        )
     for d in merges:
         rows.append(
-            StatusRow(d.component, d.target, f"{d.dest.file}:{d.dest.pointer}", merge_inst.merge_state(root, d.dest, d.keys))
+            StatusRow(
+                d.component,
+                d.target,
+                f"{d.dest.file}:{d.dest.pointer}",
+                merge_inst.merge_state(root, d.dest, d.keys),
+            )
         )
     for d in generates:
         where = ", ".join(d.spec.produces)
@@ -501,5 +556,9 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
         link_ok = link_inst.link_state(root, d.artifact, d.link_path) == "ok"
         merge_ok = merge_inst.merge_state(root, d.dest, d.keys) == "ok"
         state = "ok" if (link_ok and merge_ok) else "missing"
-        rows.append(StatusRow(d.component, d.target, f"{d.link_path} + {d.dest.file}:{d.dest.pointer}", state))
+        rows.append(
+            StatusRow(
+                d.component, d.target, f"{d.link_path} + {d.dest.file}:{d.dest.pointer}", state
+            )
+        )
     return rows, warnings
