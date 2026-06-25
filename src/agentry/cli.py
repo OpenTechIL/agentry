@@ -29,14 +29,10 @@ source_app = typer.Typer(
     no_args_is_help=True, help="Manage component sources (git repos / local dirs)."
 )
 app.add_typer(source_app, name="source")
-repo_app = typer.Typer(
-    no_args_is_help=True, help="Manage repository catalogs (curated source repos)."
+catalog_app = typer.Typer(
+    no_args_is_help=True, help="Manage catalogs (curated repository indexes)."
 )
-app.add_typer(repo_app, name="repo")
-registry_app = typer.Typer(
-    no_args_is_help=True, help="Author the curated repository catalog (repositories.json)."
-)
-app.add_typer(registry_app, name="registry")
+app.add_typer(catalog_app, name="catalog")
 
 console = Console()
 err = Console(stderr=True)
@@ -141,7 +137,7 @@ def _add_from_catalog(
     if match is None:
         err.print(
             f"[red]No catalog lists '{repo}'.[/red]\n"
-            "Add one with `agy repo add <name> <file-or-url>`, or use the full "
+            "Add one with `agy catalog add <name> <file-or-url>`, or use the full "
             "<source>/<type>/<name> form."
         )
         raise typer.Exit(1)
@@ -670,17 +666,17 @@ def source_list() -> None:
         console.print("[dim]No sources configured.[/dim]")
 
 
-# -- repo (catalog) sub-commands -----------------------------------------
+# -- catalog sub-commands ------------------------------------------------
 
 
-@repo_app.command("add")
-def repo_add(
+@catalog_app.command("add")
+def catalog_add(
     name: str = typer.Argument(..., help="Logical name for the catalog."),
     location: str = typer.Argument(
         ..., help="Catalog file path or http(s) URL (a github.com blob URL works directly)."
     ),
 ) -> None:
-    """Register a repository catalog so `agy add <repo-name>` can resolve a whole repo."""
+    """Register a catalog so `agy add <repo-name>` can resolve a whole repo."""
     from .models import Registry
 
     store = _load()
@@ -693,9 +689,9 @@ def repo_add(
     console.print(f"[green]Added catalog[/green] {name} → [dim]{location}[/dim]")
 
 
-@repo_app.command("remove")
-def repo_remove(name: str = typer.Argument(..., help="Catalog name to remove.")) -> None:
-    """Remove a repository catalog (does not uninstall repos already added from it)."""
+@catalog_app.command("remove")
+def catalog_remove(name: str = typer.Argument(..., help="Catalog name to remove.")) -> None:
+    """Remove a catalog (does not uninstall repos already added from it)."""
     store = _load()
     if not store.remove_repository(name):
         err.print(f"[yellow]No such catalog: {name}[/yellow]")
@@ -704,15 +700,15 @@ def repo_remove(name: str = typer.Argument(..., help="Catalog name to remove."))
     console.print(f"[red]Removed catalog[/red] {name}")
 
 
-@repo_app.command("list")
-def repo_list() -> None:
+@catalog_app.command("list")
+def catalog_list() -> None:
     """List configured catalogs and the repos they offer."""
     from . import registry as reg
 
     store = _load()
     config = store.parsed()
     if not config.repositories:
-        console.print("[dim]No catalogs configured. Add one with `agy repo add`.[/dim]")
+        console.print("[dim]No catalogs configured. Add one with `agy catalog add`.[/dim]")
         return
     table = Table(title="Catalogs")
     table.add_column("catalog", style="cyan")
@@ -740,10 +736,11 @@ def repo_list() -> None:
 DEFAULT_CATALOG = Path("registry/repositories.json")
 
 
-@registry_app.command("add")
-def registry_add(
+@app.command("publish")
+def publish(
     git_url: str = typer.Argument(
-        ..., help="Git repo URL (a github.com/owner/repo[/tree/<ref>/<subdir>] URL works)."
+        ...,
+        help="Git repo URL (a github.com/owner/repo or .../tree/<ref>/<subdir> URL works).",
     ),
     name: str = typer.Argument(
         None, help="Repo name in the catalog (default: derived from the URL)."
@@ -763,7 +760,7 @@ def registry_add(
         False, "--force", help="Overwrite an existing entry of the same name."
     ),
 ) -> None:
-    """Add a git/GitHub repo as an entry in a curated catalog (repositories.json)."""
+    """Publish a git/GitHub repo as an entry in a catalog file (registry/repositories.json)."""
     from . import discovery
     from . import registry as reg
     from .models import ExposeEntry, RegistrySource, RepositoryEntry, Source

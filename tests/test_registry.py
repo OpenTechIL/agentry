@@ -165,7 +165,7 @@ def test_add_exposed_link_skill(tmp_path, monkeypatch):
     catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     monkeypatch.chdir(project)
 
-    assert runner.invoke(app, ["repo", "add", "r", str(catalog_path)]).exit_code == 0
+    assert runner.invoke(app, ["catalog", "add", "r", str(catalog_path)]).exit_code == 0
     result = runner.invoke(app, ["add", "cool"])
     assert result.exit_code == 0, result.output
 
@@ -184,7 +184,7 @@ def test_add_exposed_generate_skill_gated(tmp_path, monkeypatch):
     ConfigStore.create(project, ["claude"]).save()
     catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "r", str(catalog_path)])
+    runner.invoke(app, ["catalog", "add", "r", str(catalog_path)])
 
     # Without --allow-run: added but not executed.
     res = runner.invoke(app, ["add", "fake"])
@@ -204,7 +204,7 @@ def test_add_unknown_repo_errors(tmp_path, monkeypatch):
     ConfigStore.create(project, ["claude"]).save()
     catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "r", str(catalog_path)])
+    runner.invoke(app, ["catalog", "add", "r", str(catalog_path)])
     res = runner.invoke(app, ["add", "ghost"])
     assert res.exit_code == 1
     assert "No catalog lists 'ghost'" in res.output
@@ -281,7 +281,7 @@ def _setup_multi(tmp_path, monkeypatch) -> Path:
     ConfigStore.create(project, ["claude"]).save()
     catalog = _write_multi_catalog(tmp_path, _multi_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "c", str(catalog)])
+    runner.invoke(app, ["catalog", "add", "c", str(catalog)])
     return project
 
 
@@ -375,7 +375,7 @@ def test_add_catalog_repo_writes_target_profiles_idempotent(tmp_path, monkeypatc
     ConfigStore.create(project, ["claude"]).save()
     catalog = _write_hook_catalog(tmp_path, _plugin_repo(tmp_path))
     monkeypatch.chdir(project)
-    runner.invoke(app, ["repo", "add", "curated", str(catalog)])
+    runner.invoke(app, ["catalog", "add", "curated", str(catalog)])
 
     res = runner.invoke(app, ["add", "demo"])
     assert res.exit_code == 0, res.output
@@ -420,13 +420,13 @@ def test_repo_catalog_persisted_and_listed_via_url(tmp_path, monkeypatch):
     ConfigStore.create(project, ["claude"]).save()
     monkeypatch.chdir(project)
     url = "https://github.com/acme/cat/blob/main/repositories.json"
-    runner.invoke(app, ["repo", "add", "curated", url])
+    runner.invoke(app, ["catalog", "add", "curated", url])
 
     cfg = ConfigStore.load(project).parsed()
     assert cfg.repositories and cfg.repositories[0].location == url
 
 
-# -- `agy registry add` (catalog authoring) -------------------------------
+# -- `agy publish` (catalog authoring) -------------------------------
 
 
 def test_parse_repo_url_plain_and_tree():
@@ -446,10 +446,10 @@ def test_parse_repo_url_plain_and_tree():
     assert name == "widget"
 
 
-def test_registry_add_minimal(tmp_path):
+def test_publish_minimal(tmp_path):
     catalog = tmp_path / "repositories.json"
     result = runner.invoke(
-        app, ["registry", "add", "https://github.com/o/r", "cool", "--file", str(catalog)]
+        app, ["publish", "https://github.com/o/r", "cool", "--file", str(catalog)]
     )
     assert result.exit_code == 0, result.output
     doc = json.loads(catalog.read_text())
@@ -460,13 +460,12 @@ def test_registry_add_minimal(tmp_path):
     assert "summary" not in entry
 
 
-def test_registry_add_derives_name_and_infers_ref_subdir(tmp_path):
+def test_publish_derives_name_and_infers_ref_subdir(tmp_path):
     catalog = tmp_path / "repositories.json"
     result = runner.invoke(
         app,
         [
-            "registry",
-            "add",
+            "publish",
             "https://github.com/acme/widget/tree/dev/plugins/x",
             "--file",
             str(catalog),
@@ -482,13 +481,12 @@ def test_registry_add_derives_name_and_infers_ref_subdir(tmp_path):
     }
 
 
-def test_registry_add_summary_and_duplicate(tmp_path):
+def test_publish_summary_and_duplicate(tmp_path):
     catalog = tmp_path / "repositories.json"
     runner.invoke(
         app,
         [
-            "registry",
-            "add",
+            "publish",
             "https://github.com/o/r",
             "cool",
             "--summary",
@@ -499,9 +497,7 @@ def test_registry_add_summary_and_duplicate(tmp_path):
     )
     assert json.loads(catalog.read_text())["repositories"]["cool"]["summary"] == "hi"
 
-    dup = runner.invoke(
-        app, ["registry", "add", "https://github.com/o/r2", "cool", "--file", str(catalog)]
-    )
+    dup = runner.invoke(app, ["publish", "https://github.com/o/r2", "cool", "--file", str(catalog)])
     assert dup.exit_code == 1
     # The original entry is untouched (no partial overwrite).
     assert (
@@ -511,7 +507,7 @@ def test_registry_add_summary_and_duplicate(tmp_path):
 
     forced = runner.invoke(
         app,
-        ["registry", "add", "https://github.com/o/r2", "cool", "--force", "--file", str(catalog)],
+        ["publish", "https://github.com/o/r2", "cool", "--force", "--file", str(catalog)],
     )
     assert forced.exit_code == 0
     assert (
@@ -520,7 +516,7 @@ def test_registry_add_summary_and_duplicate(tmp_path):
     )
 
 
-def test_registry_add_discover(tmp_path, monkeypatch, git_source):
+def test_publish_discover(tmp_path, monkeypatch, git_source):
     # Re-init the fixture repo on an explicit `main` branch so --ref main checks out.
     import subprocess
 
@@ -540,7 +536,7 @@ def test_registry_add_discover(tmp_path, monkeypatch, git_source):
     catalog = workdir / "repositories.json"
     result = runner.invoke(
         app,
-        ["registry", "add", f"file://{git_source}", "demo", "--discover", "--file", str(catalog)],
+        ["publish", f"file://{git_source}", "demo", "--discover", "--file", str(catalog)],
     )
     assert result.exit_code == 0, result.output
     expose = json.loads(catalog.read_text())["repositories"]["demo"]["expose"]

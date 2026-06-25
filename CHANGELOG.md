@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — 2026-06-25
 
 ### Added
-- `agy registry add <git-url> [name]` to author entries in a curated catalog
+- `agy publish <git-url> [name]` to author entries in a curated catalog
   (`registry/repositories.json` by default, `--file` to override). Writes a minimal
   `summary` + `source` entry; `--discover` clones the repo and pre-fills `expose` from
   discovered components. A `…/tree/<ref>/<subdir>` URL infers `ref`/`subdir`, and the name
@@ -24,10 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (repo basename), and `{ref}` (git ref, `/` flattened to `-`). Lets a profile namespace
   linked dirs per repo+ref, e.g. `.claude/hooks/agentry/{repo}@{ref}/{name}`, instead of
   colliding on `{name}`.
+- Contributor onboarding in the README: a Contributing section (dev setup, PR/CI
+  expectations, the idempotency/safety rule) and a Code of Conduct link.
 
 ### Changed
+- Renamed the catalog command surface for clarity: the consumer group `agy repo`
+  (`add`/`remove`/`list`) is now `agy catalog`, and catalog authoring moved from the
+  `agy registry add` subcommand to the flat top-level `agy publish` command. Hard rename —
+  the old `repo`/`registry` command names are gone. The internal `repositories:` config
+  key, `Registry` model, and `registry.py` module keep their names.
 - Consolidated the skill-registry and repository-catalog systems into a single catalog:
-  `repositories.json` / `repositories:` / `agy repo` is now the only name-based resolution
+  `repositories.json` / `repositories:` / `agy catalog` is now the only name-based resolution
   path. `agy add <name>` resolves a repo from the configured catalogs.
 - `agy search` now searches catalog repositories (name/summary) instead of registry skills.
 - Migrated the starter `ui-ux-pro-max` and `graphify` entries into

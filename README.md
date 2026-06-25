@@ -56,7 +56,7 @@ agy add team-skills/mcp/github                  # merge an MCP server into .mcp.
 agy source add cool https://github.com/some/cool-skill
 agy add cool/skill/cool-skill --path .
 # or resolve a repo by name from a catalog (see "Third-party skills" below):
-agy repo add default https://catalog.example.com/repositories.json
+agy catalog add default https://catalog.example.com/repositories.json
 agy add graphify                                # whole repo, or pick: arckit@code-review --type skill
 agy status                                      # check install state / drift
 agy disable team-skills/mcp/github              # uninstall, keep the declaration
@@ -72,8 +72,9 @@ agy update                                      # re-resolve refs, rewrite the l
 | `agy source add NAME LOCATION [--ref R] [--local] [--subdir DIR]` | Register a git/local source, download, sync |
 | `agy source remove NAME` | Remove a source and uninstall its components |
 | `agy source list` | List sources with their locked revision |
-| `agy repo add NAME LOCATION` | Register a repository catalog (file or URL) for name-based installs |
-| `agy repo remove NAME` / `repo list` | Manage catalogs; list offered repos |
+| `agy catalog add NAME LOCATION` | Register a catalog (file or URL) for name-based installs |
+| `agy catalog remove NAME` / `catalog list` | Manage catalogs; list offered repos |
+| `agy publish GIT_URL [NAME] [--discover] [--file F]...` | Author a catalog: add a repo entry to `registry/repositories.json` |
 | `agy list` / `agy search [QUERY]` | Show discovered components + catalog repos (filter by QUERY) |
 | `agy add <source>/<type>/<name> [--path P]` | Enable a component and install it (`--path` = explicit artifact location) |
 | `agy add <repo>[@name[,name]] [--type T]...` | Resolve a catalog repo and install all / selected / by-type components |
@@ -181,7 +182,7 @@ ways to install them, project-local into `.claude/skills/`:
    know the repo URL or flags. `agy add <repo>` resolves and installs; you choose what:
 
    ```bash
-   agy repo add default https://catalog.example.com/repositories.json
+   agy catalog add default https://catalog.example.com/repositories.json
    agy search graph                 # browse offered repos
    agy add arckit                   # whole repo: every component it provides
    agy add arckit --type skill      # only skills (repeatable: --type command …)
@@ -197,20 +198,20 @@ ways to install them, project-local into `.claude/skills/`:
    `arckit`). Point a catalog at it and install by name:
 
    ```bash
-   agy repo add curated /path/to/agentry/registry/repositories.json
+   agy catalog add curated /path/to/agentry/registry/repositories.json
    agy add ui-ux-pro-max     # link-installs from .claude/skills/ui-ux-pro-max in that repo
    ```
 
-   **Authoring a catalog** — add an entry from a git/GitHub URL with `agy registry add`
+   **Authoring a catalog** — add an entry from a git/GitHub URL with `agy publish`
    (writes to [`registry/repositories.json`](registry/repositories.json) by default, override
    with `--file`). A browser `…/tree/<ref>/<subdir>` URL infers the `ref` and `subdir`; the
    name defaults to the repo basename. `--discover` clones the repo and pre-fills `expose`
    from the components it finds:
 
    ```bash
-   agy registry add https://github.com/safishamsi/graphify --summary "knowledge graph"
-   agy registry add https://github.com/tractorjuice/arc-kit/tree/main/plugins/arckit-claude
-   agy registry add https://github.com/safishamsi/graphify --discover   # fill `expose`
+   agy publish https://github.com/safishamsi/graphify --summary "knowledge graph"
+   agy publish https://github.com/tractorjuice/arc-kit/tree/main/plugins/arckit-claude
+   agy publish https://github.com/safishamsi/graphify --discover   # fill `expose`
    ```
 
    The catalog is plain JSON — the same shape a hosted catalog server would serve, so a
@@ -260,6 +261,25 @@ ways to install them, project-local into `.claude/skills/`:
 - [Changelog](CHANGELOG.md) — notable changes per release.
 - [Branding kit](docs/branding-kit.md) — name, identity, CLI tone of voice.
 - [Contributing](CONTRIBUTING.md) — dev setup, adding targets/component types, tests.
+- [Code of Conduct](CODE_OF_CONDUCT.md) — community standards.
+
+## Contributing
+
+Contributions are very welcome — new targets, component types, catalog entries, docs, and
+bug fixes. The short version:
+
+```bash
+git clone https://github.com/opentech/agentry && cd agentry
+uv venv && uv pip install -e ".[dev]"   # editable install + test/lint tooling
+uv run pre-commit install               # format & lint on every commit
+uv run pytest                           # run the suite
+```
+
+Open a small, focused PR — the [PR template](.github/PULL_REQUEST_TEMPLATE.md) has the
+checklist. CI runs `ruff` (lint + format) and the `pytest` matrix on Python 3.10–3.13;
+keeping `agy sync` idempotent and the safety invariants intact is the one hard rule. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full guide and the
+[Code of Conduct](CODE_OF_CONDUCT.md) before you start.
 
 ## License
 

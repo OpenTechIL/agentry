@@ -4,6 +4,25 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ---
 
+## 2026-06-25 — Command rename: `repo`/`registry` → `catalog`/`publish`
+
+**Context:** Consolidated the confusing command trio for OSS release. The consumer side
+(`agy repo add`/`remove`/`list` — register/browse a catalog) became the **`agy catalog`**
+group. The producer side (`agy registry add` — author an entry in `registry/repositories.json`)
+became the flat top-level **`agy publish`** command. Hard rename — the old `repo` and
+`registry` command names are gone (no aliases). `agy source` is unchanged.
+
+**Findings:**
+
+- **Only the CLI surface changed.** The `.agentry.yml` `repositories:` key, the `Registry`
+  model, and the `registry.py` module keep their names — renaming the config key would break
+  existing files, and the module/model are user-invisible. So "catalog" is the user-facing
+  noun while "registry"/"repositories" persist internally; this is intentional, not drift.
+- **`agy publish` is a flat command, not a group.** It was the lone `registry add` subcommand,
+  so collapsing the group to one verb drops the redundant `add` token (`agy publish <url>`).
+
+---
+
 ## 2026-06-25 — Catalog consolidation & link+merge dest templating
 
 **Context:** Merged the skill-registry system (`skills.json` / `registries:` / `agy registry`) into the repository catalog (`repositories.json` / `repositories:` / `agy repo`) as the single name-based resolution path, and added install-time component selection. Paired with link+merge destination templating that namespaces linked dirs per repo+ref.
