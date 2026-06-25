@@ -105,8 +105,16 @@ def _discover_from_descriptor(source_root: Path, descriptor: SourceDescriptor) -
     return found
 
 
+#: Root-level MCP files (e.g. a Claude Code plugin's ``.mcp.json``) surfaced as a single
+#: ``mcp`` component, in preference order. Many plugins ship one ``{"mcpServers": {...}}``
+#: file at the (subdir-adjusted) source root rather than per-server ``mcp/<name>.json``.
+ROOT_MCP_NAMES = (".mcp.json", "mcp.json")
+ROOT_MCP_COMPONENT = "mcp"
+
+
 def _discover_by_convention(source_root: Path) -> list[Discovered]:
     found: list[Discovered] = []
+    seen: set[tuple[ComponentType, str]] = set()
     for ctype, layout in LAYOUT.items():
         base = source_root / layout.subdir
         if not base.is_dir():
@@ -115,8 +123,20 @@ def _discover_by_convention(source_root: Path) -> list[Discovered]:
             if layout.is_dir:
                 if entry.is_dir():
                     found.append(Discovered(ctype, entry.name, entry))
+                    seen.add((ctype, entry.name))
             elif entry.is_file() and entry.suffix == layout.ext:
                 found.append(Discovered(ctype, entry.stem, entry))
+                seen.add((ctype, entry.stem))
+
+    # A root-level `.mcp.json` (plugin convention) → one `mcp` component, unless an
+    # `mcp/mcp.json` already claimed that name above.
+    key = (ComponentType.MCP, ROOT_MCP_COMPONENT)
+    if key not in seen:
+        for fname in ROOT_MCP_NAMES:
+            root_mcp = source_root / fname
+            if root_mcp.is_file():
+                found.append(Discovered(ComponentType.MCP, ROOT_MCP_COMPONENT, root_mcp))
+                break
     return found
 
 

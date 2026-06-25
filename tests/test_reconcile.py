@@ -52,6 +52,39 @@ def test_merge_install_and_reversible(project: Path, local_source: Path):
     assert "hand-added" in after["mcpServers"]
 
 
+def test_root_mcp_json_merges_without_path(project: Path, tmp_path: Path):
+    # A plugin-style source whose MCP is a single root `.mcp.json` (not mcp/<name>.json).
+    # Discovery surfaces it as `s/mcp/mcp`, no --path needed.
+    src = tmp_path / "plugin"
+    src.mkdir()
+    (src / ".mcp.json").write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "weather": {"type": "http", "url": "https://example.com/mcp"},
+                    "docs": {"type": "http", "url": "https://example.com/docs"},
+                }
+            }
+        )
+    )
+    _wire(project, src, (ComponentType.MCP, "mcp"))
+    res = sync(project)
+    assert not res.warnings
+    mcp = json.loads((project / ".mcp.json").read_text())
+    assert mcp["mcpServers"].keys() == {"weather", "docs"}
+
+    rows, _ = status(project)
+    assert all(r.state == "ok" for r in rows)
+
+    # Reversible: disabling removes exactly those servers.
+    store = ConfigStore.load(project)
+    store.set_enabled("s/mcp/mcp", False)
+    store.save()
+    sync(project)
+    after = json.loads((project / ".mcp.json").read_text())
+    assert "mcpServers" not in after or not after["mcpServers"]
+
+
 def test_disable_removes_link_keeps_config(project: Path, local_source: Path):
     _wire(project, local_source, (ComponentType.SKILL, "code-reviewer"))
     sync(project)
@@ -278,6 +311,118 @@ def test_wrapped_hooks_fragment_installs_flat(project: Path, tmp_path: Path):
     sync(project)
     after = json.loads((project / ".claude/settings.json").read_text())
     assert "hooks" not in after or "Stop" not in after.get("hooks", {})
+
+
+def _hooks_source(tmp_path: Path) -> Path:
+    """A plugin-style source: a hooks/ dir of scripts + a plugin-shaped hooks.json."""
+    src = tmp_path / "hooksrc"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "graph.mjs").write_text("export default () => {}\n")
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps(
+            {
+                "description": "plugin metadata",
+                "hooks": {
+                    "PreToolUse": [
+                        {
+                            "matcher": ".*",
+                            "hooks": [
+                                {"type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/graph.mjs"}
+                            ],
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    return src
+
+
+def _wire_link_merge_hooks(project: Path, source: Path) -> None:
+    """Configure a claude HOOK link+merge profile + the hooks dir component (path='hooks')."""
+    store = ConfigStore.load(project)
+    store.doc["target_profiles"] = {
+        "claude": {
+            "hook": {
+                "strategy": "link+merge",
+                "dest": ".claude/hooks/{name}",
+                "file": ".claude/settings.json",
+                "pointer": "hooks",
+                "rewrite_from": "${CLAUDE_PLUGIN_ROOT}/hooks",
+                "rewrite_to": "${CLAUDE_PROJECT_DIR}/.claude/hooks/{name}",
+            }
+        }
+    }
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(source)))
+    store.add_component(Component(source="s", type=ComponentType.HOOK, name="hooks", path="hooks"))
+    store.save()
+
+
+def test_link_merge_installs_dir_and_rewrites_commands(project: Path, tmp_path: Path):
+    _wire_link_merge_hooks(project, _hooks_source(tmp_path))
+    res = sync(project)
+    assert not res.warnings
+
+    # The script dir is symlinked in and resolves.
+    link = project / ".claude/hooks/hooks"
+    assert link.is_symlink()
+    assert (link / "graph.mjs").read_text() == "export default () => {}\n"
+
+    # The hooks merged flat under "hooks", with the command path rewritten.
+    settings = json.loads((project / ".claude/settings.json").read_text())
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert cmd == "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/hooks/graph.mjs"
+    assert "${CLAUDE_PLUGIN_ROOT}" not in cmd
+
+    rows, _ = status(project)
+    assert all(r.state == "ok" for r in rows)
+
+
+def test_link_merge_idempotent(project: Path, tmp_path: Path):
+    _wire_link_merge_hooks(project, _hooks_source(tmp_path))
+    sync(project)
+    res2 = sync(project)
+    assert res2.created == [] and res2.updated == [] and res2.removed == []
+
+
+def test_link_merge_reversible(project: Path, tmp_path: Path):
+    _wire_link_merge_hooks(project, _hooks_source(tmp_path))
+    sync(project)
+
+    # Hand-add an entry agentry must not touch.
+    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings["hooks"]["Stop"] = [{"matcher": "x"}]
+    (project / ".claude/settings.json").write_text(json.dumps(settings))
+
+    store = ConfigStore.load(project)
+    store.set_enabled("s/hook/hooks", False)
+    store.save()
+    sync(project)
+
+    assert not (project / ".claude/hooks/hooks").exists()  # symlink gone
+    after = json.loads((project / ".claude/settings.json").read_text())
+    assert "PreToolUse" not in after.get("hooks", {})  # our key removed
+    assert after["hooks"]["Stop"] == [{"matcher": "x"}]  # hand-added kept
+
+
+def test_link_merge_warns_on_unrewritable_command(project: Path, tmp_path: Path):
+    src = tmp_path / "hooksrc"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [
+                        {"hooks": [{"type": "command", "command": "node ${CLAUDE_PLUGIN_ROOT}/elsewhere/x.mjs"}]}
+                    ]
+                }
+            }
+        )
+    )
+    _wire_link_merge_hooks(project, src)
+    res = sync(project)
+    # rewrite_from is ".../hooks", so a ".../elsewhere/..." path stays unrewritten → warned.
+    assert any("may not resolve" in w and "elsewhere" in w for w in res.warnings)
 
 
 def test_explicit_path_root_is_skill(project: Path, tmp_path: Path):

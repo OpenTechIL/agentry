@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "repositories": {
+    "arckit": {
+      "summary": "ArcKit — enterprise architecture governance toolkit (skills, agents, commands, MCP, hooks) for Claude Code.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/tractorjuice/arc-kit",
+        "ref": "main",
+        "subdir": "plugins/arckit-claude"
+      }
+    }
+  }
+}

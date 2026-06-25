@@ -36,6 +36,7 @@ class Strategy(str, Enum):
     LINK = "link"  # symlink a file/dir from the store into the tool's dir
     MERGE = "merge"  # inject a JSON fragment into the tool's config file
     GENERATE = "generate"  # run the component's own installer command; track produced files
+    LINK_MERGE = "link+merge"  # symlink a script dir AND merge its config, rewriting paths
 
 
 #: File-based component types install via symlink; the rest merge into config.
@@ -185,9 +186,14 @@ class ProfileRule(BaseModel):
     """One ``target_profiles[tool][type]`` rule: where/how a type installs."""
 
     strategy: Strategy
-    dest: str | None = None  # link: destination path template ({name})
-    file: str | None = None  # merge: target config file
-    pointer: str | None = None  # merge: top-level JSON key
+    dest: str | None = None  # link / link+merge: destination path template ({name})
+    file: str | None = None  # merge / link+merge: target config file
+    pointer: str | None = None  # merge / link+merge: top-level JSON key
+    # link+merge only: rewrite a command-path prefix in the merged fragment so the
+    # symlinked scripts resolve (e.g. "${CLAUDE_PLUGIN_ROOT}/hooks" ->
+    # "${CLAUDE_PROJECT_DIR}/.claude/hooks/{name}"). Both optional; {name} expands.
+    rewrite_from: str | None = None
+    rewrite_to: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> ProfileRule:
@@ -195,6 +201,10 @@ class ProfileRule(BaseModel):
             raise ValueError("link profile rule requires 'dest'")
         if self.strategy is Strategy.MERGE and not (self.file and self.pointer):
             raise ValueError("merge profile rule requires 'file' and 'pointer'")
+        if self.strategy is Strategy.LINK_MERGE and not (self.dest and self.file and self.pointer):
+            raise ValueError("link+merge profile rule requires 'dest', 'file' and 'pointer'")
+        if (self.rewrite_from is None) != (self.rewrite_to is None):
+            raise ValueError("'rewrite_from' and 'rewrite_to' must be set together")
         return self
 
 
@@ -218,6 +228,8 @@ class Config(BaseModel):
     sources: list[Source] = Field(default_factory=list)
     components: list[Component] = Field(default_factory=list)
     registries: list[Registry] = Field(default_factory=list)
+    # Repository catalogs (``repositories.json``): named source repos resolved whole.
+    repositories: list[Registry] = Field(default_factory=list)
     # Override built-in target maps or define entirely new tools (data-driven).
     target_profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
 
@@ -337,6 +349,49 @@ class RegistryIndex(BaseModel):
     skills: dict[str, RegistrySkill] = Field(default_factory=dict)
 
 
+# -- repository catalog (the "rethought" registry: repos, not single skills) ----
+
+
+class ExposeEntry(BaseModel):
+    """One curated component a repository entry surfaces.
+
+    The install *strategy* is derived from ``type`` by the engine (link for file types,
+    merge for mcp/hook) — so an MCP rides in with no special handling. ``path``/``generate``
+    cover the cases discovery can't infer (a repo whose root *is* the artifact, or a
+    self-installing tool).
+    """
+
+    type: ComponentType
+    name: str
+    path: str | None = None  # explicit artifact path within the source (e.g. ".")
+    generate: GeneratorSpec | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> ExposeEntry:
+        if self.path is not None and self.generate is not None:
+            raise ValueError(f"expose '{self.name}': set either 'path' or 'generate', not both")
+        return self
+
+
+class RepositoryEntry(BaseModel):
+    """One entry under ``repositories`` — a curated source repo.
+
+    With ``expose`` omitted the whole repo is installed (every component discovery finds);
+    with it present, only the listed components are enabled.
+    """
+
+    summary: str | None = None
+    source: RegistrySource
+    expose: list[ExposeEntry] | None = None
+
+
+class RepositoryIndex(BaseModel):
+    """A repository catalog — the JSON contract a catalog file or hosted server serves."""
+
+    version: int = 1
+    repositories: dict[str, RepositoryEntry] = Field(default_factory=dict)
+
+
 # -- lock -----------------------------------------------------------------
 
 
@@ -393,6 +448,17 @@ class InstalledGenerated(BaseModel):
     paths: list[str]  # project-relative paths agentry owns and will delete on removal
 
 
+class InstalledLinkMerge(BaseModel):
+    """A symlinked script dir + merged config keys agentry installed (link+merge strategy)."""
+
+    component: str  # component ref
+    target: str
+    link_path: str  # the symlink path, relative to project root
+    file: str  # config file path, relative to project root
+    pointer: str  # top-level JSON key the entries live under
+    keys: list[str]  # keys agentry owns under that pointer
+
+
 class Manifest(BaseModel):
     """Record of everything agentry installed on disk (``.agentry/.manifest.json``)."""
 
@@ -400,3 +466,4 @@ class Manifest(BaseModel):
     links: list[InstalledLink] = Field(default_factory=list)
     merges: list[InstalledMerge] = Field(default_factory=list)
     generated: list[InstalledGenerated] = Field(default_factory=list)
+    link_merges: list[InstalledLinkMerge] = Field(default_factory=list)

@@ -27,6 +27,8 @@ source_app = typer.Typer(no_args_is_help=True, help="Manage component sources (g
 app.add_typer(source_app, name="source")
 registry_app = typer.Typer(no_args_is_help=True, help="Manage skill registries (index files / URLs).")
 app.add_typer(registry_app, name="registry")
+repo_app = typer.Typer(no_args_is_help=True, help="Manage repository catalogs (curated source repos).")
+app.add_typer(repo_app, name="repo")
 
 console = Console()
 err = Console(stderr=True)
@@ -91,6 +93,61 @@ def _print_result(res: SyncResult) -> None:
         console.print("  [dim]added .agentry/ to .gitignore[/dim]")
     if not (res.created or res.updated or res.removed):
         console.print("  [dim]already up to date[/dim]")
+
+
+def _add_from_catalog(name: str, *, allow_run: bool) -> None:
+    """Resolve a repo name via the configured catalogs and install it (whole-repo or curated)."""
+    from . import discovery
+    from . import registry as reg
+    from .resolver import ResolveError, effective_root, resolve
+
+    store = _load()
+    config = store.parsed()
+    match = reg.find_repo(_root(), config, name) if config.repositories else None
+    if match is None:
+        # Not a catalog repo — fall back to the skill-registry resolution path.
+        _add_from_registry(name, allow_run=allow_run)
+        return
+
+    _, _, entry = match
+    rs = entry.source
+    src = (
+        Source(name=name, type=SourceType.GIT, url=rs.url, ref=rs.ref, subdir=rs.subdir)
+        if rs.type is SourceType.GIT
+        else Source(name=name, type=SourceType.LOCAL, path=rs.path, subdir=rs.subdir)
+    )
+    existing = config.source(name)
+    if existing is None:
+        store.add_source(src)
+    elif (existing.url or existing.path) != (src.url or src.path):
+        err.print(f"[red]A different source named '{name}' already exists; rename or remove it first.[/red]")
+        raise typer.Exit(1)
+
+    # Resolve into the store so we can discover what the repo provides.
+    try:
+        resolve(_root(), src, pinned=None)
+    except ResolveError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    if entry.expose:
+        comps = [
+            Component(source=name, type=e.type, name=e.name, path=e.path, generate=e.generate)
+            for e in entry.expose
+        ]
+    else:
+        comps = [
+            Component(source=name, type=d.type, name=d.name)
+            for d in discovery.discover(effective_root(_root(), src))
+        ]
+    if not comps:
+        err.print(f"[yellow]Repository '{name}' provided no installable components.[/yellow]")
+        raise typer.Exit(1)
+    for comp in comps:
+        store.add_component(comp)
+    store.save()
+    console.print(f"[green]Added[/green] {name} [dim]({len(comps)} component(s) from catalog)[/dim]")
+    _do_sync(allow_run=allow_run)
 
 
 def _add_from_registry(name: str, *, allow_run: bool) -> None:
@@ -188,16 +245,12 @@ def init(
 
 @app.command(name="list")
 def list_components() -> None:
-    """List components discovered across all sources and their state."""
+    """List components discovered across all sources, grouped by source, with their state."""
     store = _load()
     config = store.parsed()
     lock = load_lock(_root())
 
     declared = {c.ref: c for c in config.components}
-    table = Table(title="Components", show_lines=False)
-    table.add_column("ref", style="cyan")
-    table.add_column("state")
-
     any_rows = False
     for src in config.sources:
         try:
@@ -206,21 +259,31 @@ def list_components() -> None:
         except ResolveError as exc:
             err.print(f"  [yellow]! {src.name}: {exc}[/yellow]")
             continue
-        for d in discovery.discover(effective_root(_root(), src)):
-            ref = f"{src.name}/{d.type.value}/{d.name}"
-            comp = declared.get(ref)
+
+        # One table per source (plugin), sorted by type then name.
+        found = sorted(
+            discovery.discover(effective_root(_root(), src)),
+            key=lambda d: (d.type.value, d.name),
+        )
+        if not found:
+            continue
+        any_rows = True
+        table = Table(title=f"{src.name}  ([dim]{len(found)} components[/dim])", show_lines=False)
+        table.add_column("type", style="magenta")
+        table.add_column("name", style="cyan")
+        table.add_column("state")
+        for d in found:
+            comp = declared.get(f"{src.name}/{d.type.value}/{d.name}")
             if comp is None:
                 state = "[dim]available[/dim]"
             elif comp.enabled:
                 state = "[green]enabled[/green]"
             else:
                 state = "[yellow]disabled[/yellow]"
-            table.add_row(ref, state)
-            any_rows = True
-
-    if any_rows:
+            table.add_row(d.type.value, d.name, state)
         console.print(table)
-    else:
+
+    if not any_rows:
         console.print("[dim]No components found. Add a source with `agy source add`.[/dim]")
 
 
@@ -299,7 +362,7 @@ def add(
     import shlex
 
     if "/" not in ref:
-        _add_from_registry(ref, allow_run=allow_run)
+        _add_from_catalog(ref, allow_run=allow_run)
         return
 
     source, ctype, name = _parse_ref(ref)
@@ -575,6 +638,71 @@ def registry_list() -> None:
         for rname, sname, entry in skills:
             st.add_row(sname, rname, entry.install.value, entry.summary or "")
         console.print(st)
+
+
+# -- repo (catalog) sub-commands -----------------------------------------
+
+
+@repo_app.command("add")
+def repo_add(
+    name: str = typer.Argument(..., help="Logical name for the catalog."),
+    location: str = typer.Argument(..., help="Catalog file path or http(s) URL."),
+) -> None:
+    """Register a repository catalog so `agy add <repo-name>` can resolve a whole repo."""
+    from .models import Registry
+
+    store = _load()
+    try:
+        store.add_repository(Registry(name=name, location=location))
+    except ValueError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    store.save()
+    console.print(f"[green]Added catalog[/green] {name} → [dim]{location}[/dim]")
+
+
+@repo_app.command("remove")
+def repo_remove(name: str = typer.Argument(..., help="Catalog name to remove.")) -> None:
+    """Remove a repository catalog (does not uninstall repos already added from it)."""
+    store = _load()
+    if not store.remove_repository(name):
+        err.print(f"[yellow]No such catalog: {name}[/yellow]")
+        raise typer.Exit(1)
+    store.save()
+    console.print(f"[red]Removed catalog[/red] {name}")
+
+
+@repo_app.command("list")
+def repo_list() -> None:
+    """List configured catalogs and the repos they offer."""
+    from . import registry as reg
+
+    store = _load()
+    config = store.parsed()
+    if not config.repositories:
+        console.print("[dim]No catalogs configured. Add one with `agy repo add`.[/dim]")
+        return
+    table = Table(title="Catalogs")
+    table.add_column("catalog", style="cyan")
+    table.add_column("location", style="dim")
+    for r in config.repositories:
+        table.add_row(r.name, r.location)
+    console.print(table)
+    try:
+        repos = reg.list_repos(_root(), config)
+    except reg.RegistryError as exc:
+        err.print(f"[yellow]! {exc}[/yellow]")
+        return
+    if repos:
+        rt = Table(title="Available repositories")
+        rt.add_column("repo", style="cyan")
+        rt.add_column("catalog", style="dim")
+        rt.add_column("components")
+        rt.add_column("summary", style="dim")
+        for cname, rname, entry in repos:
+            scope = f"{len(entry.expose)} curated" if entry.expose else "whole repo"
+            rt.add_row(rname, cname, scope, entry.summary or "")
+        console.print(rt)
 
 
 if __name__ == "__main__":

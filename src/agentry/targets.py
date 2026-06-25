@@ -41,17 +41,39 @@ class MergeDest:
 
 
 @dataclass(frozen=True)
+class LinkMergeDest:
+    """Composite install: symlink a script dir AND merge its config, rewriting paths.
+
+    ``link_dest`` is a symlink destination template (``{name}`` placeholder) for the
+    script directory; ``merge`` says where the config entries go. ``rewrite_from`` /
+    ``rewrite_to`` (both optional, ``{name}`` expands in ``rewrite_to``) rewrite a
+    command-path prefix in the merged fragment so the symlinked scripts resolve from
+    the target tool — e.g. a Claude plugin's ``${CLAUDE_PLUGIN_ROOT}/hooks`` →
+    ``${CLAUDE_PROJECT_DIR}/.claude/hooks/{name}``.
+    """
+
+    link_dest: str
+    merge: MergeDest
+    rewrite_from: str = ""
+    rewrite_to: str = ""
+
+
+@dataclass(frozen=True)
 class TargetSpec:
     name: str
     #: component type -> symlink destination template (``{name}`` placeholder)
     link: dict[ComponentType, str] = field(default_factory=dict)
     #: component type -> config-merge destination
     merge: dict[ComponentType, MergeDest] = field(default_factory=dict)
+    #: component type -> composite link+merge destination
+    link_merge: dict[ComponentType, LinkMergeDest] = field(default_factory=dict)
 
     def supports(self, ctype: ComponentType) -> bool:
-        return ctype in self.link or ctype in self.merge
+        return ctype in self.link or ctype in self.merge or ctype in self.link_merge
 
     def strategy(self, ctype: ComponentType) -> Strategy | None:
+        if ctype in self.link_merge:
+            return Strategy.LINK_MERGE
         if ctype in self.link:
             return Strategy.LINK
         if ctype in self.merge:
@@ -63,6 +85,9 @@ class TargetSpec:
 
     def merge_dest(self, ctype: ComponentType) -> MergeDest:
         return self.merge[ctype]
+
+    def link_merge_dest(self, ctype: ComponentType) -> LinkMergeDest:
+        return self.link_merge[ctype]
 
 
 _C = ComponentType
@@ -112,14 +137,26 @@ BUILTIN_TARGETS: dict[str, TargetSpec] = {
 def _apply_profile(base: TargetSpec | None, name: str, rules: dict[ComponentType, ProfileRule]) -> TargetSpec:
     link = dict(base.link) if base else {}
     merge = dict(base.merge) if base else {}
+    link_merge = dict(base.link_merge) if base else {}
     for ctype, rule in rules.items():
         if rule.strategy is Strategy.LINK:
             link[ctype] = rule.dest  # type: ignore[assignment]
             merge.pop(ctype, None)
+            link_merge.pop(ctype, None)
+        elif rule.strategy is Strategy.LINK_MERGE:
+            link_merge[ctype] = LinkMergeDest(
+                rule.dest,  # type: ignore[arg-type]
+                MergeDest(rule.file, rule.pointer),  # type: ignore[arg-type]
+                rule.rewrite_from or "",
+                rule.rewrite_to or "",
+            )
+            link.pop(ctype, None)
+            merge.pop(ctype, None)
         else:
             merge[ctype] = MergeDest(rule.file, rule.pointer)  # type: ignore[arg-type]
             link.pop(ctype, None)
-    return TargetSpec(name=name, link=link, merge=merge)
+            link_merge.pop(ctype, None)
+    return TargetSpec(name=name, link=link, merge=merge, link_merge=link_merge)
 
 
 def resolve_targets(config: Config) -> dict[str, TargetSpec]:

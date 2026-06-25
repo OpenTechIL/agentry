@@ -22,6 +22,7 @@ from .config import ConfigStore
 from .gitignore import ensure_gitignore
 from .installers import generate as gen_inst
 from .installers import link as link_inst
+from .installers import link_merge as link_merge_inst
 from .installers import merge as merge_inst
 from .lockfile import load_lock, save_lock
 from .manifest import load_manifest, save_manifest
@@ -31,12 +32,13 @@ from .models import (
     GeneratorSpec,
     InstalledGenerated,
     InstalledLink,
+    InstalledLinkMerge,
     InstalledMerge,
     Manifest,
     Strategy,
 )
 from .resolver import effective_root
-from .targets import MergeDest, resolve_targets, unresolved_targets
+from .targets import LinkMergeDest, MergeDest, resolve_targets, unresolved_targets
 
 
 @dataclass
@@ -64,6 +66,17 @@ class DesiredGenerate:
 
 
 @dataclass
+class DesiredLinkMerge:
+    component: str
+    target: str
+    link_path: str
+    artifact: Path  # the script directory to symlink
+    dest: MergeDest
+    fragment: dict  # rewritten, unwrapped entries to merge
+    keys: list[str]
+
+
+@dataclass
 class SyncResult:
     resolved: dict[str, str] = field(default_factory=dict)
     created: list[str] = field(default_factory=list)
@@ -78,7 +91,7 @@ class SyncResult:
 
 def compute_desired(
     root: Path, config: Config, warnings: list[str]
-) -> tuple[list[DesiredLink], list[DesiredMerge], list[DesiredGenerate]]:
+) -> tuple[list[DesiredLink], list[DesiredMerge], list[DesiredGenerate], list[DesiredLinkMerge]]:
     specs = resolve_targets(config)
     for missing in unresolved_targets(config, specs):
         warnings.append(f"target '{missing}' is undefined — add it under target_profiles in .agentry.yml")
@@ -93,6 +106,7 @@ def compute_desired(
     links: list[DesiredLink] = []
     merges: list[DesiredMerge] = []
     generates: list[DesiredGenerate] = []
+    link_merges: list[DesiredLinkMerge] = []
 
     for comp in config.components:
         if not comp.enabled:
@@ -128,6 +142,10 @@ def compute_desired(
                 continue
             if strat is Strategy.LINK:
                 links.append(DesiredLink(comp.ref, tname, spec.link_dest(comp.type, comp.name), artifact))
+            elif strat is Strategy.LINK_MERGE:
+                lm = _compute_link_merge(comp, tname, spec.link_merge_dest(comp.type), artifact, warnings)
+                if lm is not None:
+                    link_merges.append(lm)
             else:
                 dest = spec.merge_dest(comp.type)
                 try:
@@ -136,7 +154,32 @@ def compute_desired(
                     warnings.append(f"{comp.ref}: {exc}")
                     continue
                 merges.append(DesiredMerge(comp.ref, tname, dest, entries, list(entries)))
-    return links, merges, generates
+    return links, merges, generates, link_merges
+
+
+def _compute_link_merge(comp, tname: str, lmdest: LinkMergeDest, artifact: Path, warnings: list[str]):
+    """Resolve a link+merge component: the script dir to link + the rewritten fragment.
+
+    ``artifact`` is the script directory (``--path hooks``) or, if a file was resolved,
+    its parent. The config to merge is ``<dir>/hooks.json`` (or the file itself).
+    """
+    if artifact.is_dir():
+        link_src, config = artifact, artifact / "hooks.json"
+    else:
+        link_src, config = artifact.parent, artifact
+    if not config.is_file():
+        warnings.append(f"{comp.ref}: link+merge config '{config.name}' not found in '{comp.source}'")
+        return None
+    try:
+        entries = merge_inst.select_entries(merge_inst.load_fragment(config), lmdest.merge)
+    except (ValueError, OSError) as exc:
+        warnings.append(f"{comp.ref}: {exc}")
+        return None
+    rewritten, leftovers = link_merge_inst.rewrite_fragment(entries, lmdest, comp.name)
+    for cmd in leftovers:
+        warnings.append(f"{comp.ref}: command not rewritten, may not resolve: {cmd}")
+    link_path = lmdest.link_dest.format(name=comp.name)
+    return DesiredLinkMerge(comp.ref, tname, link_path, link_src, lmdest.merge, rewritten, list(rewritten))
 
 
 # -- apply ---------------------------------------------------------------
@@ -156,12 +199,13 @@ def sync(root: Path, *, update: bool = False, allow_run: bool = False) -> SyncRe
     # 2. Desired vs. installed. The augmented config carries synthesized sources and
     #    transitive components so reconcile treats them like any declared dependency.
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    links, merges, generates = compute_desired(root, augmented, result.warnings)
+    links, merges, generates, link_merges = compute_desired(root, augmented, result.warnings)
     manifest = load_manifest(root)
 
     _reconcile_links(root, links, manifest, result)
     _reconcile_merges(root, merges, manifest, result)
     _reconcile_generated(root, generates, manifest, result, allow_run=allow_run, update=update)
+    _reconcile_link_merges(root, link_merges, manifest, result)
 
     save_manifest(root, manifest)
 
@@ -273,6 +317,49 @@ def _reconcile_generated(
         result.created.append(f"generated {ref} ({', '.join(d.spec.produces)})")
 
 
+def _reconcile_link_merges(
+    root: Path, desired: list[DesiredLinkMerge], manifest: Manifest, result: SyncResult
+) -> None:
+    def key(component: str, target: str) -> tuple[str, str]:
+        return (component, target)
+
+    desired_by_key = {key(d.component, d.target): d for d in desired}
+    old_by_key = {key(m.component, m.target): m for m in manifest.link_merges}
+
+    # Remove orphans: both the symlink and the owned merge keys.
+    for k, m in old_by_key.items():
+        if k not in desired_by_key:
+            removed = link_inst.remove_link(root, m.link_path)
+            if merge_inst.remove_merge(root, MergeDest(m.file, m.pointer), m.keys) or removed:
+                result.removed.append(f"link+merge {m.link_path} + {m.file}:{m.pointer}")
+
+    new_records: list[InstalledLinkMerge] = []
+    for k, d in desired_by_key.items():
+        old = old_by_key.get(k)
+        if old is not None:
+            stale = [key_ for key_ in old.keys if key_ not in d.keys]
+            if stale:
+                merge_inst.remove_merge(root, d.dest, stale)
+        try:
+            link_status = link_inst.install_link(root, d.artifact, d.link_path)
+        except FileExistsError as exc:
+            result.warnings.append(str(exc))
+            continue
+        merge_existed = merge_inst.merge_state(root, d.dest, d.keys) == "ok"
+        merge_inst.install_merge(root, d.dest, d.fragment)
+        if link_status == "created" or not merge_existed:
+            result.created.append(f"link+merge {d.link_path} + {d.dest.file}:{d.dest.pointer}")
+        elif link_status == "updated":
+            result.updated.append(f"link+merge {d.link_path}")
+        new_records.append(
+            InstalledLinkMerge(
+                component=d.component, target=d.target, link_path=d.link_path,
+                file=d.dest.file, pointer=d.dest.pointer, keys=d.keys,
+            )
+        )
+    manifest.link_merges = new_records
+
+
 # -- status (read-only drift report) -------------------------------------
 
 
@@ -291,7 +378,7 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
     graph, _ = deps.resolve_graph(root, config, load_lock(root))
     warnings.extend(graph.warnings)
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    links, merges, generates = compute_desired(root, augmented, warnings)
+    links, merges, generates, link_merges = compute_desired(root, augmented, warnings)
 
     rows: list[StatusRow] = []
     for d in links:
@@ -304,4 +391,9 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
         where = ", ".join(d.spec.produces)
         state = "ok" if gen_inst.produces_present(root, d.spec) else "missing"
         rows.append(StatusRow(d.component, d.target, where, state))
+    for d in link_merges:
+        link_ok = link_inst.link_state(root, d.artifact, d.link_path) == "ok"
+        merge_ok = merge_inst.merge_state(root, d.dest, d.keys) == "ok"
+        state = "ok" if (link_ok and merge_ok) else "missing"
+        rows.append(StatusRow(d.component, d.target, f"{d.link_path} + {d.dest.file}:{d.dest.pointer}", state))
     return rows, warnings

@@ -122,6 +122,21 @@ class ConfigStore:
         regs[:] = [r for r in regs if r.get("name") != name]
         return len(regs) != before
 
+    def add_repository(self, registry: Registry) -> None:
+        repos = self._seq("repositories")
+        if any(r.get("name") == registry.name for r in repos):
+            raise ValueError(f"repository catalog '{registry.name}' already exists")
+        item = CommentedMap()
+        item["name"] = registry.name
+        item["location"] = registry.location
+        repos.append(item)
+
+    def remove_repository(self, name: str) -> bool:
+        repos = self._seq("repositories")
+        before = len(repos)
+        repos[:] = [r for r in repos if r.get("name") != name]
+        return len(repos) != before
+
     def add_component(self, comp: Component) -> None:
         comps = self._seq("components")
         if any(_comp_ref(c) == comp.ref for c in comps):
