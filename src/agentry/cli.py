@@ -29,6 +29,8 @@ source_app = typer.Typer(no_args_is_help=True, help="Manage component sources (g
 app.add_typer(source_app, name="source")
 repo_app = typer.Typer(no_args_is_help=True, help="Manage repository catalogs (curated source repos).")
 app.add_typer(repo_app, name="repo")
+registry_app = typer.Typer(no_args_is_help=True, help="Author the curated repository catalog (repositories.json).")
+app.add_typer(registry_app, name="registry")
 
 console = Console()
 err = Console(stderr=True)
@@ -691,6 +693,58 @@ def repo_list() -> None:
             scope = f"{len(entry.expose)} curated" if entry.expose else "whole repo"
             rt.add_row(rname, cname, scope, entry.summary or "")
         console.print(rt)
+
+
+DEFAULT_CATALOG = Path("registry/repositories.json")
+
+
+@registry_app.command("add")
+def registry_add(
+    git_url: str = typer.Argument(..., help="Git repo URL (a github.com/owner/repo[/tree/<ref>/<subdir>] URL works)."),
+    name: str = typer.Argument(None, help="Repo name in the catalog (default: derived from the URL)."),
+    ref: str = typer.Option(None, "--ref", help="Git ref (default: main, or inferred from a /tree/<ref> URL)."),
+    subdir: str = typer.Option(None, "--subdir", help="Component subdir within the repo (or inferred from the URL)."),
+    summary: str = typer.Option(None, "--summary", help="One-line summary for the entry."),
+    discover: bool = typer.Option(False, "--discover", help="Clone the repo and pre-fill `expose` from discovered components."),
+    file: Path = typer.Option(DEFAULT_CATALOG, "--file", help="Catalog file to edit."),
+    force: bool = typer.Option(False, "--force", help="Overwrite an existing entry of the same name."),
+) -> None:
+    """Add a git/GitHub repo as an entry in a curated catalog (repositories.json)."""
+    from . import discovery
+    from . import registry as reg
+    from .models import ExposeEntry, RegistrySource, RepositoryEntry, Source
+    from .resolver import ResolveError, effective_root, resolve
+
+    clean_url, url_ref, url_subdir, default_name = reg.parse_repo_url(git_url)
+    name = name or default_name
+    ref = ref or url_ref or "main"
+    subdir = subdir or url_subdir
+
+    expose: list[ExposeEntry] | None = None
+    if discover:
+        source = Source(name=name, type=SourceType.GIT, url=clean_url, ref=ref, subdir=subdir)
+        try:
+            resolve(_root(), source, pinned=None)
+            found = discovery.discover(effective_root(_root(), source))
+        except (ResolveError, OSError) as exc:
+            err.print(f"[red]discover failed: {exc}[/red]")
+            raise typer.Exit(1)
+        expose = [ExposeEntry(type=d.type, name=d.name) for d in found]
+        console.print(f"  [dim]discovered {len(expose)} component(s)[/dim]")
+
+    try:
+        entry = RepositoryEntry(
+            summary=summary,
+            source=RegistrySource(type=SourceType.GIT, url=clean_url, ref=ref, subdir=subdir),
+            expose=expose,
+        )
+        reg.add_entry(file, name, entry, force=force)
+    except (reg.RegistryError, ValueError) as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    scope = f"{len(expose)} curated" if expose else "whole repo"
+    console.print(f"[green]Added[/green] {name} → [dim]{file}[/dim] ([cyan]{scope}[/cyan])")
 
 
 if __name__ == "__main__":

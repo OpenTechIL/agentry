@@ -87,6 +87,73 @@ def load_catalog(root: Path, registry: Registry) -> RepositoryIndex:
         raise RegistryError(f"catalog '{registry.name}': invalid index: {exc}") from exc
 
 
+def parse_repo_url(url: str) -> tuple[str, str | None, str | None, str]:
+    """Split a (possibly browser-pasted) repo URL into authoring inputs.
+
+    Returns ``(clean_url, ref, subdir, default_name)``. A
+    ``github.com/<owner>/<repo>/tree/<ref>/<subdir...>`` URL yields the bare repo URL plus the
+    ``ref`` and ``subdir`` it points at, so a user can paste straight from their browser. A
+    plain repo URL passes through with ``ref``/``subdir`` of ``None``. ``default_name`` is the
+    repo basename (trailing ``.git`` stripped), used when the CLI name argument is omitted.
+
+    This is the repo-URL counterpart to :func:`_normalize_url`, which rewrites *raw-JSON*
+    catalog URLs; both let the same browser URL be pasted for different inputs.
+    """
+    clean = url.rstrip("/")
+    ref: str | None = None
+    subdir: str | None = None
+    prefix = "https://github.com/"
+    if clean.startswith(prefix):
+        parts = clean[len(prefix) :].split("/")
+        # owner / repo / tree / ref / subdir...
+        if len(parts) >= 4 and parts[2] == "tree":
+            owner, repo, _, ref, *rest = parts
+            clean = f"{prefix}{owner}/{repo}"
+            subdir = "/".join(rest) or None
+    name = clean.rstrip("/").rsplit("/", 1)[-1]
+    if name.endswith(".git"):
+        name = name[: -len(".git")]
+    return clean, ref, subdir, name
+
+
+def add_entry(catalog_path: Path, name: str, entry: RepositoryEntry, *, force: bool = False) -> None:
+    """Insert ``entry`` under ``name`` into the JSON catalog at ``catalog_path``.
+
+    Loads the existing catalog (or starts an empty one), rejects a duplicate ``name`` unless
+    ``force``, validates the whole document via :class:`RepositoryIndex`, then writes it back
+    as 2-space-indented JSON to match the curated catalog's style.
+    """
+    if catalog_path.is_file():
+        try:
+            doc = json.loads(catalog_path.read_text(encoding="utf-8"))
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise RegistryError(f"catalog {catalog_path}: invalid JSON: {exc}") from exc
+        if not isinstance(doc, dict):
+            raise RegistryError(f"catalog {catalog_path}: expected a JSON object at the top level")
+    else:
+        doc = {"version": 1, "repositories": {}}
+    repos = doc.setdefault("repositories", {})
+    if not isinstance(repos, dict):
+        raise RegistryError(f"catalog {catalog_path}: 'repositories' must be a JSON object")
+    if name in repos and not force:
+        raise RegistryError(f"repo '{name}' already exists in {catalog_path} (use --force to overwrite)")
+    repos[name] = entry.model_dump(mode="json", exclude_none=True, exclude_defaults=False)
+    # Drop noise the curated file never carries: empty target_profiles, absent expose.
+    body = repos[name]
+    if not body.get("target_profiles"):
+        body.pop("target_profiles", None)
+    if body.get("expose") is None:
+        body.pop("expose", None)
+    try:
+        RepositoryIndex.model_validate(doc)
+    except ValueError as exc:
+        raise RegistryError(f"catalog {catalog_path}: invalid after edit: {exc}") from exc
+    catalog_path.parent.mkdir(parents=True, exist_ok=True)
+    # ensure_ascii=False keeps non-ASCII (e.g. an em-dash in a summary) literal, matching the
+    # hand-authored catalog rather than escaping it to \uXXXX.
+    catalog_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def find_repo(root: Path, config: Config, name: str) -> tuple[Registry, str, RepositoryEntry] | None:
     """First catalog (in config order) that lists ``name``, with its entry."""
     for registry in config.repositories:

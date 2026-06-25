@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -344,3 +345,96 @@ def test_repo_catalog_persisted_and_listed_via_url(tmp_path, monkeypatch):
 
     cfg = ConfigStore.load(project).parsed()
     assert cfg.repositories and cfg.repositories[0].location == url
+
+
+# -- `agy registry add` (catalog authoring) -------------------------------
+
+
+def test_parse_repo_url_plain_and_tree():
+    clean, ref, subdir, name = reg.parse_repo_url("https://github.com/acme/widget")
+    assert (clean, ref, subdir, name) == ("https://github.com/acme/widget", None, None, "widget")
+
+    clean, ref, subdir, name = reg.parse_repo_url(
+        "https://github.com/acme/widget/tree/dev/plugins/x"
+    )
+    assert clean == "https://github.com/acme/widget"
+    assert ref == "dev"
+    assert subdir == "plugins/x"
+    assert name == "widget"
+
+    # Trailing .git is stripped from the derived name.
+    _, _, _, name = reg.parse_repo_url("https://github.com/acme/widget.git")
+    assert name == "widget"
+
+
+def test_registry_add_minimal(tmp_path):
+    catalog = tmp_path / "repositories.json"
+    result = runner.invoke(
+        app, ["registry", "add", "https://github.com/o/r", "cool", "--file", str(catalog)]
+    )
+    assert result.exit_code == 0, result.output
+    doc = json.loads(catalog.read_text())
+    entry = doc["repositories"]["cool"]
+    assert entry["source"] == {"type": "git", "url": "https://github.com/o/r", "ref": "main"}
+    assert "expose" not in entry
+    assert "target_profiles" not in entry
+    assert "summary" not in entry
+
+
+def test_registry_add_derives_name_and_infers_ref_subdir(tmp_path):
+    catalog = tmp_path / "repositories.json"
+    result = runner.invoke(
+        app,
+        ["registry", "add", "https://github.com/acme/widget/tree/dev/plugins/x", "--file", str(catalog)],
+    )
+    assert result.exit_code == 0, result.output
+    entry = json.loads(catalog.read_text())["repositories"]["widget"]
+    assert entry["source"] == {
+        "type": "git",
+        "url": "https://github.com/acme/widget",
+        "ref": "dev",
+        "subdir": "plugins/x",
+    }
+
+
+def test_registry_add_summary_and_duplicate(tmp_path):
+    catalog = tmp_path / "repositories.json"
+    runner.invoke(
+        app, ["registry", "add", "https://github.com/o/r", "cool", "--summary", "hi", "--file", str(catalog)]
+    )
+    assert json.loads(catalog.read_text())["repositories"]["cool"]["summary"] == "hi"
+
+    dup = runner.invoke(app, ["registry", "add", "https://github.com/o/r2", "cool", "--file", str(catalog)])
+    assert dup.exit_code == 1
+    # The original entry is untouched (no partial overwrite).
+    assert json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"] == "https://github.com/o/r"
+
+    forced = runner.invoke(
+        app, ["registry", "add", "https://github.com/o/r2", "cool", "--force", "--file", str(catalog)]
+    )
+    assert forced.exit_code == 0
+    assert json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"] == "https://github.com/o/r2"
+
+
+def test_registry_add_discover(tmp_path, monkeypatch, git_source):
+    # Re-init the fixture repo on an explicit `main` branch so --ref main checks out.
+    import subprocess
+
+    env = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e.x",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@e.x"}
+    subprocess.run(["git", "branch", "-m", "main"], cwd=git_source, check=True, env={**os.environ, **env})
+
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    monkeypatch.chdir(workdir)
+    catalog = workdir / "repositories.json"
+    result = runner.invoke(
+        app,
+        ["registry", "add", f"file://{git_source}", "demo", "--discover", "--file", str(catalog)],
+    )
+    assert result.exit_code == 0, result.output
+    expose = json.loads(catalog.read_text())["repositories"]["demo"]["expose"]
+    pairs = {(e["type"], e["name"]) for e in expose}
+    assert ("skill", "code-reviewer") in pairs
+    assert ("agent", "planner") in pairs
+    assert ("mcp", "github") in pairs

@@ -121,6 +121,11 @@ Both sides of the mapping are data-driven:
       mcp:   { strategy: merge, file: ".mycli/config.json", pointer: "mcpServers" }
   ```
 
+  Destination templates expand `{name}` plus, for link/link+merge, `{source}` (the
+  configured source name), `{repo}` (the repo basename), and `{ref}` (the git ref, with
+  `/` flattened to `-`). Namespace per repo+ref to avoid collisions across plugins —
+  e.g. a `link+merge` hook `dest` of `.claude/hooks/agentry/{repo}@{ref}/{name}`.
+
 See [docs/architecture.md](docs/architecture.md) for the full capability map, the
 descriptor schema, and the safety model.
 
@@ -180,6 +185,18 @@ ways to install them, project-local into `.claude/skills/`:
    agy add ui-ux-pro-max     # link-installs from .claude/skills/ui-ux-pro-max in that repo
    ```
 
+   **Authoring a catalog** — add an entry from a git/GitHub URL with `agy registry add`
+   (writes to [`registry/repositories.json`](registry/repositories.json) by default, override
+   with `--file`). A browser `…/tree/<ref>/<subdir>` URL infers the `ref` and `subdir`; the
+   name defaults to the repo basename. `--discover` clones the repo and pre-fills `expose`
+   from the components it finds:
+
+   ```bash
+   agy registry add https://github.com/safishamsi/graphify --summary "knowledge graph"
+   agy registry add https://github.com/tractorjuice/arc-kit/tree/main/plugins/arckit-claude
+   agy registry add https://github.com/safishamsi/graphify --discover   # fill `expose`
+   ```
+
    The catalog is plain JSON — the same shape a hosted catalog server would serve, so a
    local file and a future server are interchangeable. A conventional-layout repo needs only
    a `source`; `expose` declares curated components (and carries the `path`/`generate` for
@@ -215,6 +232,8 @@ ways to install them, project-local into `.claude/skills/`:
 ## Documentation
 
 - [Architecture](docs/architecture.md) — design, config/lock/manifest model, reconcile flow, safety.
+- [Knowledge base](docs/knowledge-base.md) — project-specific pitfalls, patterns, and discoveries.
+- [Changelog](CHANGELOG.md) — notable changes per release.
 - [Branding kit](docs/branding-kit.md) — name, identity, CLI tone of voice.
 - [Contributing](CONTRIBUTING.md) — dev setup, adding targets/component types, tests.
 

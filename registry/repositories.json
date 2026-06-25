@@ -49,12 +49,32 @@
           "type": "skill",
           "name": "graphify",
           "generate": {
-            "setup": [["uv", "tool", "install", "graphifyy"]],
-            "command": ["graphify", "install", "--project"],
-            "produces": [".claude/skills/graphify"]
+            "setup": [
+              [
+                "uv",
+                "tool",
+                "install",
+                "graphifyy"
+              ]
+            ],
+            "command": [
+              "graphify",
+              "install",
+              "--project"
+            ],
+            "produces": [
+              ".claude/skills/graphify"
+            ]
           }
         }
       ]
+    },
+    "superpowers": {
+      "source": {
+        "type": "git",
+        "url": "https://github.com/obra/superpowers",
+        "ref": "main"
+      }
     }
   }
 }

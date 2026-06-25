@@ -25,3 +25,23 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 - **The single `Registry` model (`{name, location}`) is reused for catalogs.** Don't confuse it with the deleted `RegistrySkill`/`RegistryIndex`. `registry.py` (module name) and the `registry/` directory both survive the rename to "catalog" terminology — only the skill-specific code was removed.
 
 ---
+
+## 2026-06-25 — `agy registry add` (catalog authoring)
+
+**Context:** Added `agy registry add <git-url> [name]` to author entries in the curated `registry/repositories.json` from a git/GitHub URL (minimal by default; `--discover` clones and pre-fills `expose`). Note this is *authoring* the catalog, distinct from `agy repo add` which *registers a catalog file* into a project's `.agentry.yml`.
+
+**Findings:**
+
+- **`agy registry` is safe to reuse as a command name.** The old skill-registry `agy registry` group was deleted in the catalog consolidation (commit `cb2f55a`), so the name was free to repurpose for catalog authoring. There is no naming collision.
+
+- **Typer forces argument order: required positionals before optional ones.** The plan called for `add <name> <url>` with an optional derived name, but Typer can't place an optional positional before a required one. Resolved by making the URL the first required arg and `name` the optional second (`add <url> [name]`), deriving the name from the repo basename when omitted.
+
+- **`json.dumps` defaults bite a hand-authored JSON file in two ways.** (1) `ensure_ascii=True` escaped the literal em-dash in arckit's summary to `—` — fixed with `ensure_ascii=False`. (2) `indent=2` reflows pre-existing compact inline arrays (e.g. graphify's `generate` arrays) to one-element-per-line; stdlib `json` has no way to preserve inline-array formatting, so re-serializing any catalog produces cosmetic churn on entries that were hand-compacted. Semantically identical and still loader-valid, but noisy in diffs.
+
+- **`--discover` reuses the resolver/discovery path.** It builds a transient `Source`, calls `resolver.resolve(_root(), source, pinned=None)` (clones into the gitignored `.agentry/sources/<name>`), then `discovery.discover(effective_root(...))`, mapping each `Discovered` → `ExposeEntry(type, name)` — the same machinery `_add_from_catalog` uses, so no new install mechanics.
+
+- **A browser `…/tree/<ref>/<subdir>` URL is parsed for `ref`+`subdir`.** `parse_repo_url` is the repo-URL counterpart to the existing `_normalize_url` (which rewrites *raw-JSON* catalog URLs). Both let the same pasted browser URL serve different inputs; keep them separate.
+
+- **Test gotcha: the `git_source` fixture inits on the default branch, not `main`.** The `--discover` test must `git branch -m main` on the fixture repo so the command's default `--ref main` checks out.
+
+---

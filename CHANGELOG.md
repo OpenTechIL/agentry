@@ -10,6 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — 2026-06-25
 
 ### Added
+- `agy registry add <git-url> [name]` to author entries in a curated catalog
+  (`registry/repositories.json` by default, `--file` to override). Writes a minimal
+  `summary` + `source` entry; `--discover` clones the repo and pre-fills `expose` from
+  discovered components. A `…/tree/<ref>/<subdir>` URL infers `ref`/`subdir`, and the name
+  defaults to the repo basename. New `registry.parse_repo_url` and `registry.add_entry`
+  helpers back the command.
 - `agy add <repo>@name[,name]` to install only selected components from a catalog repo,
   and `--type/-T` (repeatable: skill/agent/command/hook/mcp) to filter a catalog install by
   component type. A bare `agy add <repo>` opens an interactive picker in a TTY and installs
@@ -32,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - A changed link+merge `dest` template now removes the stale symlink at the old path during
   reconcile, instead of leaving an orphaned link behind.
+- `registry.add_entry` writes catalog JSON with `ensure_ascii=False`, keeping non-ASCII
+  characters (e.g. an em-dash in a summary) literal rather than escaping them to `\uXXXX`.
 
 ### Removed
 - The skill registry: `registry/skills.json`, the `registries:` config key, the
