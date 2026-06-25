@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 from typer.testing import CliRunner
 
 from agentry.cli import app
 from agentry.config import ConfigStore
-
 from conftest import make_source
 
 runner = CliRunner()

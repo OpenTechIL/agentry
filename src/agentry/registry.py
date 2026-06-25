@@ -17,11 +17,22 @@ from pathlib import Path
 
 from .config import STORE_DIR
 from .models import (
+    LINK_TYPES,
+    Component,
+    ComponentType,
     Config,
+    ProfileRule,
     Registry,
     RepositoryEntry,
     RepositoryIndex,
+    Strategy,
 )
+from .targets import BUILTIN_TARGETS
+
+#: Component types whose install dir Claude Code namespaces by subfolder. A command at
+#: ``.claude/commands/<repo>/adr.md`` is invoked as ``/<repo>:adr``; agents discover
+#: recursively so a subfolder just tidies them. Skills/tools must stay flat to be found.
+_NAMESPACED_TYPES = frozenset({ComponentType.COMMAND, ComponentType.AGENT})
 
 
 class RegistryError(RuntimeError):
@@ -137,7 +148,7 @@ def add_entry(catalog_path: Path, name: str, entry: RepositoryEntry, *, force: b
         raise RegistryError(f"catalog {catalog_path}: 'repositories' must be a JSON object")
     if name in repos and not force:
         raise RegistryError(f"repo '{name}' already exists in {catalog_path} (use --force to overwrite)")
-    repos[name] = entry.model_dump(mode="json", exclude_none=True, exclude_defaults=False)
+    repos[name] = entry.model_dump(mode="json", by_alias=True, exclude_none=True, exclude_defaults=False)
     # Drop noise the curated file never carries: empty target_profiles, absent expose.
     body = repos[name]
     if not body.get("target_profiles"):
@@ -152,6 +163,55 @@ def add_entry(catalog_path: Path, name: str, entry: RepositoryEntry, *, force: b
     # ensure_ascii=False keeps non-ASCII (e.g. an em-dash in a summary) literal, matching the
     # hand-authored catalog rather than escaping it to \uXXXX.
     catalog_path.write_text(json.dumps(doc, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
+def _namespace_dest(dest: str, repo: str) -> str:
+    """Insert a ``<repo>/`` segment before the final path component of a dest template.
+
+    ``.claude/commands/{name}.md`` -> ``.claude/commands/<repo>/{name}.md``.
+    """
+    parent, sep, last = dest.rpartition("/")
+    return f"{parent}/{repo}/{last}" if sep else f"{repo}/{dest}"
+
+
+def build_install_profiles(
+    entry: RepositoryEntry, repo: str, comps: list[Component], active_targets: set[str]
+) -> dict[str, dict[ComponentType, ProfileRule]]:
+    """Resolve a repo entry's ``copy``/``namespaced`` flags into concrete profile rules.
+
+    Starts from the entry's explicit ``target_profiles`` (preserving e.g. a ``hook``
+    link+merge rule), then for each file/dir component type the repo actually installs:
+
+    * ``copy`` -> install via the copy strategy instead of the default symlink;
+    * ``namespaced`` -> nest command/agent dests under ``<repo>/`` (skills/tools stay flat).
+
+    A rule is synthesized only when the flags change something versus the built-in default,
+    so a plain ``copy=false, namespaced=false`` repo adds nothing (the engine's link
+    default applies). The result is ready to hand to ``ConfigStore.merge_target_profiles``.
+    """
+    profiles: dict[str, dict[ComponentType, ProfileRule]] = {
+        t: dict(rules) for t, rules in entry.target_profiles.items()
+    }
+    if not (entry.copy_install or entry.namespaced):
+        return profiles
+
+    present = {c.type for c in comps if c.type in LINK_TYPES}
+    for target in active_targets:
+        base = BUILTIN_TARGETS.get(target)
+        for ctype in present:
+            existing = profiles.get(target, {}).get(ctype)
+            base_dest = base.link.get(ctype) if base else None
+            dest = (existing.dest if existing and existing.dest else base_dest)
+            if dest is None:
+                continue  # target doesn't support this type as link — nothing to synthesize
+            strategy = Strategy.COPY if entry.copy_install else (existing.strategy if existing else Strategy.LINK)
+            if entry.namespaced and ctype in _NAMESPACED_TYPES:
+                dest = _namespace_dest(dest, repo)
+            # Skip a no-op that just restates the built-in link default.
+            if existing is None and strategy is Strategy.LINK and dest == base_dest:
+                continue
+            profiles.setdefault(target, {})[ctype] = ProfileRule(strategy=strategy, dest=dest)
+    return profiles
 
 
 def find_repo(root: Path, config: Config, name: str) -> tuple[Registry, str, RepositoryEntry] | None:

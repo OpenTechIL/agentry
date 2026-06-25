@@ -11,7 +11,16 @@ from typer.testing import CliRunner
 from agentry import registry as reg
 from agentry.cli import app
 from agentry.config import ConfigStore
-from agentry.models import ComponentType, Config, Registry
+from agentry.models import (
+    Component,
+    ComponentType,
+    Config,
+    ProfileRule,
+    Registry,
+    RegistrySource,
+    RepositoryEntry,
+    Strategy,
+)
 
 runner = CliRunner()
 
@@ -60,6 +69,68 @@ def _write_catalog(tmp_path: Path, skill_repo: Path) -> Path:
     path = tmp_path / "repositories.json"
     path.write_text(json.dumps(catalog))
     return path
+
+
+_C = ComponentType
+
+
+def _comps(*ctypes: ComponentType) -> list[Component]:
+    return [Component(source="arckit", type=t, name="x") for t in ctypes]
+
+
+def test_build_install_profiles_copy_flips_strategy():
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=True, namespaced=False)
+    profiles = reg.build_install_profiles(entry, "arckit", _comps(_C.COMMAND, _C.SKILL), {"claude"})
+    cmd = profiles["claude"][_C.COMMAND]
+    assert cmd.strategy is Strategy.COPY and cmd.dest == ".claude/commands/{name}.md"
+    assert profiles["claude"][_C.SKILL].strategy is Strategy.COPY
+    assert profiles["claude"][_C.SKILL].dest == ".claude/skills/{name}"
+
+
+def test_build_install_profiles_namespaces_command_and_agent_only():
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=False, namespaced=True)
+    profiles = reg.build_install_profiles(entry, "arckit", _comps(_C.COMMAND, _C.AGENT, _C.SKILL), {"claude"})
+    claude = profiles["claude"]
+    assert claude[_C.COMMAND].strategy is Strategy.LINK
+    assert claude[_C.COMMAND].dest == ".claude/commands/arckit/{name}.md"
+    assert claude[_C.AGENT].dest == ".claude/agents/arckit/{name}.md"
+    # Skill stays flat → no synthesized rule (built-in link default applies).
+    assert _C.SKILL not in claude
+
+
+def test_build_install_profiles_copy_and_namespaced_combined():
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=True, namespaced=True)
+    profiles = reg.build_install_profiles(entry, "myrepo", _comps(_C.COMMAND), {"claude"})
+    cmd = profiles["claude"][_C.COMMAND]
+    assert cmd.strategy is Strategy.COPY and cmd.dest == ".claude/commands/myrepo/{name}.md"
+
+
+def test_build_install_profiles_noop_when_flags_off():
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=False, namespaced=False)
+    profiles = reg.build_install_profiles(entry, "arckit", _comps(_C.COMMAND, _C.SKILL), {"claude"})
+    assert profiles == {}
+
+
+def test_build_install_profiles_preserves_explicit_rules():
+    entry = RepositoryEntry(
+        source=RegistrySource(url="x"),
+        copy=False,
+        namespaced=True,
+        target_profiles={
+            "claude": {
+                _C.HOOK: ProfileRule(
+                    strategy=Strategy.LINK_MERGE,
+                    dest=".claude/hooks/{name}",
+                    file=".claude/settings.json",
+                    pointer="hooks",
+                )
+            }
+        },
+    )
+    profiles = reg.build_install_profiles(entry, "arckit", _comps(_C.COMMAND, _C.HOOK), {"claude"})
+    # The explicit hook rule survives untouched; the command gets namespaced.
+    assert profiles["claude"][_C.HOOK].strategy is Strategy.LINK_MERGE
+    assert profiles["claude"][_C.COMMAND].dest == ".claude/commands/arckit/{name}.md"
 
 
 def test_load_catalog_and_find(tmp_path: Path):

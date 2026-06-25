@@ -24,7 +24,15 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 
-from .models import TYPE_EXT, TYPE_IS_DIR, ComponentType, Dependency, SourceDescriptor
+from .models import (
+    KNOWN_HARNESS_SLUGS,
+    MERGE_TYPES,
+    TYPE_EXT,
+    TYPE_IS_DIR,
+    ComponentType,
+    Dependency,
+    SourceDescriptor,
+)
 
 DESCRIPTOR_NAMES = ("agentry.yaml", "agentry.yml")
 
@@ -51,6 +59,10 @@ class Discovered:
     name: str
     path: Path  # absolute path to the artifact in the source
     requires: tuple[Dependency, ...] = ()  # components this one depends on (descriptor only)
+    #: For merge fragments (hooks/mcp), the AI harness a per-harness variant targets,
+    #: derived from a ``<base>-<harness>`` filename (e.g. ``hooks-cursor`` -> ``cursor``).
+    #: ``None`` for the canonical/suffixless fragment and all link-based component types.
+    harness: str | None = None
 
 
 def artifact_path(source_root: Path, ctype: ComponentType, name: str) -> Path:
@@ -82,6 +94,23 @@ def _name_for(ctype: ComponentType, path: Path) -> str:
     return path.name if TYPE_IS_DIR[ctype] else path.stem
 
 
+def harness_suffix(name: str) -> str | None:
+    """The AI harness a ``<base>-<harness>`` fragment name targets, else ``None``.
+
+    Only the hyphenated form counts, so a bare ``codex`` (e.g. an MCP server literally
+    named "codex") is not misread as a per-harness variant.
+    """
+    base, sep, suffix = name.rpartition("-")
+    if sep and base and suffix in KNOWN_HARNESS_SLUGS:
+        return suffix
+    return None
+
+
+def _harness_for(ctype: ComponentType, name: str) -> str | None:
+    """Harness affinity for a discovered component (merge fragments only)."""
+    return harness_suffix(name) if ctype in MERGE_TYPES else None
+
+
 def _discover_from_descriptor(source_root: Path, descriptor: SourceDescriptor) -> list[Discovered]:
     found: list[Discovered] = []
     seen: set[tuple[ComponentType, str]] = set()
@@ -94,13 +123,13 @@ def _discover_from_descriptor(source_root: Path, descriptor: SourceDescriptor) -
                     continue
                 name = entry.name or _name_for(ctype, p)
                 if (ctype, name) not in seen:
-                    found.append(Discovered(ctype, name, p, requires))
+                    found.append(Discovered(ctype, name, p, requires, _harness_for(ctype, name)))
                     seen.add((ctype, name))
             elif entry.glob:
                 for match in sorted(source_root.glob(entry.glob)):
                     name = _name_for(ctype, match)
                     if (ctype, name) not in seen:
-                        found.append(Discovered(ctype, name, match, requires))
+                        found.append(Discovered(ctype, name, match, requires, _harness_for(ctype, name)))
                         seen.add((ctype, name))
     return found
 
@@ -125,7 +154,7 @@ def _discover_by_convention(source_root: Path) -> list[Discovered]:
                     found.append(Discovered(ctype, entry.name, entry))
                     seen.add((ctype, entry.name))
             elif entry.is_file() and entry.suffix == layout.ext:
-                found.append(Discovered(ctype, entry.stem, entry))
+                found.append(Discovered(ctype, entry.stem, entry, harness=_harness_for(ctype, entry.stem)))
                 seen.add((ctype, entry.stem))
 
     # A root-level `.mcp.json` (plugin convention) → one `mcp` component, unless an

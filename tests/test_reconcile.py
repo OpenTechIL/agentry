@@ -6,10 +6,14 @@ import shutil
 import sys
 from pathlib import Path
 
+import pytest
+
 from agentry.config import ConfigStore
 from agentry.lockfile import load_lock
-from agentry.models import Component, ComponentType, Source, SourceType
+from agentry.manifest import load_manifest
+from agentry.models import Component, ComponentType, ProfileRule, Source, SourceType, Strategy
 from agentry.reconcile import status, sync
+from agentry.targets import BUILTIN_TARGETS
 
 
 def _wire(project: Path, source: Path, *comps: tuple[ComponentType, str]) -> None:
@@ -30,6 +34,100 @@ def test_link_install_and_idempotent(project: Path, local_source: Path):
 
     res2 = sync(project)
     assert res2.created == [] and res2.updated == [] and res2.removed == []
+
+
+def _copy_profile(*ctypes: ComponentType, dest_overrides: dict | None = None) -> dict:
+    """Claude target_profiles that install the given types via copy (built-in link dest)."""
+    overrides = dest_overrides or {}
+    rules = {}
+    for ctype in ctypes:
+        dest = overrides.get(ctype, BUILTIN_TARGETS["claude"].link[ctype])
+        rules[ctype] = ProfileRule(strategy=Strategy.COPY, dest=dest)
+    return {"claude": rules}
+
+
+def _wire_copy(project: Path, source: Path, *comps, dest_overrides: dict | None = None) -> None:
+    store = ConfigStore.load(project)
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(source)))
+    for ctype, name in comps:
+        store.add_component(Component(source="s", type=ctype, name=name, enabled=True))
+    store.merge_target_profiles(_copy_profile(*{c[0] for c in comps}, dest_overrides=dest_overrides))
+    store.save()
+
+
+def test_copy_install_real_file_and_idempotent(project: Path, local_source: Path):
+    _wire_copy(project, local_source, (ComponentType.COMMAND, "deploy"))
+    res = sync(project)
+    dest = project / ".claude/commands/deploy.md"
+    assert dest.is_file() and not dest.is_symlink()
+    assert dest.read_text() == "# deploy\n"
+    assert any("copy .claude/commands/deploy.md" in c for c in res.created)
+
+    man = load_manifest(project)
+    assert [c.path for c in man.copies] == [".claude/commands/deploy.md"]
+
+    res2 = sync(project)
+    assert res2.created == [] and res2.updated == [] and res2.removed == []
+
+
+def test_copy_install_real_directory(project: Path, local_source: Path):
+    _wire_copy(project, local_source, (ComponentType.SKILL, "code-reviewer"))
+    sync(project)
+    dest = project / ".claude/skills/code-reviewer"
+    assert dest.is_dir() and not dest.is_symlink()
+    assert (dest / "SKILL.md").read_text() == "# code reviewer\n"
+
+
+def test_link_to_copy_switch_at_same_dest(project: Path, local_source: Path):
+    _wire(project, local_source, (ComponentType.COMMAND, "deploy"))
+    sync(project)
+    dest = project / ".claude/commands/deploy.md"
+    assert dest.is_symlink()
+
+    store = ConfigStore.load(project)
+    store.merge_target_profiles(_copy_profile(ComponentType.COMMAND))
+    store.save()
+    sync(project)
+    assert dest.is_file() and not dest.is_symlink()
+    assert dest.read_text() == "# deploy\n"
+    # The old symlink record is gone; the copy is tracked instead.
+    man = load_manifest(project)
+    assert not man.links
+    assert [c.path for c in man.copies] == [".claude/commands/deploy.md"]
+
+
+def test_copy_removal_deletes_and_prunes(project: Path, local_source: Path):
+    _wire_copy(project, local_source, (ComponentType.COMMAND, "deploy"))
+    sync(project)
+    store = ConfigStore.load(project)
+    store.set_enabled("s/command/deploy", False)
+    store.save()
+    res = sync(project)
+    assert not (project / ".claude/commands/deploy.md").exists()
+    assert not (project / ".claude/commands").exists()  # empty parent pruned
+    assert any("copy .claude/commands/deploy.md" in r for r in res.removed)
+    assert not load_manifest(project).copies
+
+
+def test_copy_refuses_unmanaged_file(project: Path, local_source: Path):
+    own = project / ".claude/commands"
+    own.mkdir(parents=True)
+    (own / "deploy.md").write_text("mine")
+    _wire_copy(project, local_source, (ComponentType.COMMAND, "deploy"))
+    res = sync(project)
+    assert (own / "deploy.md").read_text() == "mine"  # never overwritten
+    assert any("not managed by agentry" in w for w in res.warnings)
+
+
+def test_copy_status_reports_drift(project: Path, local_source: Path):
+    _wire_copy(project, local_source, (ComponentType.COMMAND, "deploy"))
+    sync(project)
+    rows, _ = status(project)
+    assert all(r.state == "ok" for r in rows)
+
+    (project / ".claude/commands/deploy.md").write_text("tampered\n")
+    rows, _ = status(project)
+    assert any(r.state == "drift" for r in rows)
 
 
 def test_merge_install_and_reversible(project: Path, local_source: Path):
@@ -311,6 +409,88 @@ def test_wrapped_hooks_fragment_installs_flat(project: Path, tmp_path: Path):
     sync(project)
     after = json.loads((project / ".claude/settings.json").read_text())
     assert "hooks" not in after or "Stop" not in after.get("hooks", {})
+
+
+def _multi_harness_hooks_source(tmp_path: Path) -> Path:
+    """A plugin shipping per-harness hook variants (like superpowers)."""
+    src = tmp_path / "mhsrc"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps({"hooks": {"SessionStart": [{"matcher": "startup", "hooks": [{"command": "claude"}]}]}})
+    )
+    (src / "hooks" / "hooks-cursor.json").write_text(
+        json.dumps({"version": 1, "hooks": {"sessionStart": [{"command": "cursor"}]}})
+    )
+    (src / "hooks" / "hooks-codex.json").write_text(
+        json.dumps({"hooks": {"SessionStart": [{"hooks": [{"command": "codex"}]}]}})
+    )
+    return src
+
+
+def test_foreign_harness_hook_variants_not_merged_into_claude(project: Path, tmp_path: Path):
+    """Only the canonical hooks.json reaches Claude; cursor/codex variants are skipped."""
+    src = _multi_harness_hooks_source(tmp_path)
+    _wire(
+        project,
+        src,
+        (ComponentType.HOOK, "hooks"),
+        (ComponentType.HOOK, "hooks-cursor"),
+        (ComponentType.HOOK, "hooks-codex"),
+    )
+    sync(project)
+
+    settings = json.loads((project / ".claude/settings.json").read_text())
+    assert "SessionStart" in settings["hooks"]  # canonical Claude event kept
+    assert "sessionStart" not in settings["hooks"]  # Cursor's camelCase variant skipped
+    # The Codex variant (valid key, wrong command) must not overwrite the Claude one.
+    assert settings["hooks"]["SessionStart"][0]["hooks"][0]["command"] == "claude"
+
+
+def test_foreign_harness_key_is_self_healed_on_sync(project: Path, tmp_path: Path):
+    """A pre-existing (pre-fix) sessionStart key owned by agentry is pruned on re-sync."""
+    src = _multi_harness_hooks_source(tmp_path)
+    # Simulate the broken prior state: settings.json holds both keys and the manifest
+    # records agentry as the owner of the camelCase one.
+    (project / ".claude").mkdir(parents=True, exist_ok=True)
+    (project / ".claude/settings.json").write_text(
+        json.dumps({"hooks": {"SessionStart": [{"command": "claude"}], "sessionStart": [{"command": "cursor"}]}})
+    )
+    from agentry.manifest import save_manifest
+    from agentry.models import InstalledMerge
+
+    man = load_manifest(project)
+    man.merges = [
+        InstalledMerge(
+            component="s/hook/hooks", target="claude", file=".claude/settings.json", pointer="hooks", keys=["SessionStart"]
+        ),
+        InstalledMerge(
+            component="s/hook/hooks-cursor", target="claude", file=".claude/settings.json", pointer="hooks", keys=["sessionStart"]
+        ),
+    ]
+    save_manifest(project, man)
+
+    _wire(project, src, (ComponentType.HOOK, "hooks"), (ComponentType.HOOK, "hooks-cursor"))
+    sync(project)
+
+    settings = json.loads((project / ".claude/settings.json").read_text())
+    assert "SessionStart" in settings["hooks"]
+    assert "sessionStart" not in settings["hooks"]
+
+
+def test_unknown_claude_hook_event_is_dropped_with_warning(project: Path, tmp_path: Path):
+    """A bogus event key never reaches Claude's settings.json; a warning is emitted."""
+    src = tmp_path / "badsrc"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps({"hooks": {"SessionStart": [{"command": "ok"}], "Frobnicate": [{"command": "no"}]}})
+    )
+    _wire(project, src, (ComponentType.HOOK, "hooks"))
+    res = sync(project)
+
+    settings = json.loads((project / ".claude/settings.json").read_text())
+    assert "SessionStart" in settings["hooks"]
+    assert "Frobnicate" not in settings["hooks"]
+    assert any("Frobnicate" in w and "not a recognized" in w for w in res.warnings)
 
 
 def _hooks_source(tmp_path: Path) -> Path:

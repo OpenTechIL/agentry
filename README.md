@@ -1,7 +1,10 @@
 # agentry
 
+[![CI](https://github.com/opentech/agentry/actions/workflows/ci.yml/badge.svg)](https://github.com/opentech/agentry/actions/workflows/ci.yml)
+[![PyPI version](https://img.shields.io/pypi/v/agentry.svg)](https://pypi.org/project/agentry/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230.svg)](https://github.com/astral-sh/ruff)
 
 **A dependency manager for AI coding agents.** `agentry` (command: `agy`) lets you
 declare the skills, agents, commands, tools, hooks, and MCP servers your project
@@ -92,6 +95,11 @@ agy update                                      # re-resolve refs, rewrite the l
 | `tool` | symlink | `.claude/tools/<name>/` |
 | `hook` | config merge | `.claude/settings.json` → `hooks` |
 | `mcp` | config merge | `.mcp.json` → `mcpServers` |
+
+File/dir components install via **symlink** by default (live-updating, points back into
+the `.agentry/` store). Switch any of them to **copy** — a self-contained, committable real
+file/dir — by setting `strategy: copy` in a `target_profiles` rule, or per catalog repo with
+the `copy` flag (see [Third-party skills](#third-party-skills)).
 
 Target support varies by tool (e.g. Cursor is rules-only); unsupported combinations
 are skipped with a warning.
@@ -200,7 +208,15 @@ ways to install them, project-local into `.claude/skills/`:
    The catalog is plain JSON — the same shape a hosted catalog server would serve, so a
    local file and a future server are interchangeable. A conventional-layout repo needs only
    a `source`; `expose` declares curated components (and carries the `path`/`generate` for
-   artifacts discovery can't infer):
+   artifacts discovery can't infer). Two optional per-repo flags shape the install layout at
+   `agy add` time:
+
+   - `"copy": true` — install this repo's file/dir components by **copying** instead of
+     symlinking (real files, committable; default `false`).
+   - `"namespaced": true` (the **default**) — nest **commands** and **agents** under a
+     `<repo>/` subfolder, so a plugin's slash commands are namespaced
+     (`.claude/commands/<repo>/adr.md` → `/<repo>:adr`). Skills stay flat (Claude Code only
+     discovers `.claude/skills/<name>/SKILL.md`). Set `"namespaced": false` for a flat layout.
 
    ```json
    {

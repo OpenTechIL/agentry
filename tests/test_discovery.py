@@ -17,6 +17,28 @@ def test_discover_all_types(local_source: Path):
     assert len(found) == 6
 
 
+def test_merge_variants_carry_harness_affinity(tmp_path: Path):
+    """`hooks-cursor.json` is tagged for the cursor harness; the canonical file is not."""
+    root = tmp_path / "plugin"
+    (root / "hooks").mkdir(parents=True)
+    (root / "hooks" / "hooks.json").write_text('{"hooks": {"SessionStart": []}}')
+    (root / "hooks" / "hooks-cursor.json").write_text('{"hooks": {"sessionStart": []}}')
+    (root / "hooks" / "hooks-codex.json").write_text('{"hooks": {"SessionStart": []}}')
+    by_name = {d.name: d for d in discovery.discover(root) if d.type is ComponentType.HOOK}
+    assert by_name["hooks"].harness is None
+    assert by_name["hooks-cursor"].harness == "cursor"
+    assert by_name["hooks-codex"].harness == "codex"
+
+
+def test_harness_suffix_ignores_bare_and_unknown_names():
+    """Only `<base>-<harness>` with a known slug counts; bare/unknown names are left alone."""
+    assert discovery.harness_suffix("hooks-cursor") == "cursor"
+    assert discovery.harness_suffix("codex") is None  # bare slug, not a variant
+    assert discovery.harness_suffix("using-superpowers") is None  # unknown suffix
+    assert discovery.harness_suffix("pre-commit-fmt") is None  # unknown suffix
+    assert discovery.harness_suffix("hooks") is None
+
+
 def test_artifact_path(local_source: Path):
     p = discovery.artifact_path(local_source, ComponentType.SKILL, "code-reviewer")
     assert p.is_dir()

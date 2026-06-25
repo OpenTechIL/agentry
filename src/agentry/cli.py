@@ -165,9 +165,14 @@ def _add_from_catalog(repo: str, names: list[str], *, types: list[ComponentType]
             for e in entry.expose
         ]
     else:
+        # Drop per-harness merge variants (e.g. hooks-cursor.json) for harnesses that
+        # aren't active targets, so a claude-only install doesn't record foreign-harness
+        # fragments it would never use. reconcile skips them regardless; this is hygiene.
+        active = set(config.active_targets())
         available = [
             Component(source=repo, type=d.type, name=d.name)
             for d in discovery.discover(effective_root(_root(), src))
+            if d.harness is None or d.harness in active
         ]
     if not available:
         err.print(f"[yellow]Repository '{repo}' provided no installable components.[/yellow]")
@@ -185,7 +190,8 @@ def _add_from_catalog(repo: str, names: list[str], *, types: list[ComponentType]
 
     for comp in comps:
         store.add_component(comp)
-    if entry.target_profiles and store.merge_target_profiles(entry.target_profiles):
+    profiles = reg.build_install_profiles(entry, repo, comps, config.active_targets())
+    if profiles and store.merge_target_profiles(profiles):
         console.print("  [dim]added target_profiles from catalog (install overrides for this repo)[/dim]")
     store.save()
     console.print(f"[green]Added[/green] {repo} [dim]({len(comps)} component(s) from catalog)[/dim]")
