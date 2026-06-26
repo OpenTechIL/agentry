@@ -426,7 +426,7 @@ def test_repo_catalog_persisted_and_listed_via_url(tmp_path, monkeypatch):
     assert cfg.repositories and cfg.repositories[0].location == url
 
 
-# -- `agy publish` (catalog authoring) -------------------------------
+# -- `agy catalog add-repo` (catalog authoring) -------------------------------
 
 
 def test_parse_repo_url_plain_and_tree():
@@ -446,10 +446,10 @@ def test_parse_repo_url_plain_and_tree():
     assert name == "widget"
 
 
-def test_publish_minimal(tmp_path):
+def test_catalog_add_repo_minimal(tmp_path):
     catalog = tmp_path / "repositories.json"
     result = runner.invoke(
-        app, ["publish", "https://github.com/o/r", "cool", "--file", str(catalog)]
+        app, ["catalog", "add-repo", "https://github.com/o/r", "cool", "--file", str(catalog)]
     )
     assert result.exit_code == 0, result.output
     doc = json.loads(catalog.read_text())
@@ -460,12 +460,13 @@ def test_publish_minimal(tmp_path):
     assert "summary" not in entry
 
 
-def test_publish_derives_name_and_infers_ref_subdir(tmp_path):
+def test_catalog_add_repo_derives_name_and_infers_ref_subdir(tmp_path):
     catalog = tmp_path / "repositories.json"
     result = runner.invoke(
         app,
         [
-            "publish",
+            "catalog",
+            "add-repo",
             "https://github.com/acme/widget/tree/dev/plugins/x",
             "--file",
             str(catalog),
@@ -481,12 +482,13 @@ def test_publish_derives_name_and_infers_ref_subdir(tmp_path):
     }
 
 
-def test_publish_summary_and_duplicate(tmp_path):
+def test_catalog_add_repo_summary_and_duplicate(tmp_path):
     catalog = tmp_path / "repositories.json"
     runner.invoke(
         app,
         [
-            "publish",
+            "catalog",
+            "add-repo",
             "https://github.com/o/r",
             "cool",
             "--summary",
@@ -497,7 +499,9 @@ def test_publish_summary_and_duplicate(tmp_path):
     )
     assert json.loads(catalog.read_text())["repositories"]["cool"]["summary"] == "hi"
 
-    dup = runner.invoke(app, ["publish", "https://github.com/o/r2", "cool", "--file", str(catalog)])
+    dup = runner.invoke(
+        app, ["catalog", "add-repo", "https://github.com/o/r2", "cool", "--file", str(catalog)]
+    )
     assert dup.exit_code == 1
     # The original entry is untouched (no partial overwrite).
     assert (
@@ -507,7 +511,15 @@ def test_publish_summary_and_duplicate(tmp_path):
 
     forced = runner.invoke(
         app,
-        ["publish", "https://github.com/o/r2", "cool", "--force", "--file", str(catalog)],
+        [
+            "catalog",
+            "add-repo",
+            "https://github.com/o/r2",
+            "cool",
+            "--force",
+            "--file",
+            str(catalog),
+        ],
     )
     assert forced.exit_code == 0
     assert (
@@ -516,7 +528,7 @@ def test_publish_summary_and_duplicate(tmp_path):
     )
 
 
-def test_publish_discover(tmp_path, monkeypatch, git_source):
+def test_catalog_add_repo_discover(tmp_path, monkeypatch, git_source):
     # Re-init the fixture repo on an explicit `main` branch so --ref main checks out.
     import subprocess
 
@@ -536,7 +548,15 @@ def test_publish_discover(tmp_path, monkeypatch, git_source):
     catalog = workdir / "repositories.json"
     result = runner.invoke(
         app,
-        ["publish", f"file://{git_source}", "demo", "--discover", "--file", str(catalog)],
+        [
+            "catalog",
+            "add-repo",
+            f"file://{git_source}",
+            "demo",
+            "--discover",
+            "--file",
+            str(catalog),
+        ],
     )
     assert result.exit_code == 0, result.output
     expose = json.loads(catalog.read_text())["repositories"]["demo"]["expose"]

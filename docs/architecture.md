@@ -102,6 +102,49 @@ Components a user would hand-write, installing all of them, a `@name`-selected s
 catalog is the JSON contract a hosted "artifactory" server would serve, so file and server are
 interchangeable. URL catalogs are cached under `.agentry/repositories/`.
 
+A conventional-layout repo needs only a `source`; `expose` declares curated components (and
+carries the `path`/`generate` for artifacts discovery can't infer). Two optional per-repo flags
+shape the install layout at `agy add` time:
+
+- `"copy": true` — install this repo's file/dir components by **copying** instead of symlinking
+  (real files, committable; default `false`).
+- `"namespaced": true` (the **default**) — nest **commands** and **agents** under a `<repo>/`
+  subfolder, so a plugin's slash commands are namespaced (`.claude/commands/<repo>/adr.md` →
+  `/<repo>:adr`). Skills stay flat (Claude Code only discovers `.claude/skills/<name>/SKILL.md`).
+  Set `"namespaced": false` for a flat layout.
+
+```json
+{
+  "version": 1,
+  "repositories": {
+    "arckit": {
+      "summary": "Architecture governance toolkit (skills, agents, commands, …)",
+      "source": { "type": "git", "url": "https://github.com/tractorjuice/arc-kit", "ref": "main", "subdir": "plugins/arckit-claude" }
+    },
+    "graphify": {
+      "summary": "Codebase → knowledge graph",
+      "source": { "type": "git", "url": "https://github.com/safishamsi/graphify", "ref": "main" },
+      "expose": [
+        {
+          "type": "skill",
+          "name": "graphify",
+          "generate": {
+            "setup":   [["uv", "tool", "install", "graphifyy"]],
+            "command": ["graphify", "install", "--project"],
+            "produces": [".claude/skills/graphify"]
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+**Authoring a catalog (`agy catalog add-repo`).** Add an entry from a git/GitHub URL — a browser
+`…/tree/<ref>/<subdir>` URL infers the `ref` and `subdir`; the name defaults to the repo
+basename. `--discover` clones the repo and pre-fills `expose` from the components it finds. The
+default catalog file is `registry/repositories.json` (override with `--file`).
+
 **Dependencies (`requires`).** A descriptor entry may declare components it needs. Each
 `requires` item points at another component by `type` + `name`, living in one of three
 places — and is version-pinnable via `ref`:
@@ -139,6 +182,13 @@ destination's `wrapper_keys` (the `pointer` plus any `aliases` — e.g. OpenCode
 config also accepts the Claude-style `mcpServers` wrapper), so the real named entries
 are merged and sibling metadata like `description` is dropped. An already-flat fragment
 is used unchanged, so both shapes work.
+
+**Per-harness fragment routing.** A repo may ship tool-specific hook/MCP fragments side by
+side — e.g. `hooks/hooks.json` (canonical), `hooks/hooks-cursor.json`, `hooks/hooks-codex.json`.
+agentry reads the `-<harness>` suffix and routes each variant **only** to its matching target, so
+a Cursor or Codex fragment never lands in Claude's `settings.json`. The canonical, suffix-less
+file applies to every target that supports the type. As a final guard, a hook event Claude Code
+doesn't recognize is dropped from `.claude/settings.json` with a warning rather than written out.
 
 ## 5. Target capability map (`targets.py`) — built-in + config
 
@@ -250,8 +300,9 @@ gitignore.py    ensure .agentry/ is ignored
 ## 10. Deferred (future phases)
 
 - **Hosted catalog server** — the catalog format and name-based `agy add`/`agy search`
-  ship today against file/URL catalogs (`registry.py`); a hosted catalog server + publish flow
-  (serving the same JSON contract) is the remaining piece.
+  ship today against file/URL catalogs (`registry.py`); a hosted catalog server + upload flow
+  (serving the same JSON contract that `agy catalog add-repo` authors locally) is the remaining
+  piece.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
 - **Hook array-merge** — richer merging for event-keyed hook arrays beyond the named-key contract.
 - **Copy fallback** — copy instead of symlink for filesystems without symlink support (Windows).
