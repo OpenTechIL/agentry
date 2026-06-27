@@ -4,6 +4,20 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ---
 
+## 2026-06-27 — MkDocs `--strict` CI failures & guardrails
+
+**Context:** The GitHub Pages docs build ([.github/workflows/docs.yml](https://github.com/opentech/agentry/blob/main/.github/workflows/docs.yml)) failed because [commands.md](commands.md) carried a link to `../README.md` (outside `docs_dir`) and a broken heading anchor. Fixed the links, then hardened the pipeline against recurrence.
+
+**Findings:**
+
+- **`mkdocs build --strict` aborts on WARNING, but broken anchors are only INFO by default.** A dead internal link (`links.not_found`) is a WARNING → fatal under `--strict`; a missing heading anchor (`links.anchors`) is INFO → silently shipped. To make anchor typos fail too, add a `validation:` block to `mkdocs.yml` promoting both to `warn`.
+- **Links outside `docs_dir` can't be relative.** `../README.md` lives at the repo root, so MkDocs can't resolve it as a page. Use the absolute GitHub blob URL instead (matches the existing Contributing/Changelog nav pattern).
+- **Default `toc` slugify collapses runs of spaces/dashes to a single hyphen.** Heading `## 4. Source-repo layout — convention or descriptor` (em-dash) → anchor `#4-source-repo-layout-convention-or-descriptor`. A hand-written double `--` where the em-dash was is wrong.
+- **The docs workflow only ran on push to main, so link breakage was caught *after* merge.** Added a `pull_request` trigger (strict build, no deploy via `if: github.event_name == 'push'`) so reviews catch it. Concurrency keyed per-ref (`pages-${{ github.ref }}`) with `cancel-in-progress` only on PRs keeps main deploys uninterrupted while cancelling redundant PR runs.
+- **Pin `mkdocs-material<10`.** Material 2.0 is announced as a hard break (plugin system removed, no migration path); an unpinned `--with mkdocs-material` would break the build on its release. Moved the build to `uv run --extra docs` so the pinned version in `pyproject.toml`'s `docs` extra is the single source of truth.
+
+---
+
 ## 2026-06-26 — Command rename: `publish` → `catalog add-repo`
 
 **Context:** README reorg for the OSS release surfaced that `agy publish` misrepresented its

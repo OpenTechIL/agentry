@@ -7,6 +7,13 @@ edit_uri: edit/main/docs/
 
 docs_dir: docs
 
+# Promote link/anchor problems to warnings so `mkdocs build --strict` fails on
+# dead internal links and missing heading anchors (not just missing files).
+validation:
+  links:
+    not_found: warn
+    anchors: warn
+
 theme:
   name: material
   logo: branding/logo.svg
@@ -32,6 +39,7 @@ theme:
 nav:
   - Home: index.md
   - Architecture: architecture.md
+  - Commands: commands.md
   - Knowledge base: knowledge-base.md
   - Branding: branding-kit.md
   - Contributing: https://github.com/opentech/agentry/blob/main/CONTRIBUTING.md

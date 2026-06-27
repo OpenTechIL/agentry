@@ -1,12 +1,19 @@
 name: Docs
 
-# Builds the MkDocs site and deploys it to GitHub Pages on every push to main.
+# Builds the MkDocs site on every push to main and on PRs that touch the docs
+# (the PR build is strict, so broken links/anchors fail review before merge).
+# Only pushes to main deploy to GitHub Pages.
 #
 # One-time setup: repo Settings -> Pages -> Build and deployment ->
 # Source = "GitHub Actions".
 on:
   push:
     branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".github/workflows/docs.yml"
+  pull_request:
     paths:
       - "docs/**"
       - "mkdocs.yml"
@@ -18,10 +25,10 @@ permissions:
   pages: write
   id-token: write
 
-# Allow only one concurrent deployment.
+# One run per ref: main deploys are never interrupted; redundant PR builds cancel.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: pages-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -33,7 +40,7 @@ jobs:
         with:
           enable-cache: true
       - name: Build site (strict)
-        run: uv run --with mkdocs-material mkdocs build --strict
+        run: uv run --extra docs mkdocs build --strict
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
@@ -41,6 +48,7 @@ jobs:
 
   deploy:
     needs: build
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

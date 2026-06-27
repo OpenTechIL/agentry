@@ -42,8 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `registry/repositories.json` as `expose` entries (carrying their `path`/`generate`).
 - Reworked `link_merge.rewrite_fragment` to take an already-expanded `rewrite_to` prefix;
   the caller (`reconcile`) now owns placeholder substitution via `_link_merge_vars`/`_expand`.
+- Docs CI now builds on pull requests too (strict, no deploy) so broken links/anchors are
+  caught before merge; deploy to GitHub Pages is gated to pushes on `main`. The build uses
+  `uv run --extra docs` (pinned `mkdocs-material<10` in `pyproject.toml`) instead of an
+  unpinned inline dependency, and `mkdocs.yml` promotes `links.not_found`/`links.anchors`
+  to warnings so `--strict` fails on dead internal links and missing anchors.
 
 ### Fixed
+- Docs `mkdocs build --strict` failure: `commands.md` linked to `../README.md` (outside
+  `docs_dir`, unresolvable) and a heading anchor with a stray double hyphen. Pointed the
+  README link at its GitHub URL, corrected the anchor, and added `commands.md` to the nav.
 - Per-harness hook/MCP fragments are now routed only to their matching target. A repo
   shipping tool-specific variants side by side (e.g. superpowers' `hooks/hooks.json`,
   `hooks/hooks-cursor.json`, `hooks/hooks-codex.json`) no longer merges the Cursor/Codex
