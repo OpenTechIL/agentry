@@ -1,7 +1,7 @@
 # agentry — Command reference
 
 The full `agy` command surface. Run `agy <command> --help` for the canonical, up-to-date flags.
-See [README](../README.md) for the quickstart and [architecture](architecture.md) for the model
+See [README](https://github.com/opentech/agentry/blob/main/README.md) for the quickstart and [architecture](architecture.md) for the model
 behind these commands.
 
 ## Project & components
@@ -34,7 +34,7 @@ behind these commands.
 
 A catalog is a JSON file or URL mapping repo names to their source (and optional curated
 components). `catalog add` registers a catalog to **consume**; `catalog add-repo` **authors** an
-entry in a catalog file. See [architecture §4](architecture.md#4-source-repo-layout--convention-or-descriptor)
+entry in a catalog file. See [architecture §4](architecture.md#4-source-repo-layout-convention-or-descriptor)
 for the catalog schema.
 
 | Command | What it does |
