@@ -736,8 +736,8 @@ def catalog_list() -> None:
 DEFAULT_CATALOG = Path("registry/repositories.json")
 
 
-@app.command("publish")
-def publish(
+@catalog_app.command("add-repo")
+def catalog_add_repo(
     git_url: str = typer.Argument(
         ...,
         help="Git repo URL (a github.com/owner/repo or .../tree/<ref>/<subdir> URL works).",
@@ -760,7 +760,10 @@ def publish(
         False, "--force", help="Overwrite an existing entry of the same name."
     ),
 ) -> None:
-    """Publish a git/GitHub repo as an entry in a catalog file (registry/repositories.json)."""
+    """Add a git/GitHub repo as an entry in a catalog file (registry/repositories.json).
+
+    Authors a catalog (the inverse of `catalog add`, which registers a catalog to consume).
+    """
     from . import discovery
     from . import registry as reg
     from .models import ExposeEntry, RegistrySource, RepositoryEntry, Source

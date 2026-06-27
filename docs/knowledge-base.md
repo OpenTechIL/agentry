@@ -4,6 +4,26 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ---
 
+## 2026-06-26 — Command rename: `publish` → `catalog add-repo`
+
+**Context:** README reorg for the OSS release surfaced that `agy publish` misrepresented its
+action — it publishes nothing; it adds/edits a repo entry in a local catalog file (its success
+message is literally `Added {name} → {file}`). Renamed it to **`agy catalog add-repo`**, nested
+under the `catalog` group. Hard rename, no alias (consistent with the earlier `repo`/`registry`
+rename below). `agy publish` never shipped in a release, so the CHANGELOG Unreleased entry was
+updated in place rather than logging a rename.
+
+**Findings:**
+
+- **The `catalog` group now pairs two near-identical verbs intentionally:** `catalog add`
+  (register a catalog to *consume*) vs `catalog add-repo` (*author* an entry into a catalog
+  file). Both docstrings disambiguate to keep `--help` clear.
+- **The deep catalog detail moved out of the README** into [architecture.md](architecture.md)
+  (catalog repo schema incl. `copy`/`namespaced` flags + JSON example, per-harness fragment
+  routing) and the full command table into [commands.md](commands.md). The README links down.
+
+---
+
 ## 2026-06-25 — Command rename: `repo`/`registry` → `catalog`/`publish`
 
 **Context:** Consolidated the confusing command trio for OSS release. The consumer side
