@@ -244,15 +244,17 @@ An active target with neither a built-in driver nor a profile is reported via `u
 | command | `.claude/commands/{name}.md` | `.opencode/commands/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/commands/{name}.toml` | `.windsurf/workflows/{name}.md` | — | — |
 | tool | `.claude/tools/{name}` | `.opencode/tools/{name}` | — | — | — | — | — |
 | hook | merge `.claude/settings.json` → `hooks` | — | — | merge `.gemini/settings.json` → `hooks` | merge `.windsurf/hooks.json` → `hooks` | — | — |
-| mcp | merge `.mcp.json` → `mcpServers` | merge `opencode.json` → `mcp` | merge `.cursor/mcp.json` → `mcpServers` | merge `.gemini/settings.json` → `mcpServers` | — | merge `.kimi-code/mcp.json` → `mcpServers` | — |
+| mcp | merge `.mcp.json` → `mcpServers` | merge `opencode.json` → `mcp` | merge `.cursor/mcp.json` → `mcpServers` | merge `.gemini/settings.json` → `mcpServers` | — | merge `.kimi-code/mcp.json` → `mcpServers` | merge `.codex/config.toml` → `mcp_servers` |
 
 A `—` means the agent either has no such concept or expects a format agentry can't yet
-write. The four newest drivers map what installs cleanly with today's strategies (skills
-everywhere; JSON-merged MCP/hooks where the agent uses JSON). Several agents keep their
-agents/commands/MCP/hooks in **TOML** (Codex's `config.toml` `[mcp_servers]`, Gemini
-commands, Kimi hooks) — agentry's merge installer is JSON-only, so those await a
-TOML-merge strategy (§10). Where a Markdown agent or TOML command *is* supplied by the
-author in the agent's native format, the link strategy installs it as-is.
+write. The newest drivers map what installs cleanly: skills everywhere, and MCP/hooks
+merged wherever the destination is JSON **or TOML**. The merge installer chooses the codec
+by the destination's extension — Codex's MCP servers merge into `.codex/config.toml` under
+the snake_case `[mcp_servers]` table (written with `tomlkit`, preserving the rest of the
+file), while the source fragment stays JSON. Still unmapped: per-tool **agent/command
+definition formats** agentry doesn't translate (e.g. Gemini's TOML commands install via
+`link` only when authored in that format), and **array-of-tables hooks** (Codex
+`[[hooks.Event]]`, Kimi `[[hooks]]`) which don't fit the named-entry merge contract.
 
 ## 6. The reconcile flow (`agy sync`)
 
@@ -316,7 +318,7 @@ registry.py     resolve a bare repo name via external catalogs (file/URL) → So
 manifest.py     .agentry/.manifest.json read/write
 installers/
   link.py       symlink create/remove/state (lexical, store-scoped)
-  merge.py      JSON inject/remove/state (key-scoped, reversible)
+  merge.py      JSON/TOML inject/remove/state (key-scoped, reversible; codec by file ext)
   generate.py   run a component's own installer (gated); track produced files for safe removal
 reconcile.py    sync engine + status (drift report)
 gitignore.py    ensure .agentry/ is ignored
@@ -340,9 +342,10 @@ gitignore.py    ensure .agentry/ is ignored
   ship today against file/URL catalogs (`registry.py`); a hosted catalog server + upload flow
   (serving the same JSON contract that `agy catalog add-repo` authors locally) is the remaining
   piece.
-- **TOML config merge** — a merge strategy that reads/writes TOML so the Codex (`config.toml`
-  `[mcp_servers]`/`[hooks]`) and Kimi drivers can install MCP/hooks, not just skills. The next
-  driver-extension milestone.
+- **TOML array-of-tables hooks** — Codex (`[[hooks.Event]]`) and Kimi (`[[hooks]]`) keep hooks
+  as an array of tables rather than named keys under a pointer, so they don't fit the current
+  key-scoped reversible merge contract. (TOML *named-table* merge — Codex MCP `[mcp_servers]` —
+  already ships; see §5.)
 - **Semantic translation** — the `transform` seam on a driver (§5) would let a component
   authored for one agent be reshaped for another (format/field translation), turning today's
   placement-mapping into true write-once-run-anywhere.

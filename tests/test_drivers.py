@@ -133,10 +133,15 @@ def test_new_driver_mcp_merge_dests(name, pointer_file):
 
 
 def test_codex_and_windsurf_omit_unsupported_types():
-    # Codex: no command/agent/mcp until TOML merge lands.
+    # Codex: skills + MCP (TOML merge); agent/command formats not translated.
     codex = BUILTIN_DRIVERS["codex"]
-    assert not codex.supports(_C.MCP)
+    assert codex.supports(_C.SKILL)
+    assert codex.supports(_C.MCP)
     assert not codex.supports(_C.COMMAND)
+    assert not codex.supports(_C.AGENT)
+    # Codex MCP merges into config.toml under the snake_case [mcp_servers] table.
+    assert codex.merge_dest(_C.MCP).file == ".codex/config.toml"
+    assert codex.merge_dest(_C.MCP).pointer == "mcp_servers"
     # Windsurf: no custom agent definitions; project MCP undocumented.
     windsurf = BUILTIN_DRIVERS["windsurf"]
     assert not windsurf.supports(_C.AGENT)
