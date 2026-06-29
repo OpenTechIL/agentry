@@ -35,10 +35,10 @@ docs = ["mkdocs>=1.6", "mkdocs-material>=9.5,<10"]
 build = ["pyinstaller>=6.0"]
 
 [project.urls]
-Homepage = "https://github.com/opentech/agentry"
-Documentation = "https://github.com/opentech/agentry/tree/main/docs"
-Repository = "https://github.com/opentech/agentry"
-Issues = "https://github.com/opentech/agentry/issues"
+Homepage = "https://github.com/OpenTechIL/agentry"
+Documentation = "https://github.com/OpenTechIL/agentry/tree/main/docs"
+Repository = "https://github.com/OpenTechIL/agentry"
+Issues = "https://github.com/OpenTechIL/agentry/issues"
 
 [project.scripts]
 agy = "agentry.cli:app"
