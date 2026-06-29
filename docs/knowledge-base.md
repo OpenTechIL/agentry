@@ -116,3 +116,14 @@ became the flat top-level **`agy publish`** command. Hard rename — the old `re
 - **`agy add` add-time hygiene is separate from reconcile-time correctness.** `_add_from_catalog` now also drops harness-variant components whose harness isn't an active target, so a claude-only install never *records* `hooks-cursor`/`hooks-codex` in `.agentry.yml`. This is purely cosmetic — reconcile already makes them harmless — but keeps the config and interactive picker clean.
 
 ---
+
+## 2026-06-29 — Canonical GitHub org is `OpenTechIL`, not `opentech`
+
+**Context:** The README's CI badge image and three other links 404'd.
+
+**Findings:**
+
+- **The repo lives at `github.com/OpenTechIL/agentry`, but docs had hardcoded `github.com/opentech/agentry`** (lowercase, no `IL`). GitHub org/repo paths are case-sensitive in the sense that the wrong slug simply doesn't exist → 404 on both the badge image and the link. The `.github/workflows/ci.yml` workflow was fine; only the URL org was wrong.
+- **Check the actual remote before trusting a URL in docs:** `git remote -v` showed `git@github.com:OpenTechIL/agentry.git`. Grepping `github.com/opentech` surfaced all four stale references (badge, `uvx --from git+…`, issue link, `git clone`) in one pass — fix them together, not just the visible badge.
+
+---

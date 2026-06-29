@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   colliding on `{name}`.
 - Contributor onboarding in the README: a Contributing section (dev setup, PR/CI
   expectations, the idempotency/safety rule) and a Code of Conduct link.
+- `ponytail` and `caveman` catalog entries in `registry/repositories.json`
+  (minimal-code guidance and output-compression skills).
 
 ### Changed
 - Renamed the catalog command surface for clarity: the consumer group `agy repo`
@@ -49,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to warnings so `--strict` fails on dead internal links and missing anchors.
 
 ### Fixed
+- Broken CI badge and links in the README: the badge image, `uvx --from git+…`
+  install command, "File an issue" link, and `git clone` URL all pointed at the
+  wrong GitHub org (`opentech/agentry`), so the badge and links 404'd. Corrected
+  all four to the real repo path `OpenTechIL/agentry`.
 - Docs `mkdocs build --strict` failure: `commands.md` linked to `../README.md` (outside
   `docs_dir`, unresolvable) and a heading anchor with a stray double hyphen. Pointed the
   README link at its GitHub URL, corrected the anchor, and added `commands.md` to the nav.

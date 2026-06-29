@@ -75,6 +75,22 @@
         "url": "https://github.com/obra/superpowers",
         "ref": "main"
       }
+    },
+    "ponytail": {
+      "summary": "Ponytail — guides agents to write minimal, necessary code via a 'laziness ladder' (YAGNI, reuse, stdlib, then minimum).",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/DietrichGebert/ponytail",
+        "ref": "main"
+      }
+    },
+    "caveman": {
+      "summary": "Caveman — compresses agent output by ~65% using caveman-style speech while preserving technical accuracy.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/juliusbrussee/caveman",
+        "ref": "main"
+      }
     }
   }
 }

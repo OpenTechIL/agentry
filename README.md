@@ -1,6 +1,6 @@
 # agentry
 
-[![CI](https://github.com/opentech/agentry/actions/workflows/ci.yml/badge.svg)](https://github.com/opentech/agentry/actions/workflows/ci.yml)
+[![CI](https://github.com/OpenTechIL/agentry/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenTechIL/agentry/actions/workflows/ci.yml)
 [![PyPI version](https://img.shields.io/pypi/v/agentry.svg)](https://pypi.org/project/agentry/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
@@ -30,7 +30,7 @@ agentry treats AI components like packages:
 No global install needed — run straight from git with [`uv`](https://docs.astral.sh/uv/):
 
 ```bash
-uvx --from git+https://github.com/opentech/agentry agy <command>
+uvx --from git+https://github.com/OpenTechIL/agentry agy <command>
 ```
 
 Or install into a project/venv:
@@ -132,7 +132,7 @@ Want a repo added to [`registry/repositories.json`](registry/repositories.json)?
   (or hand-edit the JSON), commit, and open a pull request. A `…/tree/<ref>/<subdir>` URL infers
   the ref and subdir; `--discover` pre-fills the components. See the
   [PR template](.github/PULL_REQUEST_TEMPLATE.md).
-- **Request via an issue** — prefer not to open a PR? [File an issue](https://github.com/opentech/agentry/issues)
+- **Request via an issue** — prefer not to open a PR? [File an issue](https://github.com/OpenTechIL/agentry/issues)
   with the repo URL and a one-line summary, and a maintainer will add it.
 
 ## Documentation
@@ -151,7 +151,7 @@ Contributions are very welcome — new targets, component types, catalog entries
 fixes.
 
 ```bash
-git clone https://github.com/opentech/agentry && cd agentry
+git clone https://github.com/OpenTechIL/agentry && cd agentry
 uv venv && uv pip install -e ".[dev]"   # editable install + test/lint tooling
 uv run pre-commit install               # format & lint on every commit
 uv run pytest                           # run the suite
