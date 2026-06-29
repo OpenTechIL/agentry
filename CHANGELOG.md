@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — 2026-06-25
 
 ### Added
+- Standalone `agy` binaries for Windows, macOS, and Linux, built with PyInstaller
+  and attached to each GitHub Release (`release-binaries.yml`), plus `install.sh` /
+  `install.ps1` one-line installers that download and checksum-verify the binary.
+- `scripts/bump.py X.Y.Z` to bump the version across `pyproject.toml`,
+  `src/agentry/__init__.py`, and `CHANGELOG.md`, then commit and tag in one step.
 - `agy catalog add-repo <git-url> [name]` to author entries in a curated catalog
   (`registry/repositories.json` by default, `--file` to override). Writes a minimal
   `summary` + `source` entry; `--discover` clones the repo and pre-fills `expose` from
