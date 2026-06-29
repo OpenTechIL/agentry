@@ -6,7 +6,7 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ## 2026-06-27 — MkDocs `--strict` CI failures & guardrails
 
-**Context:** The GitHub Pages docs build ([.github/workflows/docs.yml](https://github.com/opentech/agentry/blob/main/.github/workflows/docs.yml)) failed because [commands.md](commands.md) carried a link to `../README.md` (outside `docs_dir`) and a broken heading anchor. Fixed the links, then hardened the pipeline against recurrence.
+**Context:** The GitHub Pages docs build ([.github/workflows/docs.yml](https://github.com/OpenTechIL/agentry/blob/main/.github/workflows/docs.yml)) failed because [commands.md](commands.md) carried a link to `../README.md` (outside `docs_dir`) and a broken heading anchor. Fixed the links, then hardened the pipeline against recurrence.
 
 **Findings:**
 

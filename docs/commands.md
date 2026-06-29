@@ -1,7 +1,7 @@
 # agentry — Command reference
 
 The full `agy` command surface. Run `agy <command> --help` for the canonical, up-to-date flags.
-See [README](https://github.com/opentech/agentry/blob/main/README.md) for the quickstart and [architecture](architecture.md) for the model
+See [README](https://github.com/OpenTechIL/agentry/blob/main/README.md) for the quickstart and [architecture](architecture.md) for the model
 behind these commands.
 
 ## Project & components

@@ -12,6 +12,10 @@ which has to be dropped into a tool-specific location by hand:
 - OpenCode reads `.opencode/…` and `opencode.json`
 - Cursor reads `.cursor/rules/` and `.cursor/mcp.json`
 
+…and the same again for every other agent. Seven agents ship as built-in drivers today
+(Claude Code, OpenCode, Cursor, Codex, Gemini CLI, Windsurf, Kimi — see [§5](#5-drivers-the-target-side-drivers-specpy-targetspy)),
+and you can add more from config alone.
+
 Copy-pasting these by hand produces the classic failures software solved long ago:
 no versioning, no single source of truth, duplicated effort across projects, drift
 between machines, and no safe way to uninstall. This is **dependency hell** for AI.
@@ -27,12 +31,17 @@ between machines, and no safe way to uninstall. This is **dependency hell** for 
 | `.agentry/` | **Store** — downloaded git clones / local symlinks | ❌ gitignored |
 | `.agentry/.manifest.json` | **Reality** — what is actually installed on disk | ❌ gitignored |
 
-The three-way relationship is the heart of the design:
+The three-way relationship is the heart of the design — `reconcile()` (run by `agy sync`)
+makes the disk match the declared, pinned intent:
 
-```
-.agentry.yml  ──declares──▶  desired state
-.agentry.lock ──pins──────▶  exact versions   ┐
-.manifest     ──records───▶  installed state  ┘──▶ reconcile() makes disk match
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#5A4FCF','primaryTextColor':'#F8FAFC','lineColor':'#22D3EE','primaryBorderColor':'#22D3EE','secondaryColor':'#1E1E2E'}}}%%
+flowchart LR
+  Y["<b>.agentry.yml</b><br/>intent — declared"] --> R{{"reconcile()"}}
+  L["<b>.agentry.lock</b><br/>pinned — exact SHAs"] --> R
+  M["<b>.manifest.json</b><br/>reality — installed"] --> R
+  R --> D["disk matches<br/>(symlink / merge)"]
+  D -.->|"records what it did"| M
 ```
 
 ## 3. Component model
@@ -198,7 +207,7 @@ writes a component once, in one place. The **target side** is a set of **drivers
 per AI agent — that each say *how* and *where* those components install into that agent.
 This split is what lets one component repo serve many agents: author once, map per driver.
 
-A **driver** ([`drivers/<agent>.py`](https://github.com/opentech/agentry)) is a small
+A **driver** ([`drivers/<agent>.py`](https://github.com/OpenTechIL/agentry)) is a small
 dataclass that *composes* two things:
 
 1. A **capability map** (`spec.TargetSpec`): per component type, a **link**/**copy**
@@ -234,6 +243,17 @@ target_profiles:
 > YAML note: a `dest` containing `{name}` must be **quoted**, or YAML reads `{…}` as a flow mapping.
 
 An active target with neither a built-in driver nor a profile is reported via `unresolved_targets`.
+
+Adding an agent is **data, not a code change** — `target_profiles` deep-merges over the
+built-ins to override paths or introduce an entirely new tool:
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#5A4FCF','primaryTextColor':'#F8FAFC','lineColor':'#22D3EE','primaryBorderColor':'#22D3EE','secondaryColor':'#1E1E2E'}}}%%
+flowchart LR
+  B["built-in drivers<br/>claude · cursor · gemini · …"] --> M["resolved capability map<br/><code>resolve_targets()</code>"]
+  P["<b>target_profiles</b><br/>(your .agentry.yml)"] -.->|"deep-merge — adds / overrides"| M
+  M --> I["reconcile() installs<br/>to each agent's layout"]
+```
 
 ### Built-in drivers
 

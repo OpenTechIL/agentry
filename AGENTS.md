@@ -10,7 +10,8 @@ the conventions to follow when editing the code.
 `agentry` (CLI command `agy`) is a **dependency manager for AI coding agents**. It lets a
 project declare skills, agents, commands, tools, hooks, and MCP servers in `.agentry.yml`,
 pin them in `.agentry.lock`, and install them into each tool's native layout (`.claude/`,
-`.opencode/`, `.cursor/`) with one `agy sync`.
+`.cursor/`, `.gemini/`, `.opencode/`, … — seven agents ship built-in, and more can be added
+from config via `target_profiles`) with one `agy sync`. Write once, deploy to any agent.
 
 Python package, `src/` layout, built with `hatchling`, managed with [`uv`](https://docs.astral.sh/uv/).
 

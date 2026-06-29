@@ -8,14 +8,34 @@
 
 **A dependency manager for AI coding agents.** `agentry` (command: `agy`) lets you
 declare the skills, agents, commands, tools, hooks, and MCP servers your project
-uses — then install them into Claude Code, OpenCode, and Cursor with one command.
+uses — then install them into Claude Code, Cursor, Gemini CLI, OpenCode, Codex,
+Windsurf, and Kimi with one command. **Write once, deploy to any agent** — and teach
+it new agents without writing code.
+
+> agentry is a *dependency manager*, not an agent or a runtime. It installs the components
+> your agents read, then gets out of the way — nothing of it runs while your agents do.
 
 ## Why agentry
 
 The AI ecosystem is expanding without standardization. Today, developers manage AI components
-by hand — copying files into `.claude/`, `.opencode/`, `.cursor/` — which means version
-conflicts, security risks, and duplicated effort: the same **dependency hell** software solved
-decades ago with `pip`, `yarn`, and `uv`.
+by hand — copying files into `.claude/`, `.cursor/`, `.gemini/`, `.opencode/` — which means
+version conflicts, security risks, and duplicated effort: the same **dependency hell** software
+solved decades ago with `pip`, `yarn`, and `uv`.
+
+Declare your components once; `agy sync` installs them into every agent you target — each in
+its own native layout:
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#5A4FCF','primaryTextColor':'#F8FAFC','lineColor':'#22D3EE','primaryBorderColor':'#22D3EE','secondaryColor':'#1E1E2E'}}}%%
+flowchart LR
+  Y["<b>.agentry.yml</b><br/>declare once"] --> S{{"agy sync"}}
+  S --> C["Claude Code<br/><code>.claude/</code>"]
+  S --> U["Cursor<br/><code>.cursor/</code>"]
+  S --> G["Gemini CLI<br/><code>.gemini/</code>"]
+  S --> O["OpenCode<br/><code>.opencode/</code>"]
+  S --> X["Codex · Windsurf · Kimi"]
+  S -.->|"target_profiles — no code"| N["your own agent"]
+```
 
 agentry treats AI components like packages:
 
@@ -24,6 +44,18 @@ agentry treats AI components like packages:
 - **`.agentry/`** — a local store (git clones / local copies), git-ignored like `node_modules`.
 - One **`agy sync`** installs everything into each tool's native layout — via **symlinks**
   (skills/agents/commands/tools) or **reversible config merges** (hooks/MCP).
+
+### What you get
+
+- **Write once, install everywhere** — declare a skill/agent/tool/hook/MCP once; one `agy sync`
+  installs it into every enabled agent, no per-tool hand-wiring or copy-paste drift.
+- **Project-scoped, not global** — components live under the project (`.agentry.yml` +
+  git-ignored `.agentry/`), so environments stay isolated, reproducible, and committable.
+- **Split skills across projects** — granular distribution: enable a subset of a source per
+  project and share sources across initiatives without version conflicts.
+- **Extensible by data, not code** — override paths, declare recursive `requires`, route
+  per-harness hook/MCP fragments, or define a **brand-new agent** entirely in `.agentry.yml`
+  under `target_profiles` — no fork, no plugin.
 
 ## Install
 
@@ -103,9 +135,35 @@ tool (e.g. Cursor is rules-only); unsupported combinations are skipped with a wa
 Both sides of the mapping are data-driven: a source repo can self-describe its layout
 (`agentry.yaml`), components can declare recursive version-aware `requires`, tool-specific
 hook/MCP fragments route by an `-<harness>` suffix, and you can override paths or define a
-**brand-new AI tool** entirely in `.agentry.yml` under `target_profiles` — no code.
+**brand-new agent** entirely in `.agentry.yml` under `target_profiles` — no code, no fork.
+Adding an agent is data, not a code change:
+
+```mermaid
+%%{init: {'theme':'base','themeVariables':{'primaryColor':'#5A4FCF','primaryTextColor':'#F8FAFC','lineColor':'#22D3EE','primaryBorderColor':'#22D3EE','secondaryColor':'#1E1E2E'}}}%%
+flowchart LR
+  B["built-in drivers<br/>claude · cursor · gemini · …"] --> M["resolved<br/>capability map"]
+  P["<b>target_profiles</b><br/>(your .agentry.yml)"] -.->|"deep-merge — adds or overrides"| M
+  M --> I["agy sync<br/>installs to each agent"]
+```
+
 See [docs/architecture.md](docs/architecture.md) for the full capability map, descriptor schema,
 and safety model.
+
+## Supported agents
+
+Seven agents ship as built-in drivers; a `—` means the agent has no such concept (or a format
+agentry can't yet write). Add more, or override any path, from `.agentry.yml` alone.
+
+| Component | Claude Code | Cursor | Gemini CLI | OpenCode | Codex | Windsurf | Kimi |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| skill | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
+| agent | ✓ | ✓ | ✓ | ✓ | — | — | — |
+| command | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
+| tool | ✓ | — | — | ✓ | — | — | — |
+| hook | ✓ | — | ✓ | — | — | ✓ | — |
+| mcp | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+
+Exact destination paths per agent live in [docs/architecture.md](docs/architecture.md#built-in-drivers).
 
 ## Installing third-party skills
 
