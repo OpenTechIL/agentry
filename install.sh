@@ -15,7 +15,7 @@ os=$(uname -s)
 case "$os" in
   Linux) os=linux ;;
   Darwin) os=macos ;;
-  *) err "unsupported OS: $os (try: uv tool install agentry)" ;;
+  *) err "unsupported OS: $os (try: uv tool install git+https://github.com/OpenTechIL/agentry)" ;;
 esac
 
 arch=$(uname -m)
@@ -26,7 +26,7 @@ case "$arch" in
 esac
 
 if [ "$os" = "linux" ] && [ "$arch" = "arm64" ]; then
-  err "no prebuilt binary for linux-arm64 yet; install via 'uv tool install agentry'"
+  err "no prebuilt binary for linux-arm64 yet; install via 'uv tool install git+https://github.com/OpenTechIL/agentry'"
 fi
 target="${os}-${arch}"
 

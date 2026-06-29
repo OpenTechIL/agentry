@@ -14,7 +14,7 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
   'ARM64' { 'arm64' }
   default { throw "unsupported arch: $env:PROCESSOR_ARCHITECTURE" }
 }
-if ($arch -eq 'arm64') { throw "no prebuilt binary for windows-arm64 yet; use 'uv tool install agentry'" }
+if ($arch -eq 'arm64') { throw "no prebuilt binary for windows-arm64 yet; use 'uv tool install git+https://github.com/OpenTechIL/agentry'" }
 $target = "windows-$arch"
 
 $version = if ($env:AGENTRY_VERSION) { $env:AGENTRY_VERSION } else { 'latest' }

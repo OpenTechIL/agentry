@@ -2,7 +2,7 @@
 name: Release Binaries
 
 # Builds standalone `agy` executables and attaches them to the GitHub Release
-# for a v* tag. PyPI publishing lives separately in release.yml.
+# for a v* tag. This is the sole release/distribution channel (no PyPI).
 #
 # workflow_dispatch builds + uploads artifacts for inspection but does NOT
 # create a Release (dry run).

@@ -127,3 +127,16 @@ became the flat top-level **`agy publish`** command. Hard rename — the old `re
 - **Check the actual remote before trusting a URL in docs:** `git remote -v` showed `git@github.com:OpenTechIL/agentry.git`. Grepping `github.com/opentech` surfaced all four stale references (badge, `uvx --from git+…`, issue link, `git clone`) in one pass — fix them together, not just the visible badge.
 
 ---
+
+## 2026-06-29 — PyPI publish is blocked by a name collision; dropped in favor of binaries
+
+**Context:** The `Release` workflow (`release.yml`) failed publishing to PyPI on the `v0.1.0-pre` tag. Investigated whether to fix it or distribute differently.
+
+**Findings:**
+
+- **The CI error (`invalid-publisher` on the OIDC token exchange) was the *symptom*, not the root problem.** It meant the PyPI Trusted Publisher was never registered on pypi.org. But fixing that is impossible because of the deeper blocker below — don't burn time on the trusted-publishing config first.
+- **The PyPI name `agentry` is already owned by an unrelated project** (`penlight-ai/agentry`, "A library for creating AI agents"). You cannot register a Trusted Publisher for, or publish to, a project name you don't own. `agentry-cli` is also taken (a near-identical tool). Always `curl -s -o /dev/null -w "%{http_code}" https://pypi.org/pypi/<name>/json` (200 = taken, 404 = free) **before** wiring up any PyPI release path.
+- **PyPI distribution name is independent of the import package and the CLI command.** `[project].name` (distribution) can differ from the import package (`agentry`) and the `[project.scripts]` entry (`agy`) — so a PyPI rename would have needed *zero* code changes, only metadata + README. We still chose not to, because the project already ships standalone PyInstaller binaries + `install.sh`/`install.ps1` as the primary channel, making PyPI redundant.
+- **When removing a release channel, sweep the install fallbacks too.** `install.sh`/`install.ps1` had `uv tool install agentry` fallback hints (unsupported-OS / arm64 paths) that could never resolve once the name is unavailable; replaced with the git-based `uv tool install git+https://github.com/OpenTechIL/agentry`. Also fixed a stale cross-reference comment in `release-binaries.yml` pointing at the now-deleted `release.yml`.
+
+---

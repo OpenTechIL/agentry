@@ -54,6 +54,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uv run --extra docs` (pinned `mkdocs-material<10` in `pyproject.toml`) instead of an
   unpinned inline dependency, and `mkdocs.yml` promotes `links.not_found`/`links.anchors`
   to warnings so `--strict` fails on dead internal links and missing anchors.
+- Python install instructions in the README and the `uv tool install agentry` fallback
+  hints in `install.sh`/`install.ps1` now use the git source
+  (`git+https://github.com/OpenTechIL/agentry`) instead of the unpublishable PyPI name.
 
 ### Fixed
 - Broken CI badge and links in the README: the badge image, `uvx --from git+…`
@@ -79,6 +82,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   characters (e.g. an em-dash in a summary) literal rather than escaping them to `\uXXXX`.
 
 ### Removed
+- PyPI distribution: deleted the `release.yml` publish workflow and the PyPI version
+  badge. The name `agentry` is owned by an unrelated PyPI project, so publishing was
+  impossible; standalone binaries (`release-binaries.yml`) + `install.sh`/`install.ps1`
+  are now the sole distribution channel.
 - The skill registry: `registry/skills.json`, the `registries:` config key, the
   `agy registry` command group, the `RegistrySkill`/`RegistryIndex` models, the
   `load_index`/`find`/`list_skills` resolver functions, and the

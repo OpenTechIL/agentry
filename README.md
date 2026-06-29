@@ -1,7 +1,6 @@
 # agentry
 
 [![CI](https://github.com/OpenTechIL/agentry/actions/workflows/ci.yml/badge.svg)](https://github.com/OpenTechIL/agentry/actions/workflows/ci.yml)
-[![PyPI version](https://img.shields.io/pypi/v/agentry.svg)](https://pypi.org/project/agentry/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-261230.svg)](https://github.com/astral-sh/ruff)
@@ -90,7 +89,7 @@ uvx --from git+https://github.com/OpenTechIL/agentry agy <command>
 Or install into a project/venv:
 
 ```bash
-uv pip install agentry        # then: agy <command>
+uv pip install git+https://github.com/OpenTechIL/agentry   # then: agy <command>
 ```
 
 ## Quickstart
