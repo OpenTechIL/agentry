@@ -10,6 +10,10 @@ htmlcov/
 build/
 dist/
 
+# PyInstaller
+/build/
+/dist/
+
 # MkDocs build output
 site/
 

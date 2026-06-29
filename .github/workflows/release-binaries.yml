@@ -1,0 +1,82 @@
+# .github/workflows/release-binaries.yml
+name: Release Binaries
+
+# Builds standalone `agy` executables and attaches them to the GitHub Release
+# for a v* tag. PyPI publishing lives separately in release.yml.
+#
+# workflow_dispatch builds + uploads artifacts for inspection but does NOT
+# create a Release (dry run).
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-latest,  target: linux-x86_64,   ext: "" }
+          - { runner: macos-13,       target: macos-x86_64,    ext: "" }
+          - { runner: macos-14,       target: macos-arm64,     ext: "" }
+          - { runner: windows-latest, target: windows-x86_64,  ext: ".exe" }
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Build binary
+        run: uv run --extra build pyinstaller packaging/agy.spec
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=$(./dist/agy${{ matrix.ext }} version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Rename artifact
+        shell: bash
+        run: mv "dist/agy${{ matrix.ext }}" "agy-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
+      - name: Smoke test
+        shell: bash
+        run: ./agy-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }} version
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agy-${{ matrix.target }}
+          path: agy-*
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all binaries
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Generate checksums
+        working-directory: artifacts
+        run: |
+          sha256sum agy-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Create / update Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/agy-*
+            artifacts/SHA256SUMS.txt
+          generate_release_notes: true
