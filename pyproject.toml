@@ -49,6 +49,7 @@ packages = ["src/agentry"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+pythonpath = ["."]
 
 [tool.ruff]
 target-version = "py310"
