@@ -27,7 +27,29 @@ agentry treats AI components like packages:
 
 ## Install
 
-No global install needed — run straight from git with [`uv`](https://docs.astral.sh/uv/):
+### Standalone binary (no Python required)
+
+**macOS / Linux:**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.sh | sh
+```
+
+**Windows (PowerShell):**
+
+```powershell
+irm https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.ps1 | iex
+```
+
+This downloads the right binary for your OS/arch from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest), verifies its checksum, and installs `agy`. Pin a version with `AGENTRY_VERSION=0.2.0` or change the location with `AGENTRY_INSTALL_DIR`. (macOS binaries are unsigned — on first run, allow it via System Settings → Privacy & Security.)
+
+**Tell your coding agent** to install it on a machine:
+
+> Run: `curl -fsSL https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.sh | sh` (or the PowerShell line above on Windows), then verify with `agy version`.
+
+### With Python (uv / pipx)
+
+Run straight from git, no install:
 
 ```bash
 uvx --from git+https://github.com/OpenTechIL/agentry agy <command>

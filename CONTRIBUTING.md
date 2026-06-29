@@ -111,6 +111,15 @@ Every push and PR runs **CI** (ruff lint/format + the pytest matrix). On a `vX.Y
 the **Release** workflow builds and publishes to PyPI, and pushes to `main` redeploy the
 **docs site** to GitHub Pages. You don't need to do anything beyond opening a green PR.
 
+**Releasing.** Bump the version and tag in one step:
+
+```bash
+python scripts/bump.py X.Y.Z   # edits pyproject + __init__ + CHANGELOG, commits, tags vX.Y.Z
+git push --follow-tags
+```
+
+Pushing the `vX.Y.Z` tag fires two workflows: **Release** (`release.yml`, publishes to PyPI) and **Release Binaries** (`release-binaries.yml`, builds standalone executables for Windows/macOS/Linux and attaches them — with `SHA256SUMS.txt` — to the GitHub Release).
+
 ## Commit & PR conventions
 
 - Small, focused PRs. One behavior change per PR where possible.
