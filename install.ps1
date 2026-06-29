@@ -33,9 +33,9 @@ try {
   Invoke-WebRequest "$base/$asset" -OutFile "$tmp\agy.exe"
   Invoke-WebRequest "$base/SHA256SUMS.txt" -OutFile "$tmp\SHA256SUMS.txt"
 
-  $line = Select-String -Path "$tmp\SHA256SUMS.txt" -Pattern ([regex]::Escape($asset)) | Select-Object -First 1
+  $line = Select-String -Path "$tmp\SHA256SUMS.txt" -Pattern "  $([regex]::Escape($asset))$" | Select-Object -First 1
   if (-not $line) { throw "no checksum entry for $asset" }
-  $expected = $line.Line.Split(' ')[0].ToLower()
+  $expected = ($line.Line -split '\s+')[0].ToLower()
   $actual = (Get-FileHash "$tmp\agy.exe" -Algorithm SHA256).Hash.ToLower()
   if ($expected -ne $actual) { throw "checksum mismatch (expected $expected, got $actual)" }
 
@@ -44,7 +44,7 @@ try {
   Write-Host "Installed agy to $InstallDir\agy.exe"
 
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-  if ($userPath -notlike "*$InstallDir*") {
+  if (($userPath -split ';') -notcontains $InstallDir) {
     [Environment]::SetEnvironmentVariable('Path', "$userPath;$InstallDir", 'User')
     Write-Host "Added $InstallDir to your user PATH — restart your shell to pick it up."
   }

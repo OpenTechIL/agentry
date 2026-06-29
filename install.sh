@@ -49,7 +49,7 @@ echo "Downloading $asset ($tag)…"
 curl -fsSL "$base/$asset" -o "$tmp/agy" || err "download failed: $base/$asset"
 curl -fsSL "$base/SHA256SUMS.txt" -o "$tmp/SHA256SUMS.txt" || err "checksum download failed"
 
-expected=$(grep " $asset\$" "$tmp/SHA256SUMS.txt" | awk '{print $1}')
+expected=$(grep "  $asset\$" "$tmp/SHA256SUMS.txt" | awk '{print $1}')
 [ -n "$expected" ] || err "no checksum entry for $asset"
 if command -v sha256sum >/dev/null 2>&1; then
   actual=$(sha256sum "$tmp/agy" | awk '{print $1}')
@@ -69,4 +69,4 @@ case ":$PATH:" in
      echo "  export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
 esac
 
-"$INSTALL_DIR/agy" version
+"$INSTALL_DIR/agy" version || true
