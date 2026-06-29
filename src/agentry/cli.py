@@ -285,7 +285,11 @@ def version() -> None:
 @app.command()
 def init(
     target: list[str] = typer.Option(
-        None, "--target", "-t", help="Target AI tool(s): claude, opencode, cursor. Repeatable."
+        None,
+        "--target",
+        "-t",
+        help="Target AI tool(s): claude, opencode, cursor, codex, gemini, windsurf, kimi "
+        "(or a custom tool defined under target_profiles). Repeatable.",
     ),
 ) -> None:
     """Create .agentry.yml and add .agentry/ to .gitignore."""

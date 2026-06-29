@@ -24,6 +24,7 @@ dependencies = [
     "rich>=13.7",
     "pydantic>=2.6",
     "ruamel.yaml>=0.18",
+    "tomlkit>=0.13",
 ]
 
 [project.optional-dependencies]

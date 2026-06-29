@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 
 from .config import STORE_DIR
+from .drivers import BUILTIN_DRIVERS, Driver
 from .models import (
     LINK_TYPES,
     Component,
@@ -27,12 +28,6 @@ from .models import (
     RepositoryIndex,
     Strategy,
 )
-from .targets import BUILTIN_TARGETS
-
-#: Component types whose install dir Claude Code namespaces by subfolder. A command at
-#: ``.claude/commands/<repo>/adr.md`` is invoked as ``/<repo>:adr``; agents discover
-#: recursively so a subfolder just tidies them. Skills/tools must stay flat to be found.
-_NAMESPACED_TYPES = frozenset({ComponentType.COMMAND, ComponentType.AGENT})
 
 
 class RegistryError(RuntimeError):
@@ -183,7 +178,11 @@ def _namespace_dest(dest: str, repo: str) -> str:
 
 
 def build_install_profiles(
-    entry: RepositoryEntry, repo: str, comps: list[Component], active_targets: set[str]
+    entry: RepositoryEntry,
+    repo: str,
+    comps: list[Component],
+    active_targets: set[str],
+    drivers: dict[str, Driver] | None = None,
 ) -> dict[str, dict[ComponentType, ProfileRule]]:
     """Resolve a repo entry's ``copy``/``namespaced`` flags into concrete profile rules.
 
@@ -191,12 +190,14 @@ def build_install_profiles(
     link+merge rule), then for each file/dir component type the repo actually installs:
 
     * ``copy`` -> install via the copy strategy instead of the default symlink;
-    * ``namespaced`` -> nest command/agent dests under ``<repo>/`` (skills/tools stay flat).
+    * ``namespaced`` -> nest dests under ``<repo>/`` for the component types the target's
+      driver namespaces (Claude nests command/agent; skills/tools stay flat).
 
     A rule is synthesized only when the flags change something versus the built-in default,
     so a plain ``copy=false, namespaced=false`` repo adds nothing (the engine's link
     default applies). The result is ready to hand to ``ConfigStore.merge_target_profiles``.
     """
+    drivers = BUILTIN_DRIVERS if drivers is None else drivers
     profiles: dict[str, dict[ComponentType, ProfileRule]] = {
         t: dict(rules) for t, rules in entry.target_profiles.items()
     }
@@ -205,10 +206,10 @@ def build_install_profiles(
 
     present = {c.type for c in comps if c.type in LINK_TYPES}
     for target in active_targets:
-        base = BUILTIN_TARGETS.get(target)
+        driver = drivers.get(target)
         for ctype in present:
             existing = profiles.get(target, {}).get(ctype)
-            base_dest = base.link.get(ctype) if base else None
+            base_dest = driver.spec.link.get(ctype) if driver else None
             dest = existing.dest if existing and existing.dest else base_dest
             if dest is None:
                 continue  # target doesn't support this type as link — nothing to synthesize
@@ -217,7 +218,7 @@ def build_install_profiles(
                 if entry.copy_install
                 else (existing.strategy if existing else Strategy.LINK)
             )
-            if entry.namespaced and ctype in _NAMESPACED_TYPES:
+            if entry.namespaced and driver is not None and driver.namespaces(ctype):
                 dest = _namespace_dest(dest, repo)
             # Skip a no-op that just restates the built-in link default.
             if existing is None and strategy is Strategy.LINK and dest == base_dest:

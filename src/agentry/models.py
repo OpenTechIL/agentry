@@ -83,14 +83,28 @@ TargetName = str
 
 
 class Target:
-    """Namespace of built-in target tool ids."""
+    """Namespace of built-in target tool ids (one per driver in ``agentry.drivers``)."""
 
     CLAUDE = "claude"
     OPENCODE = "opencode"
     CURSOR = "cursor"
+    CODEX = "codex"
+    GEMINI = "gemini"
+    WINDSURF = "windsurf"
+    KIMI = "kimi"
 
 
-BUILTIN_TARGET_NAMES: frozenset[str] = frozenset({Target.CLAUDE, Target.OPENCODE, Target.CURSOR})
+BUILTIN_TARGET_NAMES: frozenset[str] = frozenset(
+    {
+        Target.CLAUDE,
+        Target.OPENCODE,
+        Target.CURSOR,
+        Target.CODEX,
+        Target.GEMINI,
+        Target.WINDSURF,
+        Target.KIMI,
+    }
+)
 
 #: AI-harness slugs that, used as a filename suffix (e.g. ``hooks-cursor.json``), mark a
 #: config fragment as belonging to that harness rather than the canonical (Claude) one.

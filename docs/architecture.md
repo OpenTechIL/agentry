@@ -108,10 +108,11 @@ shape the install layout at `agy add` time:
 
 - `"copy": true` — install this repo's file/dir components by **copying** instead of symlinking
   (real files, committable; default `false`).
-- `"namespaced": true` (the **default**) — nest **commands** and **agents** under a `<repo>/`
-  subfolder, so a plugin's slash commands are namespaced (`.claude/commands/<repo>/adr.md` →
-  `/<repo>:adr`). Skills stay flat (Claude Code only discovers `.claude/skills/<name>/SKILL.md`).
-  Set `"namespaced": false` for a flat layout.
+- `"namespaced": true` (the **default**) — nest installs under a `<repo>/` subfolder for the
+  component types the target agent's driver namespaces. The claude driver namespaces
+  **commands** and **agents**, so a plugin's slash commands become namespaced
+  (`.claude/commands/<repo>/adr.md` → `/<repo>:adr`); skills stay flat (Claude Code only
+  discovers `.claude/skills/<name>/SKILL.md`). Set `"namespaced": false` for a flat layout.
 
 ```json
 {
@@ -190,15 +191,34 @@ a Cursor or Codex fragment never lands in Claude's `settings.json`. The canonica
 file applies to every target that supports the type. As a final guard, a hook event Claude Code
 doesn't recognize is dropped from `.claude/settings.json` with a warning rather than written out.
 
-## 5. Target capability map (`targets.py`) — built-in + config
+## 5. Drivers — the target side (`drivers/`, `spec.py`, `targets.py`)
 
-Each target declares, per component type, a **link destination** (path template) or a
-**merge destination** (config file + JSON pointer). A type absent from both is
-unsupported → skipped with a warning.
+agentry's model has **two sides**. The **source side** (§4) is *canonical*: a repo author
+writes a component once, in one place. The **target side** is a set of **drivers** — one
+per AI agent — that each say *how* and *where* those components install into that agent.
+This split is what lets one component repo serve many agents: author once, map per driver.
 
-The table below is the **built-in default**. `resolve_targets(config)` deep-merges the
-project's `target_profiles` over it — overriding a path on an existing tool, or defining
-a brand-new tool entirely in config (target ids are open strings, not a closed enum):
+A **driver** ([`drivers/<agent>.py`](https://github.com/opentech/agentry)) is a small
+dataclass that *composes* two things:
+
+1. A **capability map** (`spec.TargetSpec`): per component type, a **link**/**copy**
+   destination (path template) or a **merge** destination (config file + JSON pointer). A
+   type absent from the map is unsupported for that agent → skipped with a warning.
+2. Optional **per-agent policies** for behavior that isn't pure path placement:
+   - `HookEventPolicy` — validate hook-event keys (Claude Code rejects a `settings.json`
+     carrying unknown event keys, so the claude driver drops them with a warning). No-op
+     for agents without one.
+   - `NamespacePolicy` — which component types nest under a `<repo>/` subfolder. The claude
+     driver namespaces commands/agents (`.claude/commands/<repo>/adr.md` → `/<repo>:adr`).
+   - `transform` — a **reserved seam** for future *semantic translation* (e.g. rewriting a
+     fragment between JSON/TOML/YAML, or between agent formats). Default `None` everywhere
+     today: agentry maps **placement**, it does not yet translate component formats.
+
+`resolve_drivers(config)` is the effective map. It reuses `resolve_targets(config)` — the
+single place that deep-merges the project's `target_profiles` over the built-in capability
+maps — then re-attaches each built-in agent's policies. A tool defined **only** in
+`target_profiles` (target ids are open strings, not a closed enum) gets a default
+no-policy driver, so the data-driven escape hatch needs no code:
 
 ```yaml
 # .agentry.yml
@@ -213,16 +233,28 @@ target_profiles:
 
 > YAML note: a `dest` containing `{name}` must be **quoted**, or YAML reads `{…}` as a flow mapping.
 
-An active target with neither a built-in nor a profile is reported via `unresolved_targets`.
+An active target with neither a built-in driver nor a profile is reported via `unresolved_targets`.
 
-| Type | Claude Code | OpenCode | Cursor |
-|---|---|---|---|
-| skill | `.claude/skills/{name}` | `.opencode/skills/{name}` | — |
-| agent | `.claude/agents/{name}.md` | `.opencode/agents/{name}.md` | `.cursor/rules/{name}.mdc` |
-| command | `.claude/commands/{name}.md` | `.opencode/commands/{name}.md` | `.cursor/rules/{name}.mdc` |
-| tool | `.claude/tools/{name}` | `.opencode/tools/{name}` | — |
-| hook | merge `.claude/settings.json` → `hooks` | — | — |
-| mcp | merge `.mcp.json` → `mcpServers` | merge `opencode.json` → `mcp` | merge `.cursor/mcp.json` → `mcpServers` |
+### Built-in drivers
+
+| Type | Claude Code | OpenCode | Cursor | Gemini CLI | Windsurf | Kimi | Codex |
+|---|---|---|---|---|---|---|---|
+| skill | `.claude/skills/{name}` | `.opencode/skills/{name}` | — | `.gemini/skills/{name}` | `.windsurf/skills/{name}` | `.kimi-code/skills/{name}` | `.agents/skills/{name}` |
+| agent | `.claude/agents/{name}.md` | `.opencode/agents/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/agents/{name}.md` | — | — | — |
+| command | `.claude/commands/{name}.md` | `.opencode/commands/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/commands/{name}.toml` | `.windsurf/workflows/{name}.md` | — | — |
+| tool | `.claude/tools/{name}` | `.opencode/tools/{name}` | — | — | — | — | — |
+| hook | merge `.claude/settings.json` → `hooks` | — | — | merge `.gemini/settings.json` → `hooks` | merge `.windsurf/hooks.json` → `hooks` | — | — |
+| mcp | merge `.mcp.json` → `mcpServers` | merge `opencode.json` → `mcp` | merge `.cursor/mcp.json` → `mcpServers` | merge `.gemini/settings.json` → `mcpServers` | — | merge `.kimi-code/mcp.json` → `mcpServers` | merge `.codex/config.toml` → `mcp_servers` |
+
+A `—` means the agent either has no such concept or expects a format agentry can't yet
+write. The newest drivers map what installs cleanly: skills everywhere, and MCP/hooks
+merged wherever the destination is JSON **or TOML**. The merge installer chooses the codec
+by the destination's extension — Codex's MCP servers merge into `.codex/config.toml` under
+the snake_case `[mcp_servers]` table (written with `tomlkit`, preserving the rest of the
+file), while the source fragment stays JSON. Still unmapped: per-tool **agent/command
+definition formats** agentry doesn't translate (e.g. Gemini's TOML commands install via
+`link` only when authored in that format), and **array-of-tables hooks** (Codex
+`[[hooks.Event]]`, Kimi `[[hooks]]`) which don't fit the named-entry merge contract.
 
 ## 6. The reconcile flow (`agy sync`)
 
@@ -274,7 +306,11 @@ cli.py          Typer app — command wiring + Rich output
 models.py       pydantic: Config, Source, Component, Lock, Manifest, enums
 config.py       .agentry.yml round-trip (ruamel, comment-preserving) + mutators
 lockfile.py     .agentry.lock read/write
-targets.py      per-tool capability map (TargetSpec)
+spec.py         capability-map dataclasses (TargetSpec / MergeDest / LinkMergeDest)
+drivers/        one module per AI agent (claude, opencode, cursor, codex, gemini, windsurf, kimi)
+  base.py       Driver = capability map + optional policies (hook-event, namespace, transform)
+  __init__.py   BUILTIN_DRIVERS registry + resolve_drivers()
+targets.py      effective capability map: BUILTIN_TARGETS (from drivers) + target_profiles merge
 discovery.py    scan a source for available components + their `requires` (LAYOUT)
 resolver.py     download/checkout into the store; resolve refs → SHA/hash
 deps.py         transitive dependency closure (recursive, version-aware) → augmented graph
@@ -282,7 +318,7 @@ registry.py     resolve a bare repo name via external catalogs (file/URL) → So
 manifest.py     .agentry/.manifest.json read/write
 installers/
   link.py       symlink create/remove/state (lexical, store-scoped)
-  merge.py      JSON inject/remove/state (key-scoped, reversible)
+  merge.py      JSON/TOML inject/remove/state (key-scoped, reversible; codec by file ext)
   generate.py   run a component's own installer (gated); track produced files for safe removal
 reconcile.py    sync engine + status (drift report)
 gitignore.py    ensure .agentry/ is ignored
@@ -290,10 +326,13 @@ gitignore.py    ensure .agentry/ is ignored
 
 ## 9. Extension points
 
-- **New target tool** — *no code needed*: define it under `target_profiles` in `.agentry.yml`.
-  To ship it as a built-in, add a `TargetSpec` to `targets.BUILTIN_TARGETS`.
+- **New agent (driver)** — *no code needed* for a one-off: define the tool under
+  `target_profiles` in `.agentry.yml`. To ship it as a **built-in driver**, add a
+  `drivers/<agent>.py` exposing a `DRIVER` (its `TargetSpec` + any policies), register it in
+  `BUILTIN_DRIVERS`, add the name to `models.BUILTIN_TARGET_NAMES`, and add a `test_drivers.py`
+  case. See **Adding a driver** in `CONTRIBUTING.md`.
 - **New component type** — add to `ComponentType`, `LINK_TYPES`/`MERGE_TYPES`, `TYPE_IS_DIR`/
-  `TYPE_EXT`, and a destination in each relevant `TargetSpec`.
+  `TYPE_EXT`, and a destination in each relevant driver's `TargetSpec`.
 - **New source layout** — *no code needed*: ship an `agentry.yaml` descriptor in the source repo.
 - **New source kind** — add a `SourceType` and a branch in `resolver.resolve`.
 
@@ -303,6 +342,13 @@ gitignore.py    ensure .agentry/ is ignored
   ship today against file/URL catalogs (`registry.py`); a hosted catalog server + upload flow
   (serving the same JSON contract that `agy catalog add-repo` authors locally) is the remaining
   piece.
+- **TOML array-of-tables hooks** — Codex (`[[hooks.Event]]`) and Kimi (`[[hooks]]`) keep hooks
+  as an array of tables rather than named keys under a pointer, so they don't fit the current
+  key-scoped reversible merge contract. (TOML *named-table* merge — Codex MCP `[mcp_servers]` —
+  already ships; see §5.)
+- **Semantic translation** — the `transform` seam on a driver (§5) would let a component
+  authored for one agent be reshaped for another (format/field translation), turning today's
+  placement-mapping into true write-once-run-anywhere.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
 - **Hook array-merge** — richer merging for event-keyed hook arrays beyond the named-key contract.
 - **Copy fallback** — copy instead of symlink for filesystems without symlink support (Windows).

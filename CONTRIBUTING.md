@@ -32,8 +32,10 @@ src/agentry/
   models.py       data models (pydantic)
   config.py       .agentry.yml round-trip
   lockfile.py     .agentry.lock
-  targets.py      per-tool capability map
-  discovery.py    source scanning
+  spec.py         capability-map dataclasses (TargetSpec / MergeDest / LinkMergeDest)
+  drivers/        one module per AI agent (the target side)
+  targets.py      effective capability map (drivers + target_profiles)
+  discovery.py    source scanning (the source side)
   resolver.py     download/checkout sources
   manifest.py     installed-state record
   installers/     link.py (symlink) + merge.py (config inject)
@@ -41,34 +43,57 @@ src/agentry/
 tests/            pytest suite
 ```
 
-## How to add things
+agentry has **two sides**. The *source side* (`discovery.py`) is canonical — a component
+is authored once. The *target side* (`drivers/`) maps those components into each AI agent.
+Adding support for a new agent means adding a driver; it never touches the source side.
 
-**A new target AI tool** (e.g. another editor):
-- *End users* need no code — they define it under `target_profiles` in `.agentry.yml`.
-- To ship it as a **built-in default**:
-  1. Add a `TargetSpec` to `BUILTIN_TARGETS` in `targets.py` (and an id constant on `Target` in `models.py`).
-  2. Add a row to the capability table in `docs/architecture.md`.
-  3. Cover it in `tests/`.
+## Adding a driver for a new agent
+
+A **driver** ([`drivers/<agent>.py`](src/agentry/drivers)) represents one kind of AI agent
+(Claude Code, Gemini CLI, …). For a one-off, end users need no code — they define the tool
+under `target_profiles` in `.agentry.yml`. To ship it as a **built-in**:
+
+1. Create `src/agentry/drivers/<agent>.py` exposing a `DRIVER` — a `Driver` wrapping a
+   `TargetSpec` (per component type, a link/copy `dest` template or a `MergeDest`). Map only
+   what installs cleanly with the current strategies; omit a type the agent doesn't support
+   or whose format agentry can't yet write (it'll be skipped, not broken). Attach a
+   `HookEventPolicy`/`NamespacePolicy` only if the agent needs that behavior — see
+   `drivers/claude.py` for the fully-featured example and `drivers/kimi.py` for a minimal one.
+2. Register it in `BUILTIN_DRIVERS` in `drivers/__init__.py`, and add the name to
+   `Target` + `BUILTIN_TARGET_NAMES` in `models.py`.
+3. Add a row to the capability table in `docs/architecture.md` and a case to
+   `tests/test_drivers.py` (it's parametrized — usually a few lines).
+
+> agentry maps **placement**, not format: it puts an authored file in the right directory,
+> it doesn't translate a component between agent formats. The `Driver.transform` field is a
+> reserved seam for that future capability (see the architecture doc).
 
 **A new component type:**
 1. Add it to `ComponentType` and to `LINK_TYPES` or `MERGE_TYPES` in `models.py`.
 2. Add a `discovery.LAYOUT` entry (where it lives in a source repo).
-3. Add a destination for it in each relevant `TargetSpec`.
+3. Add a destination for it in each relevant driver's `TargetSpec`.
 4. Update docs + tests.
 
 **A new source kind:** add a `SourceType` value and a branch in `resolver.resolve`.
 
-## Source-repo layout (for component authors)
+## Authoring a portable component repo (for component authors)
 
-A source repo agentry installs from mirrors the standard agent layout:
+Write your skills/agents/commands once with the standard layout — agentry maps them into
+whichever agents the consumer targets:
 
 ```
 skills/<name>/        agents/<name>.md      commands/<name>.md
 tools/<name>/         hooks/<name>.json     mcp/<name>.json
 ```
 
-`hooks/*.json` and `mcp/*.json` are JSON **objects of named entries** (see the merge
-contract in the architecture doc).
+(Or self-describe a non-standard layout with an `agentry.yaml` descriptor — see the
+architecture doc.) `hooks/*.json` and `mcp/*.json` are JSON **objects of named entries**
+(see the merge contract in the architecture doc).
+
+When a config fragment genuinely differs per agent, ship **per-harness variants** side by
+side — `hooks/hooks.json` (canonical) plus `hooks/hooks-cursor.json`,
+`hooks/hooks-codex.json`, etc. agentry routes each `-<harness>` variant only to its matching
+target; the suffix-less file applies to every other target that supports the type.
 
 ## Tests & linting
 

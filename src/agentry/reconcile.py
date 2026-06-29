@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import deps, discovery
 from .config import ConfigStore
+from .drivers import resolve_drivers
 from .gitignore import ensure_gitignore
 from .installers import copy as copy_inst
 from .installers import generate as gen_inst
@@ -40,16 +41,10 @@ from .models import (
     Manifest,
     SourceType,
     Strategy,
-    Target,
 )
 from .resolver import effective_root
-from .targets import (
-    LinkMergeDest,
-    MergeDest,
-    filter_claude_hook_events,
-    resolve_targets,
-    unresolved_targets,
-)
+from .spec import LinkMergeDest, MergeDest
+from .targets import unresolved_targets
 
 
 @dataclass
@@ -117,8 +112,8 @@ def compute_desired(
     list[DesiredGenerate],
     list[DesiredLinkMerge],
 ]:
-    specs = resolve_targets(config)
-    for missing in unresolved_targets(config, specs):
+    drivers = resolve_drivers(config)
+    for missing in unresolved_targets(config):
         warnings.append(
             f"target '{missing}' is undefined — add it under target_profiles in .agentry.yml"
         )
@@ -163,8 +158,8 @@ def compute_desired(
                 continue
 
         for tname in comp.applies_to(config.targets):
-            spec = specs.get(tname)
-            if spec is None:
+            driver = drivers.get(tname)
+            if driver is None:
                 continue  # already warned via unresolved_targets
             # Per-harness merge fragments (e.g. hooks-cursor.json) install only into the
             # matching target; skip foreign harnesses so a Cursor/Codex variant never
@@ -173,7 +168,7 @@ def compute_desired(
                 h = discovery.harness_suffix(comp.name)
                 if h is not None and h != tname:
                     continue
-            strat = spec.strategy(comp.type)
+            strat = driver.strategy(comp.type)
             if strat is None:
                 warnings.append(
                     f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped"
@@ -181,35 +176,38 @@ def compute_desired(
                 continue
             if strat is Strategy.LINK:
                 links.append(
-                    DesiredLink(comp.ref, tname, spec.link_dest(comp.type, comp.name), artifact)
+                    DesiredLink(comp.ref, tname, driver.link_dest(comp.type, comp.name), artifact)
                 )
             elif strat is Strategy.COPY:
                 copies.append(
-                    DesiredCopy(comp.ref, tname, spec.copy_dest(comp.type, comp.name), artifact)
+                    DesiredCopy(comp.ref, tname, driver.copy_dest(comp.type, comp.name), artifact)
                 )
             elif strat is Strategy.LINK_MERGE:
                 lm = _compute_link_merge(
-                    comp, src, tname, spec.link_merge_dest(comp.type), artifact, warnings
+                    comp, src, tname, driver.link_merge_dest(comp.type), artifact, warnings
                 )
                 if lm is not None:
                     link_merges.append(lm)
             else:
-                dest = spec.merge_dest(comp.type)
+                dest = driver.merge_dest(comp.type)
                 try:
                     entries = merge_inst.select_entries(merge_inst.load_fragment(artifact), dest)
                 except (ValueError, OSError) as exc:
                     warnings.append(f"{comp.ref}: {exc}")
                     continue
-                # Defense-in-depth: never write an unrecognized hook event into Claude's
-                # settings.json (Claude Code rejects unknown events and ignores the file).
-                if comp.type is ComponentType.HOOK and tname == Target.CLAUDE:
-                    entries, dropped = filter_claude_hook_events(entries)
+                # Defense-in-depth: drop hook events the target doesn't recognize (e.g. Claude
+                # Code rejects a settings.json carrying unknown events). No-op for agents
+                # without a hook-event policy.
+                if comp.type is ComponentType.HOOK:
+                    entries, dropped = driver.filter_hook_events(entries)
                     for bad in dropped:
                         warnings.append(
-                            f"{comp.ref}: hook event '{bad}' is not a recognized Claude Code event — skipped"
+                            f"{comp.ref}: hook event '{bad}' is not a recognized {tname} event — skipped"
                         )
                     if not entries:
                         continue
+                # Seam: a driver.transform (currently always None) would reshape `entries`
+                # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
                 merges.append(DesiredMerge(comp.ref, tname, dest, entries, list(entries)))
     return links, copies, merges, generates, link_merges
 
