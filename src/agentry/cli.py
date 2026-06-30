@@ -110,6 +110,32 @@ def _parse_types(values: list[str] | None) -> list[ComponentType]:
     return out
 
 
+def _print_unified_diff(before: str, after: str, label: str) -> None:
+    """Show a colored unified diff of a proposed file write (preview before confirm)."""
+    import difflib
+
+    diff = difflib.unified_diff(
+        before.splitlines(),
+        after.splitlines(),
+        f"{label} (current)",
+        f"{label} (proposed)",
+        lineterm="",
+    )
+    any_line = False
+    for line in diff:
+        any_line = True
+        if line.startswith("+") and not line.startswith("+++"):
+            console.print(f"[green]{line}[/green]")
+        elif line.startswith("-") and not line.startswith("---"):
+            console.print(f"[red]{line}[/red]")
+        elif line.startswith("@@"):
+            console.print(f"[cyan]{line}[/cyan]")
+        else:
+            console.print(f"[dim]{line}[/dim]")
+    if not any_line:
+        console.print("[dim](no changes)[/dim]")
+
+
 def _print_result(res: SyncResult) -> None:
     for name, sha in res.resolved.items():
         console.print(f"  [dim]resolved[/dim] {name} → [cyan]{sha[:12]}[/cyan]")
@@ -1070,13 +1096,31 @@ def emit_agents_md(
     check: bool = typer.Option(
         False, "--check", help="Verify the file is up to date; exit 1 if not (for CI). No write."
     ),
+    agent: bool = typer.Option(
+        False, "--agent", help="Synthesize via your configured agent CLI instead of concatenating."
+    ),
+    allow_transform: bool = typer.Option(
+        False, "--allow-transform", help="Permit --agent to run the configured agent command."
+    ),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt (auto-apply; for CI)."
+    ),
 ) -> None:
     """Compose a portable AGENTS.md from this project's skills/agents/commands.
 
-    Deterministic and reproducible — same components produce the same bytes, so the result is
-    safe to commit and verify in CI with `--check`. Run it again to refresh after changes.
+    Default (deterministic) mode concatenates component bodies — same inputs produce the same
+    bytes, so the result is safe to commit and verify in CI with `--check`. With `--agent`, the
+    content is instead *synthesized* by your own agent CLI (configured under `transform.command`
+    in .agentry.yml); that runs only with `--allow-transform`, previews a diff, and asks before
+    writing (skip the prompt with `--yes`).
     """
-    from .emit import compose_agents_md, gather_items
+    from .emit import (
+        TransformError,
+        build_synthesis_prompt,
+        compose_agents_md,
+        gather_items,
+        run_agent,
+    )
 
     store = _load()
     config = store.parsed()
@@ -1086,16 +1130,52 @@ def emit_agents_md(
             "[yellow]No skill/agent/command components to compose into AGENTS.md.[/yellow]"
         )
         raise typer.Exit(0)
-    content = compose_agents_md(items)
     target = output if output.is_absolute() else _root() / output
 
-    if check:
-        current = target.read_text(encoding="utf-8") if target.is_file() else ""
-        if current != content:
-            err.print(f"[red]{output} is out of date.[/red] Run `agy emit agents-md` to refresh.")
+    if agent:
+        if check:
+            err.print(
+                "[red]--check is for the deterministic mode; agent output isn't reproducible.[/red]"
+            )
             raise typer.Exit(1)
-        console.print(f"[green]{output} is up to date[/green] ({len(items)} component(s)).")
-        return
+        command = config.transform.command if config.transform else []
+        if not command:
+            err.print(
+                "[red]No transform command configured.[/red] Set `transform.command` "
+                "(e.g. [claude, -p]) in .agentry.yml."
+            )
+            raise typer.Exit(1)
+        if not allow_transform:
+            err.print(
+                "[red]--agent needs --allow-transform[/red] (it runs your configured agent "
+                f"command: [dim]{' '.join(command)}[/dim])."
+            )
+            raise typer.Exit(1)
+        console.print(f"  [dim]synthesizing via[/dim] {' '.join(command)} …")
+        try:
+            content = run_agent(command, build_synthesis_prompt(items))
+        except TransformError as exc:
+            err.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1)
+        current = target.read_text(encoding="utf-8") if target.is_file() else ""
+        if current == content:
+            console.print(f"[green]{output} already matches the synthesized output.[/green]")
+            return
+        _print_unified_diff(current, content, str(output))
+        if not yes and not typer.confirm(f"Write {output}?"):
+            console.print("[dim]Aborted; nothing written.[/dim]")
+            raise typer.Exit(0)
+    else:
+        content = compose_agents_md(items)
+        if check:
+            current = target.read_text(encoding="utf-8") if target.is_file() else ""
+            if current != content:
+                err.print(
+                    f"[red]{output} is out of date.[/red] Run `agy emit agents-md` to refresh."
+                )
+                raise typer.Exit(1)
+            console.print(f"[green]{output} is up to date[/green] ({len(items)} component(s)).")
+            return
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")

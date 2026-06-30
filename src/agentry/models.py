@@ -256,6 +256,17 @@ class Registry(BaseModel):
     location: str  # local path (relative to project root or absolute) or http(s) URL
 
 
+class TransformConfig(BaseModel):
+    """How the AI-agent transform provider runs (opt-in; used by ``agy emit ... --agent``).
+
+    ``command`` is an argv list for *your own* agent CLI (e.g. ``["claude", "-p"]`` or
+    ``["codex", "exec"]``); agentry feeds the prompt on **stdin** and reads the result from
+    stdout. agentry embeds no model or key — it orchestrates the CLI you already trust.
+    """
+
+    command: list[str] = Field(default_factory=list)
+
+
 class Config(BaseModel):
     """The full ``.agentry.yml`` document."""
 
@@ -268,6 +279,8 @@ class Config(BaseModel):
     repositories: list[Registry] = Field(default_factory=list)
     # Override built-in target maps or define entirely new tools (data-driven).
     target_profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
+    # AI-agent transform provider (opt-in): how ``agy emit ... --agent`` invokes your agent CLI.
+    transform: TransformConfig | None = None
 
     def source(self, name: str) -> Source | None:
         return next((s for s in self.sources if s.name == name), None)
