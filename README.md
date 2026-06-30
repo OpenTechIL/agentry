@@ -44,17 +44,32 @@ agentry treats AI components like packages:
 - One **`agy sync`** installs everything into each tool's native layout — via **symlinks**
   (skills/agents/commands/tools) or **reversible config merges** (hooks/MCP).
 
-### What you get
+### What makes it different
 
-- **Write once, install everywhere** — declare a skill/agent/tool/hook/MCP once; one `agy sync`
-  installs it into every enabled agent, no per-tool hand-wiring or copy-paste drift.
-- **Project-scoped, not global** — components live under the project (`.agentry.yml` +
-  git-ignored `.agentry/`), so environments stay isolated, reproducible, and committable.
-- **Split skills across projects** — granular distribution: enable a subset of a source per
-  project and share sources across initiatives without version conflicts.
-- **Extensible by data, not code** — override paths, declare recursive `requires`, route
-  per-harness hook/MCP fragments, or define a **brand-new agent** entirely in `.agentry.yml`
-  under `target_profiles` — no fork, no plugin.
+agentry optimizes the thing you do most — *editing* agent context — and refuses to do the
+things that quietly break a project. No compile step, no static artifact to regenerate, no
+silent overwrites.
+
+- **Edit once — every agent sees it instantly.** The default install is a live **symlink** into
+  a single store. Change a skill in one place and Claude, Cursor, Copilot, and the rest pick it
+  up immediately — there's no compile, rebuild, or re-sync step in the loop.
+- **Any agent — even your own.** Targets are open strings, not a closed list. Support a
+  brand-new or in-house agent in a few lines of `target_profiles` (no fork, no plugin, no
+  release wait), and `agy target add` installs **shared driver overlays** so you needn't even
+  write that yourself.
+- **It never touches what you wrote.** A config merge writes only the keys it owns; a symlink
+  refuses to clobber a real file; `agy remove` reverses cleanly. These are
+  [CI-enforced guarantees](tests/test_guarantees.py), not promises.
+- **Loud, never silent.** `agy doctor` surfaces undefined targets, unset `${VARs}`, and drift
+  *before* they bite; `agy status`/`agy why` run the same resolver as install, so they can't
+  report phantom drift install never produced.
+- **Reproducible by default.** A committed, timestamp-free `.agentry.lock` pins exact SHAs;
+  `agy sync --frozen` installs strictly from it and fails on any drift — clean CI.
+- **A dependency manager, not a runtime.** It installs what your agents read, then gets out of
+  the way — nothing of it runs while your agents do, and it embeds no model or API key.
+- **Portable & interoperable.** Emit a standard `AGENTS.md` (`agy emit agents-md`), consume and
+  import other agent-package formats, and — when a tool needs a different shape — translate a
+  component's content with the opt-in `transform` seam.
 
 ## Install
 
@@ -126,8 +141,8 @@ agy sync                                        # reconcile to match config + lo
 - `agy why <ref>` — explain a component: its source + pinned revision and where it installs.
 - `agy target add NAME` / `agy target list` — install or browse shared driver overlays (how an
   agent installs) published by a catalog, making a new target resolvable without writing config.
-- `agy import apm [--file apm.yml]` — translate a Microsoft **apm** project (`apm.yml`) into
-  `.agentry.yml` — sources, components, targets, and inline MCP servers — then `agy sync`.
+- `agy import apm [--file apm.yml]` — translate another agent-package-manager manifest
+  (`apm.yml`) into `.agentry.yml` — sources, components, targets, and inline MCP — then `agy sync`.
 - `agy emit agents-md [--check] [--agent]` — compose a portable `AGENTS.md` from your
   skills/agents/commands. Deterministic by default (`--check` verifies it in CI); `--agent`
   *synthesizes* it via your own agent CLI (`transform.command` in `.agentry.yml`), gated by
@@ -246,13 +261,13 @@ Most skills on GitHub don't follow agentry's `skills/<name>/` layout. Three ways
    at it and install by name. The catalog schema (including the `copy` and `namespaced` per-repo
    flags) is documented in [docs/architecture.md](docs/architecture.md#4-source-repo-layout--convention-or-descriptor).
 
-4. **Microsoft apm packages** — a repo with an apm `.apm/` tree works as a source as-is:
+4. **`.apm/`-format packages** — a repo with an `.apm/` package tree works as a source as-is:
    agentry discovers its skills/agents/prompts and installs them under agentry's naming, no
-   republishing. `agy import apm` translates the `apm.yml` manifest; this consumes the package.
+   republishing. (`agy import apm` translates the matching `apm.yml` manifest.)
 
    ```bash
-   agy source add some-apm-pkg https://github.com/org/apm-package
-   agy add some-apm-pkg/skill/<name>     # or `agy list` to see what it provides
+   agy source add some-pkg https://github.com/org/some-pkg
+   agy add some-pkg/skill/<name>     # or `agy list` to see what it provides
    ```
 
 ## Contribute a repo to the starter catalog
