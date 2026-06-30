@@ -293,13 +293,15 @@ def _compute_link_merge(
 # -- apply ---------------------------------------------------------------
 
 
-def sync(root: Path, *, update: bool = False, allow_run: bool = False) -> SyncResult:
+def sync(
+    root: Path, *, update: bool = False, allow_run: bool = False, frozen: bool = False
+) -> SyncResult:
     store = ConfigStore.load(root)
     config = store.parsed()
     result = SyncResult()
 
     # 1. Resolve sources + the transitive dependency closure into the store.
-    graph, lock = deps.resolve_graph(root, config, load_lock(root), update=update)
+    graph, lock = deps.resolve_graph(root, config, load_lock(root), update=update, frozen=frozen)
     result.resolved = graph.resolved
     result.warnings.extend(graph.warnings)
     save_lock(root, lock)

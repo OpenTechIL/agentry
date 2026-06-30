@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import discovery
+from .config import LOCK_NAME
 from .lockfile import upsert_entry
 from .models import Component, Config, Dependency, Lock, Source, SourceType
 from .resolver import ResolveError, effective_root, resolve
@@ -75,13 +76,18 @@ def _synth_name(url: str, taken: set[str]) -> str:
 
 
 def resolve_graph(
-    root: Path, config: Config, lock: Lock, *, update: bool = False
+    root: Path, config: Config, lock: Lock, *, update: bool = False, frozen: bool = False
 ) -> tuple[DepGraph, Lock]:
     """Resolve every source and the transitive component closure.
 
     Returns the augmented :class:`DepGraph` and a freshly-built :class:`Lock` (config
     sources plus the synthesized sources actually reached). The caller decides whether to
     persist the lock.
+
+    ``frozen`` (mutually exclusive with ``update``) installs strictly from ``.agentry.lock``:
+    every source — configured *or* transitive — must already be pinned, and a source whose
+    resolved value differs from the lock (a moved git ref, a changed local source) aborts
+    with :class:`~agentry.resolver.ResolveError`. This is the reproducible-CI guarantee.
     """
     graph = DepGraph()
     new_lock = Lock(version=lock.version)
@@ -97,8 +103,18 @@ def resolve_graph(
         if src.name in graph.resolved:
             return
         existing = lock.entry(src.name)
+        if frozen and existing is None:
+            raise ResolveError(
+                f"--frozen: source '{src.name}' is not pinned in {LOCK_NAME}; "
+                "run `agy update` to refresh the lockfile first"
+            )
         pinned = None if update else (existing.resolved if existing else None)
         entry = resolve(root, src, pinned=pinned)
+        if frozen and existing is not None and entry.resolved != existing.resolved:
+            raise ResolveError(
+                f"--frozen: source '{src.name}' drifted from {LOCK_NAME} "
+                f"({existing.resolved} != {entry.resolved})"
+            )
         entry.synthesized = src.name not in cfg_names
         upsert_entry(new_lock, entry)
         graph.resolved[src.name] = entry.resolved
