@@ -114,6 +114,7 @@ agy sync                                        # reconcile to match config + lo
 - `agy sync [--frozen]` — reconcile on-disk state to config + lock (idempotent). `--frozen`
   installs strictly from `.agentry.lock` and fails on any unpinned source or drift (for CI).
 - `agy status` — report drift between config and what's installed.
+- `agy why <ref>` — explain a component: its source + pinned revision and where it installs.
 - `agy update [SOURCE]` — re-resolve refs to latest and rewrite `.agentry.lock`.
 - `agy version` — print the installed version.
 
@@ -150,6 +151,24 @@ flowchart LR
 
 See [docs/architecture.md](docs/architecture.md) for the full capability map, descriptor schema,
 and safety model.
+
+## Safe by construction
+
+agentry never clobbers what you wrote, and every install fully reverses. These aren't
+promises — they're [CI-enforced guarantees](tests/test_guarantees.py):
+
+- **It never overwrites hand-edited config.** A config merge writes only the keys it owns and
+  leaves the rest of your `.mcp.json` / `settings.json` — comments, key order, and your own
+  entries — untouched. A symlink install refuses to clobber a path it doesn't own.
+- **`agy remove` truly reverses.** Disabling a component deletes exactly its symlink and its
+  merged keys, then prunes empty dirs — no stale files, no empty shells left behind.
+- **One resolution path.** `agy status` runs the same resolver as `agy sync`, so it can never
+  report drift that install didn't produce.
+- **A stable, timestamp-free lockfile.** Re-running `agy sync` with unchanged inputs rewrites
+  `.agentry.lock` byte-for-byte — no churn in your diffs.
+
+Inspect any component's provenance with **`agy why <ref>`** — where it came from (source +
+pinned revision) and exactly which targets it installs to. No silent autodetection.
 
 ## Supported agents
 
