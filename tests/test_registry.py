@@ -135,6 +135,23 @@ def test_build_install_profiles_preserves_explicit_rules():
     assert profiles["claude"][_C.COMMAND].dest == ".claude/commands/arckit/{name}.md"
 
 
+def test_shipped_superpowers_entry_yields_link_merge_hook_profile():
+    """The curated catalog's superpowers entry must resolve to a claude/hook link+merge
+    profile — otherwise its plugin-style ${CLAUDE_PLUGIN_ROOT} hook lands in settings.json
+    verbatim and Claude Code rejects it at startup."""
+    catalog_path = Path(__file__).resolve().parent.parent / "registry" / "repositories.json"
+    config = Config(repositories=[Registry(name="starter", location=str(catalog_path))])
+    match = reg.find_repo(catalog_path.parent.parent, config, "superpowers")
+    assert match is not None
+    _, _, entry = match
+
+    profiles = reg.build_install_profiles(entry, "superpowers", _comps(_C.HOOK), {"claude"})
+    rule = profiles["claude"][_C.HOOK]
+    assert rule.strategy is Strategy.LINK_MERGE
+    assert rule.rewrite_from == "${CLAUDE_PLUGIN_ROOT}/hooks"
+    assert rule.rewrite_to == "${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}"
+
+
 def test_load_catalog_and_find(tmp_path: Path):
     catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     config = Config(repositories=[Registry(name="r", location=str(catalog_path))])
@@ -414,6 +431,30 @@ def test_normalize_github_web_url():
     assert reg._normalize_url(other) == other
 
 
+def test_normalize_gitlab_web_url():
+    # GitLab serves raw on the same host via /-/raw/; the namespace may be nested groups.
+    assert (
+        reg._normalize_url("https://gitlab.com/acme/cat/-/blob/main/registry/repositories.json")
+        == "https://gitlab.com/acme/cat/-/raw/main/registry/repositories.json"
+    )
+    assert (
+        reg._normalize_url("https://gitlab.com/group/sub/cat/-/blob/v2/repositories.json")
+        == "https://gitlab.com/group/sub/cat/-/raw/v2/repositories.json"
+    )
+    # An already-raw GitLab URL is left alone.
+    grl = "https://gitlab.com/acme/cat/-/raw/main/repositories.json"
+    assert reg._normalize_url(grl) == grl
+
+
+def test_normalize_bitbucket_web_url():
+    assert (
+        reg._normalize_url("https://bitbucket.org/acme/cat/src/main/registry/repositories.json")
+        == "https://bitbucket.org/acme/cat/raw/main/registry/repositories.json"
+    )
+    braw = "https://bitbucket.org/acme/cat/raw/main/repositories.json"
+    assert reg._normalize_url(braw) == braw
+
+
 def test_repo_catalog_persisted_and_listed_via_url(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()
@@ -444,6 +485,27 @@ def test_parse_repo_url_plain_and_tree():
     # Trailing .git is stripped from the derived name.
     _, _, _, name = reg.parse_repo_url("https://github.com/acme/widget.git")
     assert name == "widget"
+
+
+def test_parse_repo_url_gitlab_and_bitbucket():
+    # GitLab tree URL with a nested group: clean repo URL keeps the full namespace.
+    clean, ref, subdir, name = reg.parse_repo_url(
+        "https://gitlab.com/group/sub/widget/-/tree/dev/plugins/x"
+    )
+    assert clean == "https://gitlab.com/group/sub/widget"
+    assert (ref, subdir, name) == ("dev", "plugins/x", "widget")
+
+    # Bitbucket browses via /src/<ref>/<subdir>.
+    clean, ref, subdir, name = reg.parse_repo_url(
+        "https://bitbucket.org/acme/widget/src/main/plugins/x"
+    )
+    assert clean == "https://bitbucket.org/acme/widget"
+    assert (ref, subdir, name) == ("main", "plugins/x", "widget")
+
+    # A plain GitLab repo URL (no tree) passes through and still derives the name.
+    clean, ref, subdir, name = reg.parse_repo_url("https://gitlab.com/group/sub/widget")
+    assert clean == "https://gitlab.com/group/sub/widget"
+    assert (ref, subdir, name) == (None, None, "widget")
 
 
 def test_catalog_add_repo_minimal(tmp_path):

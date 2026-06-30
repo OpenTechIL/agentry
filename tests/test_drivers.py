@@ -23,7 +23,18 @@ from agentry.reconcile import sync
 
 _C = ComponentType
 
-ALL_AGENTS = {"claude", "opencode", "cursor", "codex", "gemini", "windsurf", "kimi"}
+ALL_AGENTS = {
+    "claude",
+    "opencode",
+    "cursor",
+    "codex",
+    "gemini",
+    "windsurf",
+    "kimi",
+    "copilot",
+    "kiro",
+    "agents",
+}
 
 
 def test_all_builtin_agents_present():
@@ -114,10 +125,26 @@ def test_profile_override_preserves_claude_policies():
         ("windsurf", _C.COMMAND, ".windsurf/workflows/x.md"),
         ("kimi", _C.SKILL, ".kimi-code/skills/x"),
         ("codex", _C.SKILL, ".agents/skills/x"),
+        ("copilot", _C.SKILL, ".github/skills/x"),
+        ("copilot", _C.AGENT, ".github/agents/x.agent.md"),
+        ("copilot", _C.COMMAND, ".github/prompts/x.prompt.md"),
+        ("kiro", _C.SKILL, ".kiro/skills/x"),
+        ("agents", _C.SKILL, ".agents/skills/x"),
     ],
 )
 def test_new_driver_link_dests(name, ctype, expected):
     assert BUILTIN_DRIVERS[name].link_dest(ctype, "x") == expected
+
+
+def test_universal_agents_target_is_skills_only():
+    # The tool-neutral .agents/ layout maps skills only; everything else is intentionally
+    # unmapped (no cross-tool directory standard; AGENTS.md composition is a transform).
+    agents = BUILTIN_DRIVERS["agents"]
+    assert agents.supports(_C.SKILL)
+    assert not agents.supports(_C.AGENT)
+    assert not agents.supports(_C.COMMAND)
+    assert not agents.supports(_C.MCP)
+    assert not agents.supports(_C.HOOK)
 
 
 @pytest.mark.parametrize(
@@ -125,11 +152,33 @@ def test_new_driver_link_dests(name, ctype, expected):
     [
         ("gemini", (".gemini/settings.json", "mcpServers")),
         ("kimi", (".kimi-code/mcp.json", "mcpServers")),
+        ("copilot", (".vscode/mcp.json", "servers")),
+        ("kiro", (".kiro/settings/mcp.json", "mcpServers")),
     ],
 )
 def test_new_driver_mcp_merge_dests(name, pointer_file):
     dest = BUILTIN_DRIVERS[name].merge_dest(_C.MCP)
     assert (dest.file, dest.pointer) == pointer_file
+
+
+def test_copilot_mcp_accepts_stock_mcpservers_wrapper():
+    # VS Code uses the top-level "servers" key; a stock .mcp.json fragment wraps entries
+    # under "mcpServers" — the alias must let it install unchanged.
+    dest = BUILTIN_DRIVERS["copilot"].merge_dest(_C.MCP)
+    assert "mcpServers" in dest.wrapper_keys
+
+
+def test_copilot_and_kiro_omit_unsupported_types():
+    # Copilot: no project-level hook/tool file convention agentry can target.
+    copilot = BUILTIN_DRIVERS["copilot"]
+    assert copilot.supports(_C.SKILL) and copilot.supports(_C.MCP)
+    assert not copilot.supports(_C.HOOK)
+    assert not copilot.supports(_C.TOOL)
+    # Kiro: agents are JSON (not translated); only skills + MCP are mapped.
+    kiro = BUILTIN_DRIVERS["kiro"]
+    assert kiro.supports(_C.SKILL) and kiro.supports(_C.MCP)
+    assert not kiro.supports(_C.AGENT)
+    assert not kiro.supports(_C.COMMAND)
 
 
 def test_codex_and_windsurf_omit_unsupported_types():

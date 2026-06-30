@@ -15,6 +15,12 @@ Removal undoes both halves; the manifest records the link path and the owned mer
 
 from __future__ import annotations
 
+import re
+
+#: A ``${...PLUGIN_ROOT}`` shell var (e.g. ``${CLAUDE_PLUGIN_ROOT}``). These expand only
+#: inside a real installed plugin; surviving into a plain config merge means a dead command.
+_PLUGIN_ROOT_RE = re.compile(r"\$\{[A-Z0-9_]*PLUGIN_ROOT\}")
+
 
 def _rewrite_strings(value, frm: str, to: str):
     """Deep-copy ``value`` replacing every occurrence of ``frm`` with ``to`` in strings."""
@@ -47,6 +53,31 @@ def _collect_leftovers(value, token: str, out: list[str]) -> None:
     elif isinstance(value, dict):
         for v in value.values():
             _collect_leftovers(v, token, out)
+
+
+def plugin_root_refs(fragment) -> list[str]:
+    """String values in ``fragment`` that still reference a ``${*_PLUGIN_ROOT}`` var.
+
+    Used to guard the plain-merge path: a hook merged into a config file (rather than
+    installed via link+merge with a rewrite) keeps any plugin-root variable verbatim,
+    and the harness rejects it at startup. Returns the offending command strings so the
+    caller can warn and point at the link+merge profile fix.
+    """
+    out: list[str] = []
+    _collect_matching(fragment, out)
+    return out
+
+
+def _collect_matching(value, out: list[str]) -> None:
+    if isinstance(value, str):
+        if _PLUGIN_ROOT_RE.search(value):
+            out.append(value)
+    elif isinstance(value, list):
+        for v in value:
+            _collect_matching(v, out)
+    elif isinstance(value, dict):
+        for v in value.values():
+            _collect_matching(v, out)
 
 
 def rewrite_fragment(fragment: dict, rewrite_from: str, to: str) -> tuple[dict, list[str]]:

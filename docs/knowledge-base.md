@@ -4,6 +4,20 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ---
 
+## 2026-06-30 — Plugin-style hooks need a `link+merge` profile, not plain `merge`
+
+**Context:** Installing `superpowers` for target `claude` produced a startup error: `SessionStart:startup hook error … Hook command references ${CLAUDE_PLUGIN_ROOT} but the hook is not associated with a plugin`. Root-caused to the catalog entry lacking a hook `target_profiles` rule.
+
+**Findings:**
+
+- **`${CLAUDE_PLUGIN_ROOT}` only expands inside a real installed Claude plugin** — never in project `.claude/settings.json`. Any repo that ships a plugin-style hook bundle (`hooks/hooks.json` whose command is `"${CLAUDE_PLUGIN_ROOT}/hooks/…"`) will break if merged verbatim.
+- **The Claude driver's default strategy for `HOOK` is `merge`** ([drivers/claude.py](https://github.com/OpenTechIL/agentry/blob/main/src/agentry/drivers/claude.py)), which copies the fragment as-is. The fix for plugin-style hooks is the **`link+merge`** strategy: it symlinks the hooks dir into `.claude/hooks/…` and rewrites the `${CLAUDE_PLUGIN_ROOT}/hooks` prefix to `${CLAUDE_PROJECT_DIR}/.claude/hooks/…`. It is **opt-in per repo** via the catalog's `target_profiles.<target>.hook` (see the `arckit` and now `superpowers` entries in `registry/repositories.json`).
+- **A catalog `target_profiles` only reaches a project at `agy add` time** (via `registry.build_install_profiles` → `ConfigStore.merge_target_profiles`). Fixing the catalog entry does **not** repair an already-installed project — you must add the profile to the project's local `.agentry.yml` and re-run `agy sync`. The manifest tracks the prior `merge`, so the re-sync cleanly removes it and installs the `link+merge` form (manifest entry moves from `merges` to `link_merges`).
+- **`agy sync` is a clean strategy-swap.** Changing a hook from `merge` to `link+merge` between syncs removes the old settings.json key and the orphaned state correctly — no manual cleanup needed.
+- **Caveat (unverified):** `superpowers/hooks/session-start` picks its output format from env vars, emitting Claude's `hookSpecificOutput.additionalContext` only when `CLAUDE_PLUGIN_ROOT` is set. Under a settings hook that var is unset, so it takes the SDK-standard top-level `additionalContext` branch. This clears the *error*; whether Claude Code actually injects the context from a settings hook is a separate behavior to confirm in a live session.
+
+---
+
 ## 2026-06-27 — MkDocs `--strict` CI failures & guardrails
 
 **Context:** The GitHub Pages docs build ([.github/workflows/docs.yml](https://github.com/OpenTechIL/agentry/blob/main/.github/workflows/docs.yml)) failed because [commands.md](commands.md) carried a link to `../README.md` (outside `docs_dir`) and a broken heading anchor. Fixed the links, then hardened the pipeline against recurrence.

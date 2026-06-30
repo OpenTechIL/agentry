@@ -92,6 +92,10 @@ class Target:
     GEMINI = "gemini"
     WINDSURF = "windsurf"
     KIMI = "kimi"
+    COPILOT = "copilot"
+    KIRO = "kiro"
+    #: Tool-neutral Agent-Skills layout (.agents/skills); portable across AGENTS.md-aware tools.
+    AGENTS = "agents"
 
 
 BUILTIN_TARGET_NAMES: frozenset[str] = frozenset(
@@ -103,6 +107,9 @@ BUILTIN_TARGET_NAMES: frozenset[str] = frozenset(
         Target.GEMINI,
         Target.WINDSURF,
         Target.KIMI,
+        Target.COPILOT,
+        Target.KIRO,
+        Target.AGENTS,
     }
 )
 
@@ -110,7 +117,7 @@ BUILTIN_TARGET_NAMES: frozenset[str] = frozenset(
 #: config fragment as belonging to that harness rather than the canonical (Claude) one.
 #: Used only for MERGE_TYPES (hooks/mcp) to route per-harness variants to their target.
 KNOWN_HARNESS_SLUGS: frozenset[str] = frozenset(
-    {"claude", "opencode", "cursor", "codex", "gemini", "kimi", "pi", "windsurf"}
+    {"claude", "opencode", "cursor", "codex", "gemini", "kimi", "pi", "windsurf", "copilot", "kiro"}
 )
 
 

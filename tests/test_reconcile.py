@@ -520,6 +520,41 @@ def test_unknown_claude_hook_event_is_dropped_with_warning(project: Path, tmp_pa
     assert any("Frobnicate" in w and "not a recognized" in w for w in res.warnings)
 
 
+def test_plain_merge_warns_on_plugin_root_command(project: Path, tmp_path: Path):
+    """A plugin-style hook merged WITHOUT a link+merge profile keeps its ${...PLUGIN_ROOT}
+    command verbatim — agentry warns and points at the link+merge fix instead of silently
+    installing a hook the harness rejects at startup."""
+    src = tmp_path / "ppsrc"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "SessionStart": [
+                        {
+                            "matcher": "startup",
+                            "hooks": [
+                                {
+                                    "type": "command",
+                                    "command": '"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd" go',
+                                }
+                            ],
+                        }
+                    ]
+                }
+            }
+        )
+    )
+    _wire(project, src, (ComponentType.HOOK, "hooks"))
+    res = sync(project)
+
+    # The entry is still merged (the guard only warns; it does not change behavior)...
+    settings = json.loads((project / ".claude/settings.json").read_text())
+    assert "SessionStart" in settings["hooks"]
+    # ...but a warning flags the unresolvable variable and recommends link+merge.
+    assert any("PLUGIN_ROOT" in w and "link+merge" in w for w in res.warnings), res.warnings
+
+
 def _hooks_source(tmp_path: Path) -> Path:
     """A plugin-style source: a hooks/ dir of scripts + a plugin-shaped hooks.json."""
     src = tmp_path / "hooksrc"
