@@ -118,9 +118,7 @@ def resolve_graph(
         entry.synthesized = src.name not in cfg_names
         # Carry forward consent only while the pinned SHA is unchanged — a moved source
         # must be re-trusted (the SHA-pinned consent contract).
-        entry.trusted = bool(
-            existing and existing.trusted and existing.resolved == entry.resolved
-        )
+        entry.trusted = bool(existing and existing.trusted and existing.resolved == entry.resolved)
         upsert_entry(new_lock, entry)
         graph.resolved[src.name] = entry.resolved
 

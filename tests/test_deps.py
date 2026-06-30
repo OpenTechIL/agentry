@@ -96,9 +96,7 @@ def test_sibling_path_dependency_local_monorepo(tmp_path: Path):
     proj = tmp_path / "proj"
     proj.mkdir()
     store = ConfigStore.create(proj, ["claude"])
-    store.add_source(
-        Source(name="g", type=SourceType.LOCAL, path=str(repo), subdir="packages/app")
-    )
+    store.add_source(Source(name="g", type=SourceType.LOCAL, path=str(repo), subdir="packages/app"))
     store.add_component(Component(source="g", type=ComponentType.SKILL, name="a"))
     store.save()
 
@@ -133,7 +131,9 @@ def test_sibling_path_dependency_git_monorepo(tmp_path: Path):
     proj = tmp_path / "proj"
     proj.mkdir()
     store = ConfigStore.create(proj, ["claude"])
-    store.add_source(Source(name="g", type=SourceType.GIT, url=url, ref="main", subdir="packages/app"))
+    store.add_source(
+        Source(name="g", type=SourceType.GIT, url=url, ref="main", subdir="packages/app")
+    )
     store.add_component(Component(source="g", type=ComponentType.SKILL, name="a"))
     store.save()
 
