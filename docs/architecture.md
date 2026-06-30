@@ -116,6 +116,13 @@ component can resolve it directly, bypassing discovery:
 - `path:` on a component points at an explicit artifact within the source (`path: "."` ⇒
   the source root is the skill). Handled in `reconcile.compute_desired`.
 - `generate:` on a component installs via the generate strategy instead of an artifact.
+- `transform:` on a component installs it as a **rewritten committed file** (copy-with-rewrite)
+  instead of a live symlink — for agent/command (single-file) types only. `provider:
+  strip-frontmatter` is deterministic (reproducible, runs every sync); `provider: agent` (with
+  `prompt:`) synthesizes via your own agent CLI (`transform.command`), gated by
+  `--allow-transform` and **write-once** (regenerate by removing the output), since its output
+  isn't byte-reproducible. The never-clobber invariant holds — it refuses to overwrite an
+  unmanaged file. See `installers/transform.py` and the transform-seam design spec.
 
 **Catalogs (`registry.py`).** A `repositories:` list in `.agentry.yml` points at JSON
 catalogs (a local file or an http(s) URL) that map a bare repo name to its source + optional

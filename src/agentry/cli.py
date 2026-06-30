@@ -295,9 +295,21 @@ def _interactive_pick(available: list[Component]) -> list[Component]:
     return picks
 
 
-def _do_sync(*, update: bool = False, allow_run: bool = False, frozen: bool = False) -> None:
+def _do_sync(
+    *,
+    update: bool = False,
+    allow_run: bool = False,
+    frozen: bool = False,
+    allow_transform: bool = False,
+) -> None:
     try:
-        res = sync(_root(), update=update, allow_run=allow_run, frozen=frozen)
+        res = sync(
+            _root(),
+            update=update,
+            allow_run=allow_run,
+            frozen=frozen,
+            allow_transform=allow_transform,
+        )
     except (ResolveError, DependencyError) as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
@@ -314,6 +326,12 @@ _FROZEN = typer.Option(
     False,
     "--frozen",
     help="Install strictly from .agentry.lock; fail if any source is unpinned or has drifted.",
+)
+
+_ALLOW_TRANSFORM = typer.Option(
+    False,
+    "--allow-transform",
+    help="Permit components with an 'agent' transform to run the configured agent command.",
 )
 
 
@@ -554,15 +572,19 @@ def _set_enabled(ref: str, enabled: bool) -> None:
 
 
 @app.command(name="sync")
-def sync_command(allow_run: bool = _ALLOW_RUN, frozen: bool = _FROZEN) -> None:
+def sync_command(
+    allow_run: bool = _ALLOW_RUN, frozen: bool = _FROZEN, allow_transform: bool = _ALLOW_TRANSFORM
+) -> None:
     """Install everything per .agentry.yml + .agentry.lock (idempotent)."""
-    _do_sync(allow_run=allow_run, frozen=frozen)
+    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform)
 
 
 @app.command(name="install")
-def install_command(allow_run: bool = _ALLOW_RUN, frozen: bool = _FROZEN) -> None:
+def install_command(
+    allow_run: bool = _ALLOW_RUN, frozen: bool = _FROZEN, allow_transform: bool = _ALLOW_TRANSFORM
+) -> None:
     """Alias for `sync`."""
-    _do_sync(allow_run=allow_run, frozen=frozen)
+    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform)
 
 
 @app.command()
