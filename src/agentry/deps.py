@@ -109,13 +109,18 @@ def resolve_graph(
                 "run `agy update` to refresh the lockfile first"
             )
         pinned = None if update else (existing.resolved if existing else None)
-        entry = resolve(root, src, pinned=pinned)
+        entry = resolve(root, src, pinned=pinned, normalize=config.hashing.normalize_line_endings)
         if frozen and existing is not None and entry.resolved != existing.resolved:
             raise ResolveError(
                 f"--frozen: source '{src.name}' drifted from {LOCK_NAME} "
                 f"({existing.resolved} != {entry.resolved})"
             )
         entry.synthesized = src.name not in cfg_names
+        # Carry forward consent only while the pinned SHA is unchanged — a moved source
+        # must be re-trusted (the SHA-pinned consent contract).
+        entry.trusted = bool(
+            existing and existing.trusted and existing.resolved == entry.resolved
+        )
         upsert_entry(new_lock, entry)
         graph.resolved[src.name] = entry.resolved
 
@@ -202,7 +207,15 @@ def _resolve_dep_source(
 ) -> Source | None:
     """Map one dependency onto a (possibly synthesized) source, enforcing version policy."""
     if not dep.source and not dep.url:
-        return sources_by_name.get(requester_source)  # same source as the requirer
+        base = sources_by_name.get(requester_source)  # same source as the requirer
+        if base is None:
+            return None
+        if dep.subdir and dep.subdir != base.subdir:
+            # Sibling-path dependency: a component needs another component living at a
+            # *different subdir of the same repo* (the common monorepo layout). Resolve it
+            # as a sibling view of the requester's source rooted at dep.subdir.
+            return _sibling_source(base, dep.subdir, sources_by_name, ensure_resolved, warnings)
+        return base
 
     if dep.source:
         src = sources_by_name.get(dep.source)
@@ -216,6 +229,8 @@ def _resolve_dep_source(
                 f"version conflict on source '{dep.source}': configured ref '{src.ref}', "
                 f"but {requester_ref} requires ref '{dep.ref}'"
             )
+        if dep.subdir and dep.subdir != src.subdir:
+            return _sibling_source(src, dep.subdir, sources_by_name, ensure_resolved, warnings)
         return src
 
     # url-based — transitive, recorded in the lock only.
@@ -242,3 +257,33 @@ def _resolve_dep_source(
         warnings.append(f"{requester_ref} dependency {url}@{ref}: {exc}")
         return None
     return src
+
+
+def _sibling_source(
+    base: Source,
+    subdir: str,
+    sources_by_name: dict[str, Source],
+    ensure_resolved,
+    warnings: list[str],
+) -> Source | None:
+    """A sibling view of ``base`` rooted at a different ``subdir`` of the same repo.
+
+    Reuses the base source's locator (git url+ref, or local path) so the sibling resolves the
+    *same* tree, just from another subdirectory. Recorded in the lock only (synthesized), never
+    in ``.agentry.yml``. Returned cached if the same sibling was already synthesized this run.
+    """
+    name = f"{base.name}+{subdir.replace('/', '-')}"
+    if name in sources_by_name:
+        return sources_by_name[name]
+    if base.type is SourceType.GIT:
+        sib = Source(name=name, type=SourceType.GIT, url=base.url, ref=base.ref, subdir=subdir)
+    else:
+        sib = Source(name=name, type=SourceType.LOCAL, path=base.path, subdir=subdir)
+    sources_by_name[name] = sib
+    try:
+        ensure_resolved(sib)
+    except ResolveError as exc:
+        warnings.append(f"sibling dependency at '{subdir}' of source '{base.name}': {exc}")
+        del sources_by_name[name]
+        return None
+    return sib

@@ -68,6 +68,81 @@ def test_same_source_dependency(tmp_path: Path):
     assert "name: b" not in (proj / ".agentry.yml").read_text()
 
 
+def _skill_at(repo: Path, subdir: str, name: str) -> None:
+    d = repo / subdir / "skills" / name
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "SKILL.md").write_text(f"# {name}\n")
+
+
+def test_sibling_path_dependency_local_monorepo(tmp_path: Path):
+    """A component in one subdir of a monorepo can require a sibling in another subdir."""
+    repo = tmp_path / "mono"
+    _skill_at(repo, "packages/app", "a")
+    _skill_at(repo, "packages/lib", "b")
+    _descriptor(
+        repo / "packages/app",
+        {
+            "skill": [
+                {
+                    "name": "a",
+                    "path": "skills/a",
+                    "requires": [{"type": "skill", "name": "b", "subdir": "packages/lib"}],
+                }
+            ]
+        },
+    )
+    _descriptor(repo / "packages/lib", {"skill": [{"name": "b", "path": "skills/b"}]})
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    store = ConfigStore.create(proj, ["claude"])
+    store.add_source(
+        Source(name="g", type=SourceType.LOCAL, path=str(repo), subdir="packages/app")
+    )
+    store.add_component(Component(source="g", type=ComponentType.SKILL, name="a"))
+    store.save()
+
+    res = sync(proj)
+    assert not res.warnings, res.warnings
+    assert (proj / ".claude/skills/a/SKILL.md").exists()
+    assert (proj / ".claude/skills/b/SKILL.md").exists()  # sibling at packages/lib pulled in
+    assert "packages/lib" not in (proj / ".agentry.yml").read_text()  # lock-only, not config
+    # The sibling is recorded as a synthesized source in the lock.
+    assert any(e.name == "g+packages-lib" for e in load_lock(proj).sources)
+
+
+def test_sibling_path_dependency_git_monorepo(tmp_path: Path):
+    repo = tmp_path / "mono"
+    _skill_at(repo, "packages/app", "a")
+    _skill_at(repo, "packages/lib", "b")
+    _descriptor(
+        repo / "packages/app",
+        {
+            "skill": [
+                {
+                    "name": "a",
+                    "path": "skills/a",
+                    "requires": [{"type": "skill", "name": "b", "subdir": "packages/lib"}],
+                }
+            ]
+        },
+    )
+    _descriptor(repo / "packages/lib", {"skill": [{"name": "b", "path": "skills/b"}]})
+    url = _git_init(repo)
+
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    store = ConfigStore.create(proj, ["claude"])
+    store.add_source(Source(name="g", type=SourceType.GIT, url=url, ref="main", subdir="packages/app"))
+    store.add_component(Component(source="g", type=ComponentType.SKILL, name="a"))
+    store.save()
+
+    res = sync(proj)
+    assert not res.warnings, res.warnings
+    assert (proj / ".claude/skills/a/SKILL.md").exists()
+    assert (proj / ".claude/skills/b/SKILL.md").exists()
+
+
 def test_cross_repo_transitive_lock_only(tmp_path: Path):
     """A url dependency on another repo is resolved into the lock, not .agentry.yml."""
     libb = tmp_path / "libb"

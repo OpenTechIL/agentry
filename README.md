@@ -71,6 +71,16 @@ silent overwrites.
   import other agent-package formats, and — when a tool needs a different shape — translate a
   component's content with the opt-in `transform` seam.
 
+### Isn't `AGENTS.md` enough?
+
+For a single repo you maintain by hand, often yes. agentry is **not a competing standard** —
+it's the dependency layer *above* the standard. You still keep `AGENTS.md` (agentry emits one
+with `agy emit agents-md`); what agentry adds is what a flat file can't: **pinning** sources to
+exact SHAs, **transitive resolution** of what a skill depends on, **multi-target fanout** to
+every tool's native layout at once, and **reversible install** that never clobbers your edits.
+The moment you share components across repos or teams, hand-copied `AGENTS.md` is the
+copy-paste problem agentry exists to retire.
+
 ## Install
 
 ### Standalone binary (no Python required)
@@ -139,6 +149,8 @@ agy sync                                        # reconcile to match config + lo
 - `agy doctor [--strict]` — preflight: undefined targets, unprovided components, unset `${VARs}`,
   unsupported type/target combos, and drift — loudly. Exits 1 on errors (or warnings with `--strict`).
 - `agy why <ref>` — explain a component: its source + pinned revision and where it installs.
+- `agy trust <source>` — consent for a source to run code at install (generators), pinned to its
+  SHA in the lock. A trusted source runs without `--allow-run`; trust drops if the source moves.
 - `agy target add NAME` / `agy target list` — install or browse shared driver overlays (how an
   agent installs) published by a catalog, making a new target resolvable without writing config.
 - `agy import apm [--file apm.yml]` — translate another agent-package-manager manifest

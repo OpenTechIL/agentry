@@ -61,31 +61,48 @@ def _resolve_git_sha(path: Path, ref: str) -> str:
     raise ResolveError(f"could not resolve ref '{ref}'")
 
 
-def _hash_dir(path: Path) -> str:
-    """Stable content hash of a directory tree (sorted relpath + bytes)."""
+def _canonical_bytes(data: bytes, normalize: bool) -> bytes:
+    """The bytes to hash for one file. With ``normalize``, collapse CRLF/CR→LF for text so the
+    hash is OS-independent; binary (non-UTF-8) content is always hashed raw."""
+    if not normalize:
+        return data
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data  # binary — leave bytes untouched
+    return text.replace("\r\n", "\n").replace("\r", "\n").encode("utf-8")
+
+
+def _hash_dir(path: Path, *, normalize: bool = True) -> str:
+    """Stable content hash of a directory tree (sorted relpath + bytes).
+
+    When ``normalize`` (the default), text files are hashed in a canonical LF form so the same
+    content produces the same hash regardless of the checkout's line endings (see HashingConfig).
+    """
     h = hashlib.sha256()
     root = path.resolve()
     files = sorted(p for p in root.rglob("*") if p.is_file() and ".git" not in p.parts)
     for f in files:
         h.update(str(f.relative_to(root)).encode("utf-8"))
         h.update(b"\0")
-        h.update(f.read_bytes())
+        h.update(_canonical_bytes(f.read_bytes(), normalize))
         h.update(b"\0")
     return "sha256:" + h.hexdigest()
 
 
-def resolve(root: Path, source: Source, *, pinned: str | None) -> LockEntry:
+def resolve(root: Path, source: Source, *, pinned: str | None, normalize: bool = True) -> LockEntry:
     """Ensure ``source`` is present in the store and return its lock entry.
 
     If ``pinned`` is given (from an existing lock), check out exactly that;
-    otherwise resolve the source's ref to its current tip.
+    otherwise resolve the source's ref to its current tip. ``normalize`` controls
+    OS-independent line-ending hashing for local sources (see :class:`HashingConfig`).
     """
     store_dir(root).mkdir(parents=True, exist_ok=True)
     dest = source_path(root, source.name)
 
     if source.type is SourceType.GIT:
         return _resolve_git(source, dest, pinned)
-    return _resolve_local(root, source, dest)
+    return _resolve_local(root, source, dest, normalize=normalize)
 
 
 def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
@@ -107,7 +124,7 @@ def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
     )
 
 
-def _resolve_local(root: Path, source: Source, dest: Path) -> LockEntry:
+def _resolve_local(root: Path, source: Source, dest: Path, *, normalize: bool = True) -> LockEntry:
     target = (root / source.path).resolve()
     if not target.is_dir():
         raise ResolveError(f"local source '{source.name}' path not found: {target}")
@@ -119,7 +136,7 @@ def _resolve_local(root: Path, source: Source, dest: Path) -> LockEntry:
         name=source.name,
         type=SourceType.LOCAL,
         path=source.path,
-        resolved=_hash_dir(target),
+        resolved=_hash_dir(target, normalize=normalize),
     )
 
 

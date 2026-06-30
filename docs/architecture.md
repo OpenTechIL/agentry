@@ -367,6 +367,42 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
 - **Merges** — `merge.remove_merge` only deletes the specific keys recorded in the
   manifest. Hand-added entries under the same pointer survive.
 
+### `${VAR}` placeholders: ship verbatim, warn on dead refs
+
+MCP/hook fragments routinely carry `${VAR}` references (tokens, hosts). agentry **does
+not resolve them at merge** — it ships the placeholder verbatim and lets the runtime
+agent expand it at session start. This is deliberate: resolving early would bake one
+machine's environment into a config meant to travel, and would leak secrets into a
+file that may be committed.
+
+The one case that contract can't self-protect against is a reference that is **unset
+*and* has no default** (`${VAR}`, not `${VAR:-x}`): it ships as a dead placeholder.
+Both `agy sync` and `agy doctor` scan for exactly that and emit a warning (shared
+`envscan.unset_env_refs`); `agy doctor --strict` turns the warning into a non-zero exit,
+which is the CI guardrail. The merge still proceeds — the warning is loud, not blocking —
+so a value the user *will* set at runtime isn't spuriously rejected.
+
+### Per-source consent for install-time code execution
+
+A component with a `generate` spec runs a command during `agy sync`. Beyond the one-shot
+`--allow-run` blanket, agentry records **per-source trust** in the lock (`LockEntry.trusted`),
+pinned to the source's resolved SHA. A trusted source's generators run without `--allow-run`;
+an untrusted one is skipped with a warning unless consent is granted — via `agy trust <source>`
+or the interactive prompt in `agy sync` (a `TrustCallback` the CLI supplies; non-TTY callers
+decline silently, so CI stays deterministic). Because trust is pinned to the SHA, a source that
+moves to a new revision drops its consent and must be re-confirmed (`deps.ensure_resolved`
+carries trust forward only while the hash is unchanged). Trust gates **generators only** — the
+single thing agentry itself executes; hooks are run by the harness, not agentry.
+
+### Deterministic, OS-independent local-source hashing
+
+A local source's lock value is a content hash of its tree (`resolver._hash_dir`). By default
+text files are hashed in a canonical **LF** form (`hashing.normalize_line_endings: true`), so
+the same content produces the same `sha256:` on Windows and Unix — a checkout's `autocrlf`
+can't trigger phantom `--frozen` drift. Binary files (anything not valid UTF-8) are always
+hashed raw. Set `hashing.normalize_line_endings: false` in `.agentry.yml` to restore exact
+byte-for-byte hashing when line-ending fidelity matters.
+
 ## 8. Module map
 
 ```

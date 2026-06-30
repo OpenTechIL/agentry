@@ -22,6 +22,7 @@ behind these commands.
 | `agy status` | Report drift between config and what's installed |
 | `agy doctor [--strict]` | Preflight: undefined targets, unprovided components, unset `${VARs}`, unsupported combos, drift. Exits 1 on errors (or warnings with `--strict`) |
 | `agy why <ref>` | Explain a component: its source + pinned revision and exactly which targets it installs to |
+| `agy trust <source>` | Consent for a source to run code at install (generators), pinned to its SHA in the lock. Trusted sources run without `--allow-run`; trust drops if the source moves |
 | `agy deps` | Show the resolved dependency map (transitive closure of enabled components) |
 
 ## Sources

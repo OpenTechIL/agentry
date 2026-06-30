@@ -24,10 +24,12 @@ def load_lock(root: Path) -> Lock:
 def save_lock(root: Path, lock: Lock) -> None:
     path = lock_path(root)
     payload = lock.model_dump(mode="json", exclude_none=True)
-    # Keep the on-disk shape minimal: only mark transitive (synthesized) sources.
+    # Keep the on-disk shape minimal: only mark transitive (synthesized)/trusted sources.
     for entry in payload.get("sources", []):
         if entry.get("synthesized") is False:
             entry.pop("synthesized", None)
+        if entry.get("trusted") is False:
+            entry.pop("trusted", None)
     path.write_text(json.dumps(payload, indent=2, sort_keys=False) + "\n", encoding="utf-8")
 
 
