@@ -92,6 +92,13 @@ Or install into a project/venv:
 uv pip install git+https://github.com/OpenTechIL/agentry   # then: agy <command>
 ```
 
+### Homebrew · Scoop · devcontainers
+
+Package-manager and devcontainer integrations live in [`packaging/`](packaging/): a Homebrew
+formula, a Scoop manifest, and a [devcontainer Feature](packaging/devcontainer) that installs
+`agy` and runs `agy sync --frozen` on create. See [packaging/README.md](packaging/README.md)
+for how each is wired to releases (and the status of binary signing).
+
 ## Quickstart
 
 ```bash
