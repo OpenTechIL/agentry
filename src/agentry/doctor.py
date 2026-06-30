@@ -12,23 +12,18 @@ active target installs, an unset env var your agent resolves at runtime, on-disk
 
 from __future__ import annotations
 
-import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from . import deps, discovery
 from .config import ConfigStore
 from .drivers import resolve_drivers
+from .envscan import unset_env_refs
 from .lockfile import load_lock
 from .models import MERGE_TYPES, ComponentType
 from .reconcile import status
 from .resolver import ResolveError, effective_root
 from .targets import unresolved_targets
-
-#: ``${VAR}`` or ``${VAR:-default}`` / ``${VAR:default}``. Group 1 is the name, group 2 the
-#: (optional) default — a reference *with* a default isn't flagged, it can't be a dead ref.
-_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(:[-=]?[^}]*)?\}")
 
 
 @dataclass(frozen=True)
@@ -36,16 +31,6 @@ class Check:
     level: str  # "error" | "warn" | "ok"
     category: str
     message: str
-
-
-def _unset_env_refs(text: str) -> list[str]:
-    """Env-var names referenced as ``${NAME}`` (no default) that aren't set in the environment."""
-    out: list[str] = []
-    for m in _ENV_REF.finditer(text):
-        name, default = m.group(1), m.group(2)
-        if default is None and name not in os.environ and name not in out:
-            out.append(name)
-    return out
 
 
 def run_checks(root: Path) -> list[Check]:
@@ -109,7 +94,7 @@ def run_checks(root: Path) -> list[Check]:
                 )
             )
         if comp.type in MERGE_TYPES and artifact.is_file():
-            for var in _unset_env_refs(artifact.read_text(encoding="utf-8")):
+            for var in unset_env_refs(artifact.read_text(encoding="utf-8")):
                 checks.append(
                     Check(
                         "warn",

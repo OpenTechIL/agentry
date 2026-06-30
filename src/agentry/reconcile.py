@@ -14,10 +14,11 @@ Idempotent: running it twice changes nothing the second time.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import deps, discovery
+from . import deps, discovery, envscan
 from .config import ConfigStore
 from .drivers import resolve_drivers
 from .gitignore import ensure_gitignore
@@ -172,6 +173,16 @@ def compute_desired(
             if artifact is None or not artifact.exists():
                 warnings.append(f"{comp.ref}: not provided by source '{comp.source}'")
                 continue
+
+        # agentry ships ${VAR} placeholders verbatim (the runtime resolves them), but a
+        # reference that is unset *and* has no default would ship dead. Warn once per
+        # component rather than silently install it — mirrors `agy doctor`.
+        if comp.type in MERGE_TYPES and artifact.is_file():
+            for var in envscan.unset_env_refs(artifact.read_text(encoding="utf-8")):
+                warnings.append(
+                    f"{comp.ref}: references ${{{var}}}, which is unset — set it before your "
+                    "agent runs (agentry ships the placeholder; the runtime resolves it)"
+                )
 
         for tname in comp.applies_to(config.targets):
             driver = drivers.get(tname)
@@ -328,6 +339,12 @@ def _compute_link_merge(
 # -- apply ---------------------------------------------------------------
 
 
+# Decide consent for a code-executing source the first time sync hits it. Receives
+# ``(source_name, resolved_sha)`` and returns True to grant (and persist) trust. The CLI
+# supplies an interactive prompt; tests/non-interactive callers pass None (→ no consent).
+TrustCallback = Callable[[str, str], bool]
+
+
 def sync(
     root: Path,
     *,
@@ -335,6 +352,7 @@ def sync(
     allow_run: bool = False,
     frozen: bool = False,
     allow_transform: bool = False,
+    trust_callback: TrustCallback | None = None,
 ) -> SyncResult:
     store = ConfigStore.load(root)
     config = store.parsed()
@@ -358,13 +376,24 @@ def sync(
     _reconcile_links(root, links, manifest, result)
     _reconcile_copies(root, copies, manifest, result)
     _reconcile_merges(root, merges, manifest, result)
-    _reconcile_generated(root, generates, manifest, result, allow_run=allow_run, update=update)
+    trust_changed = _reconcile_generated(
+        root,
+        generates,
+        manifest,
+        result,
+        allow_run=allow_run,
+        update=update,
+        lock=lock,
+        trust_callback=trust_callback,
+    )
     _reconcile_link_merges(root, link_merges, manifest, result)
     _reconcile_transforms(
         root, transforms, manifest, result, allow_transform=allow_transform, command=transform_cmd
     )
 
     save_manifest(root, manifest)
+    if trust_changed:
+        save_lock(root, lock)  # persist newly-granted per-source consent
 
     # 3. Housekeeping.
     result.gitignore_changed = ensure_gitignore(root)
@@ -535,7 +564,10 @@ def _reconcile_generated(
     *,
     allow_run: bool,
     update: bool,
-) -> None:
+    lock=None,
+    trust_callback: TrustCallback | None = None,
+) -> bool:
+    """Run generators (gated by per-source consent). Returns True if trust was newly granted."""
     desired_by_ref = {d.component: d for d in desired}
     old_by_ref = {g.component: g for g in manifest.generated}
 
@@ -550,17 +582,30 @@ def _reconcile_generated(
             kept.append(rec)
     manifest.generated = kept
 
+    trust_changed = False
     have = {g.component for g in manifest.generated}
     for ref, d in desired_by_ref.items():
         already = ref in have and gen_inst.produces_present(root, d.spec)
         if already and not update:
             continue  # idempotent: outputs present and tracked
-        if not allow_run:
-            cmds = "; ".join(gen_inst.describe(d.spec))
-            result.warnings.append(
-                f"{ref}: generator skipped — re-run with `agy sync --allow-run` to execute: {cmds}"
-            )
-            continue
+        # Consent gate: a source whose component runs code at install must be trusted —
+        # via a persisted `agy trust` decision (SHA-pinned in the lock), the interactive
+        # prompt, or the one-shot `--allow-run` blanket override.
+        source = ref.split("/", 1)[0]
+        entry = lock.entry(source) if lock is not None else None
+        if not allow_run and not (entry and entry.trusted):
+            sha = entry.resolved if entry else "?"
+            if trust_callback is not None and trust_callback(source, sha):
+                if entry is not None:
+                    entry.trusted = True
+                    trust_changed = True
+            else:
+                cmds = "; ".join(gen_inst.describe(d.spec))
+                result.warnings.append(
+                    f"{ref}: generator skipped — source '{source}' is not trusted to run code. "
+                    f"Run `agy trust {source}` (or `agy sync --allow-run`) to allow: {cmds}"
+                )
+                continue
         try:
             gen_inst.run_generator(root, d.spec)
         except gen_inst.GenerateError as exc:
@@ -572,6 +617,7 @@ def _reconcile_generated(
             )
             have.add(ref)
         result.created.append(f"generated {ref} ({', '.join(d.spec.produces)})")
+    return trust_changed
 
 
 def _reconcile_link_merges(

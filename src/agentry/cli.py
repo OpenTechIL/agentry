@@ -12,9 +12,9 @@ from rich.table import Table
 from rich.tree import Tree
 
 from . import __version__, deps, discovery
-from .config import ConfigStore
+from .config import LOCK_NAME, ConfigStore
 from .deps import DependencyError
-from .lockfile import load_lock
+from .lockfile import load_lock, save_lock
 from .models import Component, ComponentType, GeneratorSpec, Source, SourceType, Target
 from .reconcile import SyncResult, status, sync
 from .resolver import ResolveError, effective_root, resolve
@@ -295,6 +295,21 @@ def _interactive_pick(available: list[Component]) -> list[Component]:
     return picks
 
 
+def _short_sha(sha: str) -> str:
+    return sha[len("sha256:") : len("sha256:") + 12] if sha.startswith("sha256:") else sha[:12]
+
+
+def _interactive_trust(source: str, sha: str) -> bool:
+    """Prompt to trust a code-executing source. Declines silently when not a TTY (CI/scripts)."""
+    if not sys.stdin.isatty():
+        return False
+    console.print(
+        f"[yellow]Source '{source}' runs code at install (a generator)[/yellow], pinned at "
+        f"[cyan]{_short_sha(sha)}[/cyan]."
+    )
+    return typer.confirm(f"Trust '{source}' to execute its installer?", default=False)
+
+
 def _do_sync(
     *,
     update: bool = False,
@@ -309,6 +324,7 @@ def _do_sync(
             allow_run=allow_run,
             frozen=frozen,
             allow_transform=allow_transform,
+            trust_callback=_interactive_trust,
         )
     except (ResolveError, DependencyError) as exc:
         err.print(f"[red]{exc}[/red]")
@@ -761,6 +777,36 @@ def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/
         err.print(f"[yellow]! {w}[/yellow]")
 
 
+@app.command(name="trust")
+def trust_cmd(
+    source: str = typer.Argument(..., help="Source name to trust for install-time code execution."),
+) -> None:
+    """Record consent for a source to run code at install (generators).
+
+    The decision is pinned to the source's resolved SHA in ``.agentry.lock`` — if the source
+    later moves to a new revision, trust is dropped and must be re-confirmed.
+    """
+    root = _root()
+    lock = load_lock(root)
+    entry = lock.entry(source)
+    if entry is None:
+        err.print(
+            f"[red]No resolved source '{source}' in {LOCK_NAME} — run `agy sync` first.[/red]"
+        )
+        raise typer.Exit(1)
+    if entry.trusted:
+        console.print(
+            f"[green]Source '{source}' is already trusted[/green] @ "
+            f"[cyan]{_short_sha(entry.resolved)}[/cyan]"
+        )
+        return
+    entry.trusted = True
+    save_lock(root, lock)
+    console.print(
+        f"[green]Trusted source[/green] {source} @ [cyan]{_short_sha(entry.resolved)}[/cyan]"
+    )
+
+
 # -- source sub-commands -------------------------------------------------
 
 
@@ -791,6 +837,9 @@ def source_add(
     store.save()
     console.print(f"[green]Added source[/green] {name}")
     _do_sync()
+    # Provenance at first install: show exactly what was pinned (URL/path + resolved SHA),
+    # so a new source's origin is visible up front rather than only via a later `agy why`.
+    console.print(f"  [dim]provenance:[/dim] {_source_provenance(_load(), name)}")
 
 
 @source_app.command("remove")

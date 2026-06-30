@@ -37,6 +37,44 @@ def test_list_empty_message(tmp_path, monkeypatch):
     assert "No components found" in out
 
 
+def test_source_add_prints_provenance(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    make_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    out = runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"]).output
+    assert "provenance:" in out  # origin shown at first install
+    assert "team" in out and "local" in out
+
+
+def test_trust_command_records_consent(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    make_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+
+    res = runner.invoke(app, ["trust", "team"])
+    assert res.exit_code == 0 and "Trusted source" in res.output
+    from agentry.lockfile import load_lock
+
+    assert load_lock(project).entry("team").trusted is True
+    # Idempotent: trusting again reports already-trusted.
+    again = runner.invoke(app, ["trust", "team"])
+    assert "already trusted" in again.output
+
+
+def test_trust_unknown_source_errors(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    monkeypatch.chdir(project)
+    res = runner.invoke(app, ["trust", "ghost"])
+    assert res.exit_code == 1
+
+
 def test_why_shows_provenance_and_install_targets(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()

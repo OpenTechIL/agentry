@@ -296,6 +296,19 @@ class TransformConfig(BaseModel):
     command: list[str] = Field(default_factory=list)
 
 
+class HashingConfig(BaseModel):
+    """How local sources are content-hashed for the lockfile.
+
+    ``normalize_line_endings`` (default ``True``) hashes a canonical, OS-independent form of
+    text files — CRLF/CR collapsed to LF before hashing — so the same content yields the same
+    ``sha256:`` on Windows and Unix and ``agy sync --frozen`` doesn't report phantom drift from
+    a checkout's autocrlf. Binary files (any that aren't valid UTF-8) are always hashed raw.
+    Set to ``False`` to restore exact byte-for-byte hashing when line-ending fidelity matters.
+    """
+
+    normalize_line_endings: bool = True
+
+
 class Config(BaseModel):
     """The full ``.agentry.yml`` document."""
 
@@ -310,6 +323,8 @@ class Config(BaseModel):
     target_profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
     # AI-agent transform provider (opt-in): how ``agy emit ... --agent`` invokes your agent CLI.
     transform: TransformConfig | None = None
+    # OS-independent content hashing for local sources (line-ending normalization).
+    hashing: HashingConfig = Field(default_factory=HashingConfig)
 
     def source(self, name: str) -> Source | None:
         return next((s for s in self.sources if s.name == name), None)
@@ -336,6 +351,12 @@ class Dependency(BaseModel):
     in an already-configured source (``source``) or in an arbitrary git repo (``url``).
     A ``url`` dependency is resolved transitively into a synthesized source recorded in
     the lockfile only — it never touches ``.agentry.yml``. ``ref`` pins the version.
+
+    ``subdir`` selects where in the repo the dependency lives. With a ``url`` it is the
+    subdir of that remote repo; with the same source (neither ``source`` nor ``url`` set)
+    or a named ``source``, a ``subdir`` that differs from the base resolves a **sibling
+    path of the same repo** — the common monorepo layout where ``packages/app`` requires
+    ``packages/lib`` (lock-only synthesized source, see ``deps._sibling_source``).
     """
 
     type: ComponentType
@@ -477,6 +498,10 @@ class LockEntry(BaseModel):
     # True when this source was pulled in transitively (a dependency's ``url``), not
     # declared in .agentry.yml. Such entries live in the lock only.
     synthesized: bool = False
+    # Per-source consent for running code at install (generators). Pinned to ``resolved``:
+    # if the source's SHA changes, trust is dropped and must be re-confirmed. Set by
+    # ``agy trust`` or the interactive prompt in ``agy sync``.
+    trusted: bool = False
 
 
 class Lock(BaseModel):

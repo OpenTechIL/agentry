@@ -193,6 +193,32 @@ def test_root_mcp_json_merges_without_path(project: Path, tmp_path: Path):
     assert "mcpServers" not in after or not after["mcpServers"]
 
 
+def test_sync_warns_on_unset_env_var_in_mcp(project: Path, tmp_path: Path):
+    # An ${VAR} with no default that isn't set in the environment ships as a dead placeholder.
+    # sync (not just doctor) must warn loudly rather than install it silently.
+    src = tmp_path / "envsrc"
+    (src / "mcp").mkdir(parents=True)
+    (src / "mcp" / "gh.json").write_text(
+        json.dumps({"gh": {"command": "x", "env": {"TOKEN": "${UNSET_SYNC_VAR}"}}})
+    )
+    _wire(project, src, (ComponentType.MCP, "gh"))
+    res = sync(project)
+    assert any("UNSET_SYNC_VAR" in w and "unset" in w for w in res.warnings), res.warnings
+    # The server is still merged (the warning doesn't block install).
+    assert "gh" in json.loads((project / ".mcp.json").read_text())["mcpServers"]
+
+
+def test_sync_does_not_warn_on_env_var_with_default(project: Path, tmp_path: Path):
+    src = tmp_path / "envsrc2"
+    (src / "mcp").mkdir(parents=True)
+    (src / "mcp" / "gh.json").write_text(
+        json.dumps({"gh": {"command": "x", "args": ["${HOST:-localhost}"]}})
+    )
+    _wire(project, src, (ComponentType.MCP, "gh"))
+    res = sync(project)
+    assert not any("HOST" in w for w in res.warnings), res.warnings
+
+
 def test_disable_removes_link_keeps_config(project: Path, local_source: Path):
     _wire(project, local_source, (ComponentType.SKILL, "code-reviewer"))
     sync(project)
