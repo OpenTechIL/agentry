@@ -216,6 +216,17 @@ a Cursor or Codex fragment never lands in Claude's `settings.json`. The canonica
 file applies to every target that supports the type. As a final guard, a hook event Claude Code
 doesn't recognize is dropped from `.claude/settings.json` with a warning rather than written out.
 
+**Importing from apm (`agy import apm`, `apm_import.py`).** Microsoft's apm is the same category
+built on the same open standards, so an `apm.yml` is largely consumable. The importer is a
+one-shot, offline translator: a `dependencies.apm` git shorthand `[host/]owner/repo/<typedir>/<name>`
+becomes an agentry **git source** plus a **component** `(<type>, <name>)` — agentry resolves a
+`(type, name)` to `<root>/<typedir>/<name>` by convention, so the package subpath maps with no
+clone; local-path deps become **local sources**; inline `dependencies.mcp` servers become MCP
+**fragments** in agentry's merge shape (above), written to a committed local source. apm `targets`
+pass through (open strings). Anything not inferable offline — whole-repo deps, `plugins/*`
+bundles, marketplace/bundle specs — is reported as a warning pointing at `agy add` / `agy list`,
+never silently guessed. `translate_apm` is pure; the CLI layer writes files and the config.
+
 ## 5. Drivers — the target side (`drivers/`, `spec.py`, `targets.py`)
 
 agentry's model has **two sides**. The **source side** (§4) is *canonical*: a repo author
@@ -352,6 +363,7 @@ discovery.py    scan a source for available components + their `requires` (LAYOU
 resolver.py     download/checkout into the store; resolve refs → SHA/hash
 deps.py         transitive dependency closure (recursive, version-aware) → augmented graph
 registry.py     resolve a bare repo name via external catalogs (file/URL) → Sources + Components
+apm_import.py   translate a Microsoft apm manifest (apm.yml) → agentry sources/components/MCP
 manifest.py     .agentry/.manifest.json read/write
 installers/
   link.py       symlink create/remove/state (lexical, store-scoped)

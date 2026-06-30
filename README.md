@@ -117,6 +117,8 @@ agy sync                                        # reconcile to match config + lo
 - `agy why <ref>` — explain a component: its source + pinned revision and where it installs.
 - `agy target add NAME` / `agy target list` — install or browse shared driver overlays (how an
   agent installs) published by a catalog, making a new target resolvable without writing config.
+- `agy import apm [--file apm.yml]` — translate a Microsoft **apm** project (`apm.yml`) into
+  `.agentry.yml` — sources, components, targets, and inline MCP servers — then `agy sync`.
 - `agy update [SOURCE]` — re-resolve refs to latest and rewrite `.agentry.lock`.
 - `agy version` — print the installed version.
 
