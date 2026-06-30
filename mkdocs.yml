@@ -7,6 +7,13 @@ edit_uri: edit/main/docs/
 
 docs_dir: docs
 
+# Internal design/strategy artifacts (superpowers specs/plans, competitive analysis).
+# They cross-reference source files via paths that escape docs_dir, so keep them out of
+# the published, strict-validated site.
+exclude_docs: |
+  superpowers/
+  cm-an-apm-2026-06-30/
+
 # Promote link/anchor problems to warnings so `mkdocs build --strict` fails on
 # dead internal links and missing heading anchors (not just missing files).
 validation:

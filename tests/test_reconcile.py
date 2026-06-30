@@ -552,9 +552,7 @@ def test_plain_merge_warns_on_plugin_root_command(project: Path, tmp_path: Path)
     settings = json.loads((project / ".claude/settings.json").read_text())
     assert "SessionStart" in settings["hooks"]
     # ...but a warning flags the unresolvable variable and recommends link+merge.
-    assert any(
-        "PLUGIN_ROOT" in w and "link+merge" in w for w in res.warnings
-    ), res.warnings
+    assert any("PLUGIN_ROOT" in w and "link+merge" in w for w in res.warnings), res.warnings
 
 
 def _hooks_source(tmp_path: Path) -> Path:
