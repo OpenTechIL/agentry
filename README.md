@@ -8,8 +8,8 @@
 **A dependency manager for AI coding agents.** `agentry` (command: `agy`) lets you
 declare the skills, agents, commands, tools, hooks, and MCP servers your project
 uses — then install them into Claude Code, Cursor, Gemini CLI, OpenCode, Codex,
-Windsurf, and Kimi with one command. **Write once, deploy to any agent** — and teach
-it new agents without writing code.
+Windsurf, Kimi, GitHub Copilot, and Kiro with one command. **Write once, deploy to any
+agent** — and teach it new agents without writing code.
 
 > agentry is a *dependency manager*, not an agent or a runtime. It installs the components
 > your agents read, then gets out of the way — nothing of it runs while your agents do.
@@ -32,7 +32,7 @@ flowchart LR
   S --> U["Cursor<br/><code>.cursor/</code>"]
   S --> G["Gemini CLI<br/><code>.gemini/</code>"]
   S --> O["OpenCode<br/><code>.opencode/</code>"]
-  S --> X["Codex · Windsurf · Kimi"]
+  S --> X["Codex · Windsurf · Kimi · Copilot · Kiro"]
   S -.->|"target_profiles — no code"| N["your own agent"]
 ```
 
@@ -182,19 +182,21 @@ pinned revision) and exactly which targets it installs to. No silent autodetecti
 
 ## Supported agents
 
-Seven agents ship as built-in drivers; a `—` means the agent has no such concept (or a format
+Nine agents ship as built-in drivers; a `—` means the agent has no such concept (or a format
 agentry can't yet write). Add more, or override any path, from `.agentry.yml` alone.
 
-| Component | Claude Code | Cursor | Gemini CLI | OpenCode | Codex | Windsurf | Kimi |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| skill | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ |
-| agent | ✓ | ✓ | ✓ | ✓ | — | — | — |
-| command | ✓ | ✓ | ✓ | ✓ | — | ✓ | — |
-| tool | ✓ | — | — | ✓ | — | — | — |
-| hook | ✓ | — | ✓ | — | — | ✓ | — |
-| mcp | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ |
+| Component | Claude Code | Cursor | Gemini CLI | OpenCode | Codex | Windsurf | Kimi | Copilot | Kiro |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| skill | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| agent | ✓ | ✓ | ✓ | ✓ | — | — | — | ✓ | — |
+| command | ✓ | ✓ | ✓ | ✓ | — | ✓ | — | ✓ | — |
+| tool | ✓ | — | — | ✓ | — | — | — | — | — |
+| hook | ✓ | — | ✓ | — | — | ✓ | — | — | — |
+| mcp | ✓ | ✓ | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
 
-Exact destination paths per agent live in [docs/architecture.md](docs/architecture.md#built-in-drivers).
+Plus a tool-neutral **`agents`** target that installs skills to `.agents/skills/` (the open
+Agent-Skills layout) so they're portable to any AGENTS.md-aware tool. Exact destination paths
+per agent live in [docs/architecture.md](docs/architecture.md#built-in-drivers).
 
 ## Installing third-party skills
 

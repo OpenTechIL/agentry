@@ -12,9 +12,10 @@ which has to be dropped into a tool-specific location by hand:
 - OpenCode reads `.opencode/…` and `opencode.json`
 - Cursor reads `.cursor/rules/` and `.cursor/mcp.json`
 
-…and the same again for every other agent. Seven agents ship as built-in drivers today
-(Claude Code, OpenCode, Cursor, Codex, Gemini CLI, Windsurf, Kimi — see [§5](#5-drivers-the-target-side-drivers-specpy-targetspy)),
-and you can add more from config alone.
+…and the same again for every other agent. Nine agents ship as built-in drivers today
+(Claude Code, OpenCode, Cursor, Codex, Gemini CLI, Windsurf, Kimi, GitHub Copilot, Kiro — see
+[§5](#5-drivers-the-target-side-drivers-specpy-targetspy)), plus a tool-neutral `agents` target
+for the shared `.agents/skills` layout, and you can add more from config alone.
 
 Copy-pasting these by hand produces the classic failures software solved long ago:
 no versioning, no single source of truth, duplicated effort across projects, drift
