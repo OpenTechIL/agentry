@@ -37,6 +37,10 @@ target_app = typer.Typer(
     no_args_is_help=True, help="Manage target driver overlays (how agents install)."
 )
 app.add_typer(target_app, name="target")
+import_app = typer.Typer(
+    no_args_is_help=True, help="Import a project from another agent package manager."
+)
+app.add_typer(import_app, name="import")
 
 console = Console()
 err = Console(stderr=True)
@@ -961,6 +965,96 @@ def target_list() -> None:
             "\n[dim]Other installable overlays:[/dim] "
             + ", ".join(f"[cyan]{t}[/cyan] [dim]({c})[/dim]" for t, c in extras)
         )
+
+
+# -- import sub-commands -------------------------------------------------
+
+
+@import_app.command("apm")
+def import_apm(
+    file: Path = typer.Option(Path("apm.yml"), "--file", "-f", help="Path to the apm.yml."),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Show what would be imported; write nothing."
+    ),
+) -> None:
+    """Translate a Microsoft apm project (`apm.yml`) into `.agentry.yml`.
+
+    Maps apm dependencies to agentry sources + components, inline MCP servers to MCP fragments,
+    and apm targets to agentry targets. Run `agy sync` afterwards to install. Anything that
+    can't be inferred offline is reported as a warning pointing at `agy add` / `agy list`.
+    """
+    import json as _json
+
+    from ruamel.yaml import YAML
+
+    from .apm_import import translate_apm
+
+    path = file if file.is_absolute() else _root() / file
+    if not path.is_file():
+        err.print(f"[red]No apm manifest at {path}.[/red] Point at one with `--file`.")
+        raise typer.Exit(1)
+    try:
+        doc = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001 — surface any parse error as a clean CLI message
+        err.print(f"[red]Could not parse {path}: {exc}[/red]")
+        raise typer.Exit(1)
+
+    result = translate_apm(doc)
+    mcp_source = "apm-import"
+
+    # Summary of the planned import.
+    console.print(f"[bold]Importing[/bold] {path}")
+    for s in result.sources:
+        where = s.url or s.path
+        console.print(f"  [green]source[/green] {s.name} [dim]({s.type.value} {where})[/dim]")
+    for c in result.components:
+        console.print(f"  [green]component[/green] {c.ref}")
+    for name in result.mcp_fragments:
+        console.print(f"  [green]mcp[/green] {name} [dim](→ {mcp_source}/mcp/{name}.json)[/dim]")
+    for w in result.warnings:
+        err.print(f"  [yellow]! {w}[/yellow]")
+
+    if dry_run:
+        console.print("[dim]--dry-run: nothing written.[/dim]")
+        return
+    if not (result.sources or result.components or result.mcp_fragments):
+        console.print("[dim]Nothing to import.[/dim]")
+        return
+
+    # Materialize inline MCP servers as a committed local source of fragments.
+    if result.mcp_fragments:
+        mcp_dir = _root() / mcp_source / "mcp"
+        mcp_dir.mkdir(parents=True, exist_ok=True)
+        for name, frag in result.mcp_fragments.items():
+            (mcp_dir / f"{name}.json").write_text(
+                _json.dumps(frag, indent=2) + "\n", encoding="utf-8"
+            )
+        result.sources.append(Source(name=mcp_source, type=SourceType.LOCAL, path=mcp_source))
+        for name in result.mcp_fragments:
+            result.components.append(
+                Component(source=mcp_source, type=ComponentType.MCP, name=name)
+            )
+
+    if ConfigStore.exists(_root()):
+        store = ConfigStore.load(_root())
+        if result.targets and set(result.targets) - set(store.parsed().targets):
+            err.print(
+                "  [yellow]! apm targets "
+                f"{result.targets} not added — edit `targets` in .agentry.yml if you want them[/yellow]"
+            )
+    else:
+        store = ConfigStore.create(_root(), result.targets or [Target.CLAUDE])
+    for s in result.sources:
+        store.add_source(s)
+    for c in result.components:
+        store.add_component(c)
+    store.save()
+
+    console.print(
+        f"[green]Imported[/green] {len(result.sources)} source(s), "
+        f"{len(result.components)} component(s) into .agentry.yml. "
+        "Review it, then run [bold]agy sync[/bold]."
+    )
 
 
 if __name__ == "__main__":
