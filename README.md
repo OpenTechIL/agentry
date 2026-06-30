@@ -114,6 +114,8 @@ agy sync                                        # reconcile to match config + lo
 - `agy sync [--frozen]` — reconcile on-disk state to config + lock (idempotent). `--frozen`
   installs strictly from `.agentry.lock` and fails on any unpinned source or drift (for CI).
 - `agy status` — report drift between config and what's installed.
+- `agy doctor [--strict]` — preflight: undefined targets, unprovided components, unset `${VARs}`,
+  unsupported type/target combos, and drift — loudly. Exits 1 on errors (or warnings with `--strict`).
 - `agy why <ref>` — explain a component: its source + pinned revision and where it installs.
 - `agy target add NAME` / `agy target list` — install or browse shared driver overlays (how an
   agent installs) published by a catalog, making a new target resolvable without writing config.

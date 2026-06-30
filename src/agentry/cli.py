@@ -642,6 +642,47 @@ def status_cmd() -> None:
         err.print(f"[yellow]! {w}[/yellow]")
 
 
+@app.command(name="doctor")
+def doctor_cmd(
+    strict: bool = typer.Option(
+        False, "--strict", help="Treat warnings as failures too (exit 1 on any issue; for CI)."
+    ),
+) -> None:
+    """Preflight the project: surface undefined targets, unprovided components, unset ${VARs},
+    unsupported type/target combos, and drift — loudly, before they bite.
+
+    Exits 1 if any **error** is found (or any warning under `--strict`); 0 when clean.
+    """
+    from .doctor import run_checks
+
+    try:
+        checks = run_checks(_root())
+    except FileNotFoundError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    except (ResolveError, DependencyError) as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    mark = {"error": "[red]✗[/red]", "warn": "[yellow]![/yellow]", "ok": "[green]✓[/green]"}
+    for c in checks:
+        out = err if c.level == "error" else console
+        out.print(f"  {mark.get(c.level, '?')} [dim]{c.category}[/dim]  {c.message}")
+    errors = sum(c.level == "error" for c in checks)
+    warns = sum(c.level == "warn" for c in checks)
+    if errors:
+        err.print(f"[red]doctor: {errors} error(s), {warns} warning(s).[/red]")
+        raise typer.Exit(1)
+    if warns:
+        msg = f"doctor: 0 errors, {warns} warning(s)."
+        if strict:
+            err.print(f"[red]{msg} (--strict)[/red]")
+            raise typer.Exit(1)
+        console.print(f"[yellow]{msg}[/yellow]")
+        return
+    console.print("[green]doctor: all checks passed.[/green]")
+
+
 def _source_provenance(store: ConfigStore, source_name: str) -> str:
     """One-line provenance for a source: where it came from and the pinned revision."""
     lock = load_lock(_root())

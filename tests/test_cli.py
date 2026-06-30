@@ -278,3 +278,48 @@ def test_emit_agent_rejects_check(tmp_path, monkeypatch):
     result = runner.invoke(app, ["emit", "agents-md", "--agent", "--allow-transform", "--check"])
     assert result.exit_code == 1
     assert "reproducible" in result.output
+
+
+def test_doctor_clean_project_exits_zero(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    make_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    runner.invoke(app, ["add", "team/skill/code-reviewer"])
+    runner.invoke(app, ["sync"])
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 0
+
+
+def test_doctor_errors_on_undefined_target(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    monkeypatch.chdir(project)
+    store = ConfigStore.load(project)
+    store.doc["targets"].append("ghostide")
+    store.save()
+    result = runner.invoke(app, ["doctor"])
+    assert result.exit_code == 1
+    assert "ghostide" in result.output
+
+
+def test_doctor_strict_fails_on_warnings(tmp_path, monkeypatch):
+    import json
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    src = tmp_path / "team"
+    (src / "mcp").mkdir(parents=True)
+    # An MCP server referencing an unset env var → a doctor warning (not an error).
+    (src / "mcp" / "gh.json").write_text(
+        json.dumps({"gh": {"command": "x", "env": {"T": "${UNSET_STRICT_VAR}"}}})
+    )
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(src), "--local"])
+    runner.invoke(app, ["add", "team/mcp/gh"])
+    assert runner.invoke(app, ["doctor"]).exit_code == 0  # warnings don't fail by default
+    assert runner.invoke(app, ["doctor", "--strict"]).exit_code == 1
