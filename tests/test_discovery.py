@@ -76,3 +76,52 @@ def test_root_mcp_does_not_duplicate_mcp_dir(tmp_path: Path):
     mcp = [d for d in discovery.discover(root) if d.type is ComponentType.MCP and d.name == "mcp"]
     assert len(mcp) == 1
     assert mcp[0].path == root / "mcp" / "mcp.json"
+
+
+def _apm_package(root: Path) -> Path:
+    """A Microsoft apm package: primitives live under .apm/ with apm's dir names/extensions."""
+    (root / ".apm" / "skills" / "style-checker").mkdir(parents=True)
+    (root / ".apm" / "skills" / "style-checker" / "SKILL.md").write_text("# style\n")
+    (root / ".apm" / "agents").mkdir(parents=True)
+    (root / ".apm" / "agents" / "design-reviewer.agent.md").write_text("# reviewer\n")
+    (root / ".apm" / "prompts").mkdir(parents=True)
+    (root / ".apm" / "prompts" / "design-review.prompt.md").write_text("# prompt\n")
+    (root / ".apm" / "instructions").mkdir(parents=True)
+    (root / ".apm" / "instructions" / "design-standards.instructions.md").write_text("# std\n")
+    return root
+
+
+def test_discover_apm_package_maps_primitives(tmp_path: Path):
+    found = {(d.type, d.name): d for d in discovery.discover(_apm_package(tmp_path / "pkg"))}
+    # apm skills/agents/prompts → agentry skill/agent/command, with compound suffixes stripped.
+    assert (ComponentType.SKILL, "style-checker") in found
+    assert (ComponentType.AGENT, "design-reviewer") in found
+    assert (ComponentType.COMMAND, "design-review") in found
+    # apm instructions have no agentry component type → skipped.
+    assert not any(d.name == "design-standards" for d in found.values())
+    assert len(found) == 3
+    # Artifacts keep their real .apm/ paths so reconcile symlinks the right file.
+    assert found[(ComponentType.AGENT, "design-reviewer")].path.name == "design-reviewer.agent.md"
+
+
+def test_apm_package_installs_under_agentry_naming(tmp_path: Path):
+    from agentry.config import ConfigStore
+    from agentry.models import Component, Source, SourceType, Target
+    from agentry.reconcile import sync
+
+    pkg = _apm_package(tmp_path / "pkg")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    ConfigStore.create(proj, [Target.CLAUDE]).save()
+    store = ConfigStore.load(proj)
+    store.add_source(Source(name="apmpkg", type=SourceType.LOCAL, path=str(pkg)))
+    store.add_component(
+        Component(source="apmpkg", type=ComponentType.AGENT, name="design-reviewer")
+    )
+    store.add_component(Component(source="apmpkg", type=ComponentType.SKILL, name="style-checker"))
+    store.save()
+    sync(proj)
+    # The .agent.md file installs under agentry's convention name (.md), via a symlink.
+    agent_link = proj / ".claude/agents/design-reviewer.md"
+    assert agent_link.is_symlink() and agent_link.read_text() == "# reviewer\n"
+    assert (proj / ".claude/skills/style-checker").is_symlink()
