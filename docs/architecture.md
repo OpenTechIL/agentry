@@ -146,9 +146,25 @@ shape the install layout at `agy add` time:
         }
       ]
     }
+  },
+  "targets": {
+    "myide": {
+      "skill": { "strategy": "link", "dest": ".myide/skills/{name}" },
+      "mcp":   { "strategy": "merge", "file": ".myide/mcp.json", "pointer": "mcpServers" }
+    }
   }
 }
 ```
+
+**Driver overlays (`agy target add` / `agy target list`).** Beyond `repositories`, a catalog may
+publish `targets` — shareable *driver overlays*, each a named definition of how some agent
+installs every component type (the same shape as a `target_profiles[<target>]` block).
+`agy target add <name>` looks the overlay up across configured catalogs and merges it into the
+project's `target_profiles` (never clobbering an existing rule), making an otherwise-undefined
+target resolvable — community-supplied universality you don't have to author. `agy target list`
+shows the targets in use, whether each resolves (built-in / profile) or is unresolved, and which
+overlays are installable; an unresolved target during `agy sync` points here. This decentralizes
+the cost of supporting a new agent: a driver is *data* anyone can publish, not a code change.
 
 **Authoring a catalog (`agy catalog add-repo`).** Add an entry from a git/GitHub URL — a browser
 `…/tree/<ref>/<subdir>` URL infers the `ref` and `subdir`; the name defaults to the repo

@@ -33,6 +33,10 @@ catalog_app = typer.Typer(
     no_args_is_help=True, help="Manage catalogs (curated repository indexes)."
 )
 app.add_typer(catalog_app, name="catalog")
+target_app = typer.Typer(
+    no_args_is_help=True, help="Manage target driver overlays (how agents install)."
+)
+app.add_typer(target_app, name="target")
 
 console = Console()
 err = Console(stderr=True)
@@ -865,6 +869,98 @@ def catalog_add_repo(
 
     scope = f"{len(expose)} curated" if expose else "whole repo"
     console.print(f"[green]Added[/green] {name} → [dim]{file}[/dim] ([cyan]{scope}[/cyan])")
+
+
+# -- target sub-commands -------------------------------------------------
+
+
+@target_app.command("add")
+def target_add(
+    name: str = typer.Argument(..., help="Driver-overlay name published by a catalog."),
+    catalog: str = typer.Option(None, "--catalog", "-c", help="Restrict to this catalog."),
+) -> None:
+    """Install a shared driver overlay into `.agentry.yml` `target_profiles`, then sync.
+
+    A catalog can publish *driver overlays* — named definitions of how some agent installs
+    each component type. Installing one makes that target resolvable without hand-writing
+    `target_profiles`: the community-driver layer. Universality you don't have to author.
+    """
+    from . import registry as reg
+
+    store = _load()
+    config = store.parsed()
+    if not config.repositories:
+        err.print(
+            "[red]No catalogs configured.[/red] Add one with `agy catalog add <name> <file-or-url>`."
+        )
+        raise typer.Exit(1)
+    try:
+        match = reg.find_target(_root(), config, name, catalog=catalog)
+    except reg.RegistryError as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+    if match is None:
+        where = f" in catalog '{catalog}'" if catalog else ""
+        err.print(
+            f"[red]No driver overlay named '{name}'{where}.[/red] "
+            "Run `agy target list` to see what's available."
+        )
+        raise typer.Exit(1)
+    registry, profile = match
+    if store.merge_target_profiles({name: profile}):
+        store.save()
+        console.print(
+            f"[green]Added[/green] driver overlay [cyan]{name}[/cyan] [dim](from {registry.name})[/dim]"
+        )
+    else:
+        console.print(
+            f"[dim]Target '{name}' already has profile rules in .agentry.yml — left as-is.[/dim]"
+        )
+    _do_sync()
+
+
+@target_app.command("list")
+def target_list() -> None:
+    """Show targets in use, whether each resolves, and installable overlays from catalogs."""
+    from . import registry as reg
+
+    store = _load()
+    config = store.parsed()
+    active = config.active_targets()
+    available: dict[str, str] = {}
+    try:
+        for cat, tname, _ in reg.list_targets(_root(), config):
+            available.setdefault(tname, cat)
+    except reg.RegistryError as exc:
+        err.print(f"[yellow]! {exc}[/yellow]")
+
+    table = Table(title="Targets in use")
+    table.add_column("target", style="cyan")
+    table.add_column("status")
+    table.add_column("source", style="dim")
+    for t in sorted(active):
+        if is_builtin(t):
+            table.add_row(t, "[green]resolved[/green]", "built-in")
+        elif t in config.target_profiles:
+            table.add_row(t, "[green]resolved[/green]", ".agentry.yml profile")
+        elif t in available:
+            table.add_row(
+                t,
+                "[yellow]overlay available[/yellow]",
+                f"`agy target add {t}` (from {available[t]})",
+            )
+        else:
+            table.add_row(t, "[red]unresolved[/red]", "no built-in, profile, or overlay")
+    if active:
+        console.print(table)
+    else:
+        console.print("[dim]No targets configured.[/dim]")
+    extras = sorted((t, c) for t, c in available.items() if t not in active)
+    if extras:
+        console.print(
+            "\n[dim]Other installable overlays:[/dim] "
+            + ", ".join(f"[cyan]{t}[/cyan] [dim]({c})[/dim]" for t, c in extras)
+        )
 
 
 if __name__ == "__main__":

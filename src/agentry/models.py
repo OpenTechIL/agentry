@@ -413,6 +413,11 @@ class RepositoryIndex(BaseModel):
 
     version: int = 1
     repositories: dict[str, RepositoryEntry] = Field(default_factory=dict)
+    # Shareable *driver overlays*, keyed by target name: how some agent installs each
+    # component type. Installing one (``agy target add <name>``) merges it into the
+    # project's ``target_profiles``, making an otherwise-undefined target resolvable —
+    # the community-driver layer. Same shape as ``Config.target_profiles[<target>]``.
+    targets: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
 
 
 # -- lock -----------------------------------------------------------------

@@ -115,6 +115,8 @@ agy sync                                        # reconcile to match config + lo
   installs strictly from `.agentry.lock` and fails on any unpinned source or drift (for CI).
 - `agy status` — report drift between config and what's installed.
 - `agy why <ref>` — explain a component: its source + pinned revision and where it installs.
+- `agy target add NAME` / `agy target list` — install or browse shared driver overlays (how an
+  agent installs) published by a catalog, making a new target resolvable without writing config.
 - `agy update [SOURCE]` — re-resolve refs to latest and rewrite `.agentry.lock`.
 - `agy version` — print the installed version.
 
@@ -139,7 +141,9 @@ Both sides of the mapping are data-driven: a source repo can self-describe its l
 (`agentry.yaml`), components can declare recursive version-aware `requires`, tool-specific
 hook/MCP fragments route by an `-<harness>` suffix, and you can override paths or define a
 **brand-new agent** entirely in `.agentry.yml` under `target_profiles` — no code, no fork.
-Adding an agent is data, not a code change:
+That definition is shareable: publish it as a **driver overlay** in a catalog and anyone can
+`agy target add <name>` to support the agent without writing config. Adding an agent is data,
+not a code change:
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'primaryColor':'#5A4FCF','primaryTextColor':'#F8FAFC','lineColor':'#22D3EE','primaryBorderColor':'#22D3EE','secondaryColor':'#1E1E2E'}}}%%
