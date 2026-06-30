@@ -67,8 +67,8 @@ tracks so removal deletes exactly those and nothing else. See `installers/genera
 ## 4. Source-repo layout — convention or descriptor
 
 A source (git repo or local dir) provides components in one of three ways, in precedence
-order: an explicit `agentry.yaml` **descriptor**, a Microsoft apm **`.apm/` package tree**
-(consumed directly — see below), else agentry's own **convention** scan.
+order: an explicit `agentry.yaml` **descriptor**, an **`.apm/` package tree** (consumed
+directly — see below), else agentry's own **convention** scan.
 
 **Convention** — mirror the standard agent layout:
 
@@ -97,16 +97,16 @@ provides:
 The component *type* still dictates shape (dir vs file + extension); the descriptor only
 says *where*. Absent ⇒ convention scan (full back-compat).
 
-**apm packages (`.apm/`).** A Microsoft apm package keeps its primitives under a `.apm/`
-tree with apm's own names: `.apm/skills/<name>/`, `.apm/agents/<name>.agent.md`,
+**`.apm/`-format packages.** Such a package keeps its primitives under a `.apm/`
+tree with that format's own names: `.apm/skills/<name>/`, `.apm/agents/<name>.agent.md`,
 `.apm/prompts/<name>.prompt.md`, `.apm/instructions/<name>.instructions.md`. When a source
 root contains `.apm/` (and no agentry descriptor), `discovery` reads it directly and maps
 each primitive to its agentry type — skills → `skill`, agents → `agent`, **prompts →
 `command`** — stripping the compound extension for the name and skipping `instructions`
 (no agentry equivalent). The discovered artifact keeps its real `.apm/` path, so it installs
 under agentry's own naming (e.g. `.apm/agents/x.agent.md` → a symlink at
-`.claude/agents/x.md`). So an apm package repo is consumable as an agentry source with no
-republishing — the package-tree counterpart to `agy import apm`, which translates the
+`.claude/agents/x.md`). So such a package repo is consumable as an agentry source with no
+republishing — the package-tree counterpart to `agy import apm`, which translates the matching
 `apm.yml` manifest.
 
 **Consumer-side overrides (third way).** When a source follows neither layout — a common
@@ -237,7 +237,7 @@ a Cursor or Codex fragment never lands in Claude's `settings.json`. The canonica
 file applies to every target that supports the type. As a final guard, a hook event Claude Code
 doesn't recognize is dropped from `.claude/settings.json` with a warning rather than written out.
 
-**Importing from apm (`agy import apm`, `apm_import.py`).** Microsoft's apm is the same category
+**Importing an apm-format project (`agy import apm`, `apm_import.py`).** It's the same category
 built on the same open standards, so an `apm.yml` is largely consumable. The importer is a
 one-shot, offline translator: a `dependencies.apm` git shorthand `[host/]owner/repo/<typedir>/<name>`
 becomes an agentry **git source** plus a **component** `(<type>, <name>)` — agentry resolves a
@@ -384,7 +384,7 @@ discovery.py    scan a source for available components + their `requires` (LAYOU
 resolver.py     download/checkout into the store; resolve refs → SHA/hash
 deps.py         transitive dependency closure (recursive, version-aware) → augmented graph
 registry.py     resolve a bare repo name via external catalogs (file/URL) → Sources + Components
-apm_import.py   translate a Microsoft apm manifest (apm.yml) → agentry sources/components/MCP
+apm_import.py   translate an apm-format manifest (apm.yml) → agentry sources/components/MCP
 manifest.py     .agentry/.manifest.json read/write
 installers/
   link.py       symlink create/remove/state (lexical, store-scoped)

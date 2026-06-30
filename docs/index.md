@@ -31,13 +31,21 @@ Treat AI components like packages:
 - One `agy sync` installs everything into each tool's native layout — via **symlinks**
   (skills/agents/commands/tools) or **reversible config merges** (hooks/MCP).
 
-What that gets you:
+What makes it different — it optimizes *editing* agent context and refuses to quietly break a
+project (no compile step, no static artifact to regenerate, no silent overwrites):
 
-- **Write once, install everywhere** — one declaration installs into every enabled agent.
-- **Project-scoped, not global** — isolated, reproducible, committable environments.
-- **Split skills across projects** — share sources across initiatives without conflicts.
-- **Extensible by data, not code** — define a brand-new agent in `.agentry.yml` via
-  `target_profiles`; no fork, no plugin.
+- **Edit once — every agent sees it instantly.** Live symlinks into one store; no recompile.
+- **Any agent — even your own.** Open-string targets + shareable driver overlays
+  (`agy target add`); a new or in-house agent is a few lines of `target_profiles`, no fork.
+- **It never touches what you wrote.** Key-scoped merges, never-clobber symlinks, clean
+  `agy remove` — CI-enforced guarantees.
+- **Loud, never silent.** `agy doctor` catches undefined targets, unset `${VARs}`, and drift
+  before they bite; status/`agy why` share the install resolver (no phantom drift).
+- **Reproducible by default.** Timestamp-free lockfile + `agy sync --frozen` for clean CI.
+- **A dependency manager, not a runtime** — nothing of it runs while your agents do; no model
+  or key embedded.
+- **Portable & interoperable** — emit `AGENTS.md`, import/consume other agent-package formats,
+  and translate component content when a tool needs a different shape.
 
 ## Get started
 
