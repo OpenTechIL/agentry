@@ -206,6 +206,18 @@ def compute_desired(
                         )
                     if not entries:
                         continue
+                    # A plugin-style hook ships ${...PLUGIN_ROOT} paths that only resolve inside
+                    # a real installed plugin. Merged verbatim into a config file they fail at
+                    # startup; the fix is a link+merge profile (which rewrites them). Warn rather
+                    # than silently install a dead hook.
+                    for cmd in link_merge_inst.plugin_root_refs(entries):
+                        warnings.append(
+                            f"{comp.ref}: hook command references a plugin-root variable "
+                            f"({cmd!r}), which only resolves inside an installed plugin — merged "
+                            f"into {dest.file} it will fail at startup. Configure a 'link+merge' "
+                            f"hook profile under target_profiles for this repo (see the "
+                            f"superpowers/arckit catalog entries)."
+                        )
                 # Seam: a driver.transform (currently always None) would reshape `entries`
                 # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
                 merges.append(DesiredMerge(comp.ref, tname, dest, entries, list(entries)))

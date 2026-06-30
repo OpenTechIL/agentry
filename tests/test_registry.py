@@ -135,6 +135,23 @@ def test_build_install_profiles_preserves_explicit_rules():
     assert profiles["claude"][_C.COMMAND].dest == ".claude/commands/arckit/{name}.md"
 
 
+def test_shipped_superpowers_entry_yields_link_merge_hook_profile():
+    """The curated catalog's superpowers entry must resolve to a claude/hook link+merge
+    profile — otherwise its plugin-style ${CLAUDE_PLUGIN_ROOT} hook lands in settings.json
+    verbatim and Claude Code rejects it at startup."""
+    catalog_path = Path(__file__).resolve().parent.parent / "registry" / "repositories.json"
+    config = Config(repositories=[Registry(name="starter", location=str(catalog_path))])
+    match = reg.find_repo(catalog_path.parent.parent, config, "superpowers")
+    assert match is not None
+    _, _, entry = match
+
+    profiles = reg.build_install_profiles(entry, "superpowers", _comps(_C.HOOK), {"claude"})
+    rule = profiles["claude"][_C.HOOK]
+    assert rule.strategy is Strategy.LINK_MERGE
+    assert rule.rewrite_from == "${CLAUDE_PLUGIN_ROOT}/hooks"
+    assert rule.rewrite_to == "${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}"
+
+
 def test_load_catalog_and_find(tmp_path: Path):
     catalog_path = _write_catalog(tmp_path, _skill_repo(tmp_path))
     config = Config(repositories=[Registry(name="r", location=str(catalog_path))])

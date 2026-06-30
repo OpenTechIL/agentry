@@ -9,7 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — 2026-06-25
 
+### Fixed
+- `superpowers` catalog entry now carries a `claude` hook `target_profiles` rule
+  (`link+merge` with `${CLAUDE_PLUGIN_ROOT}/hooks` → `${CLAUDE_PROJECT_DIR}/.claude/hooks/…`
+  rewrite). Without it, installing `superpowers` merged a plugin-only `${CLAUDE_PLUGIN_ROOT}`
+  command into `.claude/settings.json`, which Claude Code rejects at startup with a
+  `SessionStart` hook error.
+
 ### Added
+- Defensive guard in the plain-`merge` hook path (`reconcile.py`): when a hook fragment
+  still references a `${…PLUGIN_ROOT}` variable after filtering, `agy sync` now emits a
+  warning pointing at the `link+merge` profile fix instead of silently installing a hook
+  the harness rejects. Backed by a new `link_merge.plugin_root_refs()` helper.
 - Standalone `agy` binaries for Windows, macOS, and Linux, built with PyInstaller
   and attached to each GitHub Release (`release-binaries.yml`), plus `install.sh` /
   `install.ps1` one-line installers that download and checksum-verify the binary.

@@ -70,10 +70,23 @@
       ]
     },
     "superpowers": {
+      "summary": "Superpowers — a library of process skills (TDD, debugging, planning, code review) plus a SessionStart hook that surfaces them.",
       "source": {
         "type": "git",
         "url": "https://github.com/obra/superpowers",
         "ref": "main"
+      },
+      "target_profiles": {
+        "claude": {
+          "hook": {
+            "strategy": "link+merge",
+            "dest": ".claude/hooks/agentry/{repo}@{ref}/{name}",
+            "file": ".claude/settings.json",
+            "pointer": "hooks",
+            "rewrite_from": "${CLAUDE_PLUGIN_ROOT}/hooks",
+            "rewrite_to": "${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}"
+          }
+        }
       }
     },
     "ponytail": {
