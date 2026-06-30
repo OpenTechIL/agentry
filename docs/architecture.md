@@ -414,8 +414,12 @@ gitignore.py    ensure .agentry/ is ignored
   agents-md` (`emit.py`) composes a portable `AGENTS.md` from a project's skills/agents/commands
   — deterministic and CI-verifiable (`--check`), produced at author time and committed. It's the
   no-LLM half of the transform design (`docs/superpowers/specs/2026-06-30-transform-seam-design.md`);
-  an `--agent` provider that *synthesizes* (vs concatenates) and per-component copy-with-rewrite
-  are the next phases.
+  the `--agent` provider that *synthesizes* (vs concatenates) by shelling out to the user's own
+  agent CLI (`transform.command` in `.agentry.yml`; prompt on stdin) is now shipped — gated by
+  `--allow-transform`, with a diff preview + confirmation (`--yes` to auto-apply in CI), and
+  `--check` reserved for the reproducible deterministic mode. agentry embeds no model or key, in
+  keeping with "nothing of it runs while your agents do." Per-component copy-with-rewrite remains
+  the next phase.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
 - **Hook array-merge** — richer merging for event-keyed hook arrays beyond the named-key contract.
 - **Copy fallback** — copy instead of symlink for filesystems without symlink support (Windows).

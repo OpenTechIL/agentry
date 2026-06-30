@@ -13,12 +13,18 @@ of concatenating; the gather/compose split here is the seam it plugs into.
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from .discovery import index as discovery_index
 from .models import ComponentType, Config
 from .resolver import effective_root
+
+
+class TransformError(RuntimeError):
+    """The configured agent command failed or produced no output."""
+
 
 #: Component types whose markdown body is meaningful in an AGENTS.md (tools/hooks/mcp aren't).
 EMIT_TYPES = (ComponentType.SKILL, ComponentType.AGENT, ComponentType.COMMAND)
@@ -86,3 +92,50 @@ def gather_items(root: Path, config: Config) -> list[EmitItem]:
             continue
         items.append(EmitItem(comp.type, comp.name, md.read_text(encoding="utf-8")))
     return items
+
+
+_SYNTHESIS_INSTRUCTIONS = """\
+You are composing an AGENTS.md for a software project — the standard Markdown file an AI
+coding agent reads for project-specific instructions. Below are the project's installed
+components (skills, agents, commands), each with its name, type, and content.
+
+Synthesize ONE coherent, well-organized AGENTS.md: preserve every concrete instruction,
+deduplicate overlap, and group related guidance. Output ONLY the AGENTS.md Markdown — no
+preamble, no code fences around the whole document.
+
+--- COMPONENTS ---
+"""
+
+
+def build_synthesis_prompt(items: list[EmitItem]) -> str:
+    """The prompt fed to the agent CLI to *synthesize* (vs concatenate) an AGENTS.md."""
+    parts = [_SYNTHESIS_INSTRUCTIONS]
+    for it in items:
+        parts.append(f"\n### {it.name} ({it.type.value})\n{it.text.strip()}\n")
+    return "".join(parts)
+
+
+def run_agent(command: list[str], prompt: str) -> str:
+    """Run the user's configured agent CLI, feeding ``prompt`` on stdin; return stdout.
+
+    agentry embeds no model — it shells out to the CLI the user already trusts (the same
+    posture as the generate strategy). Raises :class:`TransformError` on failure/empty output.
+    """
+    if not command:
+        raise TransformError(
+            "no transform command configured (set `transform.command` in .agentry.yml)"
+        )
+    try:
+        proc = subprocess.run(  # noqa: S603 — argv list from user config, no shell
+            command, input=prompt, capture_output=True, text=True, check=True
+        )
+    except FileNotFoundError as exc:
+        raise TransformError(f"transform command not found: {command[0]}") from exc
+    except subprocess.CalledProcessError as exc:
+        raise TransformError(
+            f"transform command failed ({' '.join(command)}): {exc.stderr.strip() or exc}"
+        ) from exc
+    out = proc.stdout.strip()
+    if not out:
+        raise TransformError("transform command produced no output")
+    return out + "\n"

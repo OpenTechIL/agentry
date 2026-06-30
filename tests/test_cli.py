@@ -225,3 +225,56 @@ def test_emit_agents_md_no_components(tmp_path, monkeypatch):
     out = runner.invoke(app, ["emit", "agents-md"]).output
     assert "No skill/agent/command" in out
     assert not (project / "AGENTS.md").exists()
+
+
+def _project_with_component(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    make_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    runner.invoke(app, ["add", "team/skill/code-reviewer"])
+    return project
+
+
+def test_emit_agent_requires_allow_transform(tmp_path, monkeypatch):
+    project = _project_with_component(tmp_path, monkeypatch)
+    store = ConfigStore.load(project)
+    store.doc["transform"] = {"command": ["cat"]}
+    store.save()
+    result = runner.invoke(app, ["emit", "agents-md", "--agent"])
+    assert result.exit_code == 1
+    assert "allow-transform" in result.output
+
+
+def test_emit_agent_requires_configured_command(tmp_path, monkeypatch):
+    _project_with_component(tmp_path, monkeypatch)  # no transform.command in config
+    result = runner.invoke(app, ["emit", "agents-md", "--agent", "--allow-transform"])
+    assert result.exit_code == 1
+    assert "No transform command" in result.output
+
+
+def test_emit_agent_synthesizes_and_writes(tmp_path, monkeypatch):
+    project = _project_with_component(tmp_path, monkeypatch)
+    store = ConfigStore.load(project)
+    store.doc["transform"] = {"command": ["fake-agent"]}
+    store.save()
+
+    import agentry.emit as emit_mod
+
+    monkeypatch.setattr(emit_mod, "run_agent", lambda cmd, prompt: "# AGENTS.md\n\nSynthesized.\n")
+    # --yes skips the confirmation prompt (the CI auto-apply path).
+    out = runner.invoke(app, ["emit", "agents-md", "--agent", "--allow-transform", "--yes"]).output
+    assert "Wrote" in out
+    assert (project / "AGENTS.md").read_text() == "# AGENTS.md\n\nSynthesized.\n"
+
+
+def test_emit_agent_rejects_check(tmp_path, monkeypatch):
+    project = _project_with_component(tmp_path, monkeypatch)
+    store = ConfigStore.load(project)
+    store.doc["transform"] = {"command": ["cat"]}
+    store.save()
+    result = runner.invoke(app, ["emit", "agents-md", "--agent", "--allow-transform", "--check"])
+    assert result.exit_code == 1
+    assert "reproducible" in result.output

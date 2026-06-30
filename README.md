@@ -119,8 +119,10 @@ agy sync                                        # reconcile to match config + lo
   agent installs) published by a catalog, making a new target resolvable without writing config.
 - `agy import apm [--file apm.yml]` — translate a Microsoft **apm** project (`apm.yml`) into
   `.agentry.yml` — sources, components, targets, and inline MCP servers — then `agy sync`.
-- `agy emit agents-md [--check]` — compose a portable `AGENTS.md` from your skills/agents/commands
-  (deterministic; `--check` verifies it's up to date in CI).
+- `agy emit agents-md [--check] [--agent]` — compose a portable `AGENTS.md` from your
+  skills/agents/commands. Deterministic by default (`--check` verifies it in CI); `--agent`
+  *synthesizes* it via your own agent CLI (`transform.command` in `.agentry.yml`), gated by
+  `--allow-transform`, with a diff preview + confirmation (`--yes` to auto-apply in CI).
 - `agy update [SOURCE]` — re-resolve refs to latest and rewrite `.agentry.lock`.
 - `agy version` — print the installed version.
 
