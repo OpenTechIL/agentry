@@ -188,3 +188,40 @@ def test_import_apm_missing_file_errors(tmp_path, monkeypatch):
     result = runner.invoke(app, ["import", "apm"])
     assert result.exit_code == 1
     assert "No apm manifest" in result.output
+
+
+def test_emit_agents_md_writes_and_checks(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    make_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    runner.invoke(app, ["add", "team/skill/code-reviewer"])
+    runner.invoke(app, ["add", "team/agent/planner"])
+
+    out = runner.invoke(app, ["emit", "agents-md"]).output
+    assert "Wrote" in out
+    agents_md = (project / "AGENTS.md").read_text()
+    assert "# AGENTS.md" in agents_md
+    assert "## code-reviewer (skill)" in agents_md and "# code reviewer" in agents_md
+    assert "## planner (agent)" in agents_md
+
+    # Deterministic + committed: --check passes right after a write.
+    assert runner.invoke(app, ["emit", "agents-md", "--check"]).exit_code == 0
+
+    # A source change makes the committed file stale → --check fails (the CI verify path).
+    (tmp_path / "team" / "skills" / "code-reviewer" / "SKILL.md").write_text("# changed\n")
+    result = runner.invoke(app, ["emit", "agents-md", "--check"])
+    assert result.exit_code == 1
+    assert "out of date" in result.output
+
+
+def test_emit_agents_md_no_components(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    monkeypatch.chdir(project)
+    out = runner.invoke(app, ["emit", "agents-md"]).output
+    assert "No skill/agent/command" in out
+    assert not (project / "AGENTS.md").exists()

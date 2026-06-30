@@ -397,7 +397,12 @@ gitignore.py    ensure .agentry/ is ignored
   already ships; see §5.)
 - **Semantic translation** — the `transform` seam on a driver (§5) would let a component
   authored for one agent be reshaped for another (format/field translation), turning today's
-  placement-mapping into true write-once-run-anywhere.
+  placement-mapping into true write-once-run-anywhere. *First step shipped:* `agy emit
+  agents-md` (`emit.py`) composes a portable `AGENTS.md` from a project's skills/agents/commands
+  — deterministic and CI-verifiable (`--check`), produced at author time and committed. It's the
+  no-LLM half of the transform design (`docs/superpowers/specs/2026-06-30-transform-seam-design.md`);
+  an `--agent` provider that *synthesizes* (vs concatenates) and per-component copy-with-rewrite
+  are the next phases.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
 - **Hook array-merge** — richer merging for event-keyed hook arrays beyond the named-key contract.
 - **Copy fallback** — copy instead of symlink for filesystems without symlink support (Windows).
