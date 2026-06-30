@@ -167,6 +167,58 @@ def test_load_catalog_and_find(tmp_path: Path):
     assert listed == {"cool", "fake"}
 
 
+def _overlay_catalog(tmp_path: Path) -> Path:
+    """A catalog that publishes a driver overlay for a fictional 'myide' target."""
+    path = tmp_path / "overlays.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "repositories": {},
+                "targets": {
+                    "myide": {
+                        "skill": {"strategy": "link", "dest": ".myide/skills/{name}"},
+                        "mcp": {
+                            "strategy": "merge",
+                            "file": ".myide/mcp.json",
+                            "pointer": "mcpServers",
+                        },
+                    }
+                },
+            }
+        )
+    )
+    return path
+
+
+def test_find_and_list_target_overlays(tmp_path: Path):
+    catalog_path = _overlay_catalog(tmp_path)
+    config = Config(repositories=[Registry(name="ov", location=str(catalog_path))])
+
+    match = reg.find_target(tmp_path, config, "myide")
+    assert match is not None
+    registry, profile = match
+    assert registry.name == "ov"
+    assert profile[ComponentType.SKILL].dest == ".myide/skills/{name}"
+    assert profile[ComponentType.MCP].pointer == "mcpServers"
+
+    assert reg.find_target(tmp_path, config, "nope") is None
+    # --catalog filter: a name present but in a different catalog is not found.
+    assert reg.find_target(tmp_path, config, "myide", catalog="other") is None
+
+    listed = {tname for _, tname, _ in reg.list_targets(tmp_path, config)}
+    assert listed == {"myide"}
+
+
+def test_catalog_without_targets_section_is_valid(tmp_path: Path):
+    # A catalog that predates the `targets` field still loads (additive, default empty).
+    path = tmp_path / "repos.json"
+    path.write_text(json.dumps({"version": 1, "repositories": {}}))
+    config = Config(repositories=[Registry(name="r", location=str(path))])
+    assert reg.load_catalog(tmp_path, config.repositories[0]).targets == {}
+    assert reg.list_targets(tmp_path, config) == []
+
+
 def test_invalid_catalog_errors(tmp_path: Path):
     bad = tmp_path / "bad.json"
     bad.write_text("{ not json")

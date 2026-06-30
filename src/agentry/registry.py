@@ -295,3 +295,36 @@ def list_repos(root: Path, config: Config) -> list[tuple[str, str, RepositoryEnt
             seen.add(repo_name)
             out.append((registry.name, repo_name, entry))
     return out
+
+
+def find_target(
+    root: Path, config: Config, name: str, *, catalog: str | None = None
+) -> tuple[Registry, dict[ComponentType, ProfileRule]] | None:
+    """First catalog (in config order) that publishes a driver overlay named ``name``.
+
+    Restrict to one catalog with ``catalog``. Returns the owning registry and the overlay's
+    ``ComponentType -> ProfileRule`` map, ready for ``ConfigStore.merge_target_profiles``.
+    """
+    for registry in config.repositories:
+        if catalog is not None and registry.name != catalog:
+            continue
+        profile = load_catalog(root, registry).targets.get(name)
+        if profile is not None:
+            return registry, profile
+    return None
+
+
+def list_targets(
+    root: Path, config: Config
+) -> list[tuple[str, str, dict[ComponentType, ProfileRule]]]:
+    """All driver overlays across catalogs as ``(catalog_name, target_name, profile)``."""
+    out: list[tuple[str, str, dict[ComponentType, ProfileRule]]] = []
+    seen: set[str] = set()
+    for registry in config.repositories:
+        catalog = load_catalog(root, registry)
+        for tname, profile in sorted(catalog.targets.items()):
+            if tname in seen:
+                continue  # earlier catalog wins
+            seen.add(tname)
+            out.append((registry.name, tname, profile))
+    return out

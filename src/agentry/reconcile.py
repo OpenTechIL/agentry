@@ -115,7 +115,8 @@ def compute_desired(
     drivers = resolve_drivers(config)
     for missing in unresolved_targets(config):
         warnings.append(
-            f"target '{missing}' is undefined — add it under target_profiles in .agentry.yml"
+            f"target '{missing}' is undefined — define it under target_profiles in .agentry.yml, "
+            "or install a shared driver overlay (`agy target list`)"
         )
 
     # Build a (type, name) -> path index per source.
