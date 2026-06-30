@@ -35,3 +35,29 @@ def test_list_empty_message(tmp_path, monkeypatch):
     monkeypatch.chdir(project)
     out = runner.invoke(app, ["list"]).output
     assert "No components found" in out
+
+
+def test_why_shows_provenance_and_install_targets(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    make_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    runner.invoke(app, ["add", "team/skill/code-reviewer"])
+
+    out = runner.invoke(app, ["why", "team/skill/code-reviewer"]).output
+    assert "team/skill/code-reviewer" in out
+    assert "source:" in out and "team" in out
+    assert ".claude/skills/code-reviewer" in out  # resolved install target
+    assert "ok" in out
+
+
+def test_why_errors_on_unknown_ref(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    monkeypatch.chdir(project)
+    result = runner.invoke(app, ["why", "team/skill/nope"])
+    assert result.exit_code == 1
+    assert "No such component" in result.output

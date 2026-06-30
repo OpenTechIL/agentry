@@ -604,6 +604,62 @@ def status_cmd() -> None:
         err.print(f"[yellow]! {w}[/yellow]")
 
 
+def _source_provenance(store: ConfigStore, source_name: str) -> str:
+    """One-line provenance for a source: where it came from and the pinned revision."""
+    lock = load_lock(_root())
+    entry = lock.entry(source_name)
+    src = next((s for s in store.parsed().sources if s.name == source_name), None)
+    if entry is None:
+        return f"{source_name} [dim](unresolved — run `agy sync`)[/dim]"
+    resolved = entry.resolved
+    short = (
+        resolved[len("sha256:") : len("sha256:") + 12]
+        if resolved.startswith("sha256:")
+        else resolved[:12]
+    )
+    if entry.type is SourceType.GIT:
+        where = entry.url or (src.url if src else "?")
+        return f"{source_name} [dim]git[/dim] {where} @ [cyan]{short}[/cyan] (ref {entry.ref or (src.ref if src else '?')})"
+    where = entry.path or (src.path if src else "?")
+    return f"{source_name} [dim]local[/dim] {where} @ [cyan]{short}[/cyan]"
+
+
+@app.command(name="why")
+def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/<name>.")) -> None:
+    """Explain a component: where it came from (source + pinned revision) and where it installs.
+
+    Provenance with no guessing — the counter to silent target autodetection.
+    """
+    store = _load()
+    component = store.parsed().find_component(ref)
+    if component is None:
+        err.print(f"[red]No such component in config: {ref}[/red]")
+        raise typer.Exit(1)
+    try:
+        rows, warnings = status(_root())
+    except (ResolveError, DependencyError) as exc:
+        err.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1)
+
+    tree = Tree(
+        f"[cyan]{ref}[/cyan]" + ("" if component.enabled else " [yellow](disabled)[/yellow]")
+    )
+    tree.add(f"source: {_source_provenance(store, component.source)}")
+    targets = tree.add("installs to")
+    style = {"ok": "green", "missing": "red", "drift": "yellow"}
+    mine = [r for r in rows if r.ref == ref]
+    if mine:
+        for r in mine:
+            targets.add(
+                f"[bold]{r.target}[/bold]  [dim]{r.where}[/dim]  [{style.get(r.state, 'white')}]{r.state}[/]"
+            )
+    else:
+        targets.add("[dim]no target resolves this component[/dim]")
+    console.print(tree)
+    for w in warnings:
+        err.print(f"[yellow]! {w}[/yellow]")
+
+
 # -- source sub-commands -------------------------------------------------
 
 
