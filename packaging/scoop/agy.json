@@ -1,0 +1,25 @@
+{
+  "version": "0.1.0",
+  "description": "A dependency manager for AI coding agents.",
+  "homepage": "https://github.com/OpenTechIL/agentry",
+  "license": "MIT",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/OpenTechIL/agentry/releases/download/v0.1.0/agy-0.1.0-windows-x86_64.exe#/agy.exe",
+      "hash": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  },
+  "bin": "agy.exe",
+  "checkver": "github",
+  "autoupdate": {
+    "architecture": {
+      "64bit": {
+        "url": "https://github.com/OpenTechIL/agentry/releases/download/v$version/agy-$version-windows-x86_64.exe#/agy.exe"
+      }
+    },
+    "hash": {
+      "url": "https://github.com/OpenTechIL/agentry/releases/download/v$version/SHA256SUMS.txt",
+      "regex": "$sha256\\s+agy-$version-windows-x86_64.exe"
+    }
+  }
+}

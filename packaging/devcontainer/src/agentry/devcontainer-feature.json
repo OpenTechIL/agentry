@@ -1,0 +1,16 @@
+{
+  "id": "agentry",
+  "version": "1.0.0",
+  "name": "agentry (agy)",
+  "description": "Installs the agentry CLI (agy). On create, runs `agy sync --frozen` when the workspace has a committed .agentry.lock — zero-friction agent setup in a devcontainer/Codespace.",
+  "documentationURL": "https://github.com/OpenTechIL/agentry/tree/main/packaging/devcontainer",
+  "options": {
+    "version": {
+      "type": "string",
+      "default": "latest",
+      "description": "agentry version to install (e.g. 0.1.0), or 'latest'."
+    }
+  },
+  "installsAfter": ["ghcr.io/devcontainers/features/common-utils"],
+  "postCreateCommand": "sh -c 'command -v agy >/dev/null 2>&1 && [ -f .agentry.lock ] && agy sync --frozen || true'"
+}
