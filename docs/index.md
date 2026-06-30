@@ -2,9 +2,9 @@
 
 **A dependency manager for AI coding agents.** `agentry` (command: `agy`) lets you
 declare the skills, agents, commands, tools, hooks, and MCP servers your project uses —
-then install them into Claude Code, Cursor, Gemini CLI, OpenCode, Codex, Windsurf, and
-Kimi with one command. **Write once, deploy to any agent** — and teach it new agents
-without writing code.
+then install them into Claude Code, Cursor, Gemini CLI, OpenCode, Codex, Windsurf, Kimi,
+GitHub Copilot, and Kiro with one command. **Write once, deploy to any agent** — and teach
+it new agents without writing code.
 
 ## The idea
 
@@ -19,7 +19,7 @@ flowchart LR
   S --> U["Cursor<br/><code>.cursor/</code>"]
   S --> G["Gemini CLI<br/><code>.gemini/</code>"]
   S --> O["OpenCode<br/><code>.opencode/</code>"]
-  S --> X["Codex · Windsurf · Kimi"]
+  S --> X["Codex · Windsurf · Kimi · Copilot · Kiro"]
   S -.->|"target_profiles — no code"| N["your own agent"]
 ```
 
