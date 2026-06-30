@@ -41,6 +41,10 @@ import_app = typer.Typer(
     no_args_is_help=True, help="Import a project from another agent package manager."
 )
 app.add_typer(import_app, name="import")
+emit_app = typer.Typer(
+    no_args_is_help=True, help="Emit composed, portable artifacts (e.g. AGENTS.md)."
+)
+app.add_typer(emit_app, name="emit")
 
 console = Console()
 err = Console(stderr=True)
@@ -1055,6 +1059,47 @@ def import_apm(
         f"{len(result.components)} component(s) into .agentry.yml. "
         "Review it, then run [bold]agy sync[/bold]."
     )
+
+
+# -- emit sub-commands ---------------------------------------------------
+
+
+@emit_app.command("agents-md")
+def emit_agents_md(
+    output: Path = typer.Option(Path("AGENTS.md"), "--output", "-o", help="File to write."),
+    check: bool = typer.Option(
+        False, "--check", help="Verify the file is up to date; exit 1 if not (for CI). No write."
+    ),
+) -> None:
+    """Compose a portable AGENTS.md from this project's skills/agents/commands.
+
+    Deterministic and reproducible — same components produce the same bytes, so the result is
+    safe to commit and verify in CI with `--check`. Run it again to refresh after changes.
+    """
+    from .emit import compose_agents_md, gather_items
+
+    store = _load()
+    config = store.parsed()
+    items = gather_items(_root(), config)
+    if not items:
+        console.print(
+            "[yellow]No skill/agent/command components to compose into AGENTS.md.[/yellow]"
+        )
+        raise typer.Exit(0)
+    content = compose_agents_md(items)
+    target = output if output.is_absolute() else _root() / output
+
+    if check:
+        current = target.read_text(encoding="utf-8") if target.is_file() else ""
+        if current != content:
+            err.print(f"[red]{output} is out of date.[/red] Run `agy emit agents-md` to refresh.")
+            raise typer.Exit(1)
+        console.print(f"[green]{output} is up to date[/green] ({len(items)} component(s)).")
+        return
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    console.print(f"[green]Wrote[/green] {output} [dim]from {len(items)} component(s)[/dim].")
 
 
 if __name__ == "__main__":
