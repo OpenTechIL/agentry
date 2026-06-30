@@ -97,7 +97,7 @@ curl -fsSL https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.sh 
 irm https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.ps1 | iex
 ```
 
-This downloads the right binary for your OS/arch from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest), verifies its checksum, and installs `agy`. Pin a version with `AGENTRY_VERSION=0.2.0` or change the location with `AGENTRY_INSTALL_DIR`. (macOS binaries are unsigned — on first run, allow it via System Settings → Privacy & Security.)
+This downloads the right binary for your OS/arch from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest), verifies its checksum, and installs `agy`. Pin a version with `AGENTRY_VERSION=0.1.0` or change the location with `AGENTRY_INSTALL_DIR`. (macOS binaries are unsigned — on first run, allow it via System Settings → Privacy & Security.)
 
 **Tell your coding agent** to install it on a machine:
 
@@ -143,6 +143,8 @@ agy sync                                        # reconcile to match config + lo
   git host works (GitHub, GitLab, Bitbucket, Azure DevOps, Gitea, Gogs); browser "tree"/"blob"
   URLs from GitHub, GitLab, and Bitbucket are accepted and tidied automatically.
 - `agy add <ref>` — enable a component (or whole catalog repo) and install it.
+- `agy search [QUERY]` — search configured catalogs for repos (filter by `QUERY`); with no
+  query, lists the components every catalog offers.
 - `agy sync [--frozen]` — reconcile on-disk state to config + lock (idempotent). `--frozen`
   installs strictly from `.agentry.lock` and fails on any unpinned source or drift (for CI).
 - `agy status` — report drift between config and what's installed.
@@ -269,9 +271,10 @@ Most skills on GitHub don't follow agentry's `skills/<name>/` layout. Three ways
    ```
 
    A **starter catalog** ships at [`registry/repositories.json`](registry/repositories.json) with
-   four curated repos — `arckit`, `ui-ux-pro-max`, `graphify`, and `superpowers`. Point a catalog
-   at it and install by name. The catalog schema (including the `copy` and `namespaced` per-repo
-   flags) is documented in [docs/architecture.md](docs/architecture.md#4-source-repo-layout--convention-or-descriptor).
+   six curated repos — `arckit`, `ui-ux-pro-max`, `graphify`, `superpowers`, `ponytail` (guides
+   agents toward minimal, necessary code), and `caveman` (compresses agent output while preserving
+   accuracy). Point a catalog at it and install by name. The catalog schema (including the `copy`
+   and `namespaced` per-repo flags) is documented in [docs/architecture.md](docs/architecture.md#4-source-repo-layout--convention-or-descriptor).
 
 4. **`.apm/`-format packages** — a repo with an `.apm/` package tree works as a source as-is:
    agentry discovers its skills/agents/prompts and installs them under agentry's naming, no
@@ -292,6 +295,57 @@ Want a repo added to [`registry/repositories.json`](registry/repositories.json)?
   [PR template](.github/PULL_REQUEST_TEMPLATE.md).
 - **Request via an issue** — prefer not to open a PR? [File an issue](https://github.com/OpenTechIL/agentry/issues)
   with the repo URL and a one-line summary, and a maintainer will add it.
+
+## FAQ
+
+**Is agentry an agent, or a runtime?**
+Neither — it's a *dependency manager*. It installs the skills, agents, commands, tools,
+hooks, and MCP servers your agents read, then gets out of the way. Nothing of it runs
+while your agents do, and it embeds no model or API key.
+
+**Do I need Python to use it?**
+No. The [standalone binary](#install) (`install.sh` / `install.ps1`) has no Python
+dependency. Installing via `uvx` / `uv pip` is an alternative for Python users, not a
+requirement.
+
+**Can I `pip install agentry` from PyPI?**
+No — there's no PyPI package (the name is owned by an unrelated project). Use the binary
+installer or run from git with `uvx --from git+https://github.com/OpenTechIL/agentry agy …`.
+
+**Will `agy` overwrite my hand-edited `.mcp.json` or `settings.json`?**
+No. A config merge writes only the keys it owns and leaves your entries, key order, and
+comments untouched; a symlink install refuses to clobber a real file; and `agy remove`
+reverses cleanly. These are [CI-enforced guarantees](tests/test_guarantees.py) — see
+[Safe by construction](#safe-by-construction).
+
+**How do I support an agent that isn't built in?**
+Define it under `target_profiles` in `.agentry.yml` — no fork, no plugin, no code (see
+[How install works](#how-install-works)). To reuse someone else's definition, run
+`agy target add <name>` to install a shared driver overlay from a catalog.
+
+**What gets committed to git — symlinks or files?**
+Symlinks by default: components live-update from the git-ignored `.agentry/` store, so an
+edit in one place is seen by every agent instantly. Switch any component to a committable
+real copy with `strategy: copy`.
+
+**Does agentry ever run arbitrary code?**
+Only for opt-in `generate` installers (skills that build themselves via their own CLI),
+and only when you pass `--allow-run` or have granted `agy trust <source>` — which is
+pinned to the source's SHA and drops if the source moves.
+
+**How do I use it in CI?**
+Commit `.agentry.lock` and run `agy sync --frozen`. It installs strictly from the lock
+and fails on any unpinned source or drift, so CI is deterministic and reproducible.
+
+**How is this different from git submodules or copy-pasting files?**
+agentry adds what a flat copy or submodule can't: SHA **pinning**, **transitive**
+`requires` resolution, **multi-target fanout** into every tool's native layout at once,
+and **reversible** installs that never clobber your edits. See
+[Isn't `AGENTS.md` enough?](#isnt-agentsmd-enough) for the longer answer.
+
+**Does it work on Windows?**
+Yes — `install.ps1` installs the Windows binary. Where the OS restricts symlinks, installs
+fall back to copies automatically.
 
 ## Documentation
 
