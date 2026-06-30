@@ -26,10 +26,12 @@ from .installers import generate as gen_inst
 from .installers import link as link_inst
 from .installers import link_merge as link_merge_inst
 from .installers import merge as merge_inst
+from .installers import transform as transform_inst
 from .lockfile import load_lock, save_lock
 from .manifest import load_manifest, save_manifest
 from .models import (
     MERGE_TYPES,
+    TYPE_IS_DIR,
     ComponentType,
     Config,
     GeneratorSpec,
@@ -38,6 +40,7 @@ from .models import (
     InstalledLink,
     InstalledLinkMerge,
     InstalledMerge,
+    InstalledTransform,
     Manifest,
     SourceType,
     Strategy,
@@ -91,6 +94,16 @@ class DesiredLinkMerge:
 
 
 @dataclass
+class DesiredTransform:
+    component: str
+    target: str
+    path: str  # destination (the target's link dest for this type)
+    artifact: Path  # source file whose content is rewritten
+    provider: str
+    prompt: str | None
+
+
+@dataclass
 class SyncResult:
     resolved: dict[str, str] = field(default_factory=dict)
     created: list[str] = field(default_factory=list)
@@ -111,6 +124,7 @@ def compute_desired(
     list[DesiredMerge],
     list[DesiredGenerate],
     list[DesiredLinkMerge],
+    list[DesiredTransform],
 ]:
     drivers = resolve_drivers(config)
     for missing in unresolved_targets(config):
@@ -131,6 +145,7 @@ def compute_desired(
     merges: list[DesiredMerge] = []
     generates: list[DesiredGenerate] = []
     link_merges: list[DesiredLinkMerge] = []
+    transforms: list[DesiredTransform] = []
 
     for comp in config.components:
         if not comp.enabled:
@@ -175,6 +190,25 @@ def compute_desired(
                     f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped"
                 )
                 continue
+            if comp.transform is not None:
+                # Copy-with-rewrite: a transformed file replaces the live symlink. Only
+                # single-file link types qualify; anything else installs normally with a note.
+                if strat is Strategy.LINK and not TYPE_IS_DIR[comp.type]:
+                    transforms.append(
+                        DesiredTransform(
+                            comp.ref,
+                            tname,
+                            driver.link_dest(comp.type, comp.name),
+                            artifact,
+                            comp.transform.provider,
+                            comp.transform.prompt,
+                        )
+                    )
+                    continue
+                warnings.append(
+                    f"{comp.ref}: transform is only supported for file components (agent/command) "
+                    f"on link targets — installed without transform on '{tname}'"
+                )
             if strat is Strategy.LINK:
                 links.append(
                     DesiredLink(comp.ref, tname, driver.link_dest(comp.type, comp.name), artifact)
@@ -222,7 +256,7 @@ def compute_desired(
                 # Seam: a driver.transform (currently always None) would reshape `entries`
                 # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
                 merges.append(DesiredMerge(comp.ref, tname, dest, entries, list(entries)))
-    return links, copies, merges, generates, link_merges
+    return links, copies, merges, generates, link_merges, transforms
 
 
 def _link_merge_vars(comp, src) -> dict[str, str]:
@@ -295,7 +329,12 @@ def _compute_link_merge(
 
 
 def sync(
-    root: Path, *, update: bool = False, allow_run: bool = False, frozen: bool = False
+    root: Path,
+    *,
+    update: bool = False,
+    allow_run: bool = False,
+    frozen: bool = False,
+    allow_transform: bool = False,
 ) -> SyncResult:
     store = ConfigStore.load(root)
     config = store.parsed()
@@ -310,16 +349,20 @@ def sync(
     # 2. Desired vs. installed. The augmented config carries synthesized sources and
     #    transitive components so reconcile treats them like any declared dependency.
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    links, copies, merges, generates, link_merges = compute_desired(
+    links, copies, merges, generates, link_merges, transforms = compute_desired(
         root, augmented, result.warnings
     )
     manifest = load_manifest(root)
+    transform_cmd = config.transform.command if config.transform else []
 
     _reconcile_links(root, links, manifest, result)
     _reconcile_copies(root, copies, manifest, result)
     _reconcile_merges(root, merges, manifest, result)
     _reconcile_generated(root, generates, manifest, result, allow_run=allow_run, update=update)
     _reconcile_link_merges(root, link_merges, manifest, result)
+    _reconcile_transforms(
+        root, transforms, manifest, result, allow_transform=allow_transform, command=transform_cmd
+    )
 
     save_manifest(root, manifest)
 
@@ -385,6 +428,64 @@ def _reconcile_copies(
             result.updated.append(f"copy {path}")
         if path not in have:
             manifest.copies.append(InstalledCopy(component=d.component, target=d.target, path=path))
+            have.add(path)
+
+
+def _reconcile_transforms(
+    root: Path,
+    desired: list[DesiredTransform],
+    manifest: Manifest,
+    result: SyncResult,
+    *,
+    allow_transform: bool,
+    command: list[str],
+) -> None:
+    from .emit import TransformError
+
+    desired_by_path = {d.path: d for d in desired}
+
+    kept: list[InstalledTransform] = []
+    for inst in manifest.transforms:
+        if inst.path not in desired_by_path:
+            if copy_inst.remove_copy(root, inst.path):  # a transformed file is a managed real file
+                result.removed.append(f"transform {inst.path}")
+        else:
+            kept.append(inst)
+    manifest.transforms = kept
+
+    have = {inst.path for inst in manifest.transforms}
+    for path, d in desired_by_path.items():
+        if d.provider == transform_inst.AGENT:
+            if not allow_transform:
+                result.warnings.append(
+                    f"{d.component}: agent transform for {path} skipped — pass --allow-transform"
+                )
+                continue
+            if path in have and (root / path).is_file():
+                continue  # write-once: output exists; remove it to regenerate (non-reproducible)
+            if not command:
+                result.warnings.append(
+                    f"{d.component}: no transform.command configured in .agentry.yml — skipped"
+                )
+                continue
+        try:
+            content = transform_inst.render(d.artifact, d.provider, d.prompt, command=command)
+        except (TransformError, ValueError, OSError) as exc:
+            result.warnings.append(f"{d.component}: transform failed: {exc}")
+            continue
+        try:
+            status = transform_inst.install_transform(root, content, path, managed=path in have)
+        except FileExistsError as exc:
+            result.warnings.append(str(exc))
+            continue
+        if status == "created":
+            result.created.append(f"transform {path}")
+        elif status == "updated":
+            result.updated.append(f"transform {path}")
+        if path not in have:
+            manifest.transforms.append(
+                InstalledTransform(component=d.component, target=d.target, path=path)
+            )
             have.add(path)
 
 
@@ -541,7 +642,9 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
     graph, _ = deps.resolve_graph(root, config, load_lock(root))
     warnings.extend(graph.warnings)
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    links, copies, merges, generates, link_merges = compute_desired(root, augmented, warnings)
+    links, copies, merges, generates, link_merges, transforms = compute_desired(
+        root, augmented, warnings
+    )
 
     rows: list[StatusRow] = []
     for d in links:
@@ -573,5 +676,9 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
             StatusRow(
                 d.component, d.target, f"{d.link_path} + {d.dest.file}:{d.dest.pointer}", state
             )
+        )
+    for d in transforms:
+        rows.append(
+            StatusRow(d.component, d.target, d.path, transform_inst.transform_state(root, d.path))
         )
     return rows, warnings

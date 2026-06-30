@@ -183,6 +183,31 @@ class GeneratorSpec(BaseModel):
         return self
 
 
+class ComponentTransform(BaseModel):
+    """Opt-in per-component content transform (the copy-with-rewrite path).
+
+    A transformed component installs as a **committed real file** whose bytes are rewritten by
+    a provider, instead of a live symlink — for the cases that need content translation. Only
+    single-file link types (agent/command) are supported; dirs and merge types are not.
+
+    * ``strip-frontmatter`` — deterministic: drop a leading YAML frontmatter block. Reproducible,
+      runs every sync.
+    * ``agent`` — synthesize via your own agent CLI (``transform.command`` in .agentry.yml).
+      Gated by ``--allow-transform`` and *write-once* (regenerate by removing the output), since
+      its output isn't byte-reproducible. ``prompt`` prepends an instruction to the content.
+    """
+
+    provider: str
+    prompt: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> ComponentTransform:
+        allowed = {"strip-frontmatter", "agent"}
+        if self.provider not in allowed:
+            raise ValueError(f"transform provider must be one of {sorted(allowed)}")
+        return self
+
+
 class Component(BaseModel):
     """A single installable component declared in the config."""
 
@@ -192,6 +217,8 @@ class Component(BaseModel):
     enabled: bool = True
     # Optional per-component override of the project-wide target list.
     targets: list[str] | None = None
+    # Opt-in content transform: install as a rewritten copy instead of a live symlink.
+    transform: ComponentTransform | None = None
     # Explicit artifact path within the source, relative to its (subdir-adjusted) root.
     # Bypasses convention/descriptor discovery — use when a repo *is* a skill (``path: "."``)
     # or keeps it at an arbitrary location.
@@ -204,6 +231,8 @@ class Component(BaseModel):
     def _check_path(self) -> Component:
         if self.path is not None and self.generate is not None:
             raise ValueError(f"{self.ref}: set either 'path' or 'generate', not both")
+        if self.generate is not None and self.transform is not None:
+            raise ValueError(f"{self.ref}: 'generate' and 'transform' are mutually exclusive")
         if self.path:
             _check_rel(f"{self.ref}: path", self.path)
         return self
@@ -508,6 +537,14 @@ class InstalledLinkMerge(BaseModel):
     keys: list[str]  # keys agentry owns under that pointer
 
 
+class InstalledTransform(BaseModel):
+    """A rewritten copy agentry materialized via a content transform (transform strategy)."""
+
+    component: str  # component ref
+    target: str
+    path: str  # the written path, relative to project root
+
+
 class Manifest(BaseModel):
     """Record of everything agentry installed on disk (``.agentry/.manifest.json``)."""
 
@@ -517,3 +554,4 @@ class Manifest(BaseModel):
     merges: list[InstalledMerge] = Field(default_factory=list)
     generated: list[InstalledGenerated] = Field(default_factory=list)
     link_merges: list[InstalledLinkMerge] = Field(default_factory=list)
+    transforms: list[InstalledTransform] = Field(default_factory=list)
