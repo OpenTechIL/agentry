@@ -82,12 +82,53 @@ def load_descriptor(source_root: Path) -> SourceDescriptor | None:
     return None
 
 
+#: Microsoft apm packages keep their primitives under a ``.apm/`` tree with apm's own dir
+#: names and compound extensions. Map the ones with an agentry equivalent: apm ``prompts``
+#: are agentry ``commands``; apm ``instructions`` have no agentry component type (a repo-wide
+#: doc, not a placed artifact) and are skipped. The value is ``(type, suffix)`` — a ``None``
+#: suffix means a directory component (skills), else the filename suffix to strip for the name.
+APM_PACKAGE_DIR = ".apm"
+APM_LAYOUT: dict[str, tuple[ComponentType, str | None]] = {
+    "skills": (ComponentType.SKILL, None),
+    "agents": (ComponentType.AGENT, ".agent.md"),
+    "prompts": (ComponentType.COMMAND, ".prompt.md"),
+}
+
+
 def discover(source_root: Path) -> list[Discovered]:
-    """List every component a source provides (descriptor if present, else convention)."""
+    """List every component a source provides.
+
+    Precedence: an explicit ``agentry.yaml`` descriptor, then a Microsoft apm ``.apm/``
+    package tree (consumed directly, no republishing), then agentry's own convention scan.
+    """
     descriptor = load_descriptor(source_root)
     if descriptor is not None:
         return _discover_from_descriptor(source_root, descriptor)
+    if (source_root / APM_PACKAGE_DIR).is_dir():
+        return _discover_apm_package(source_root)
     return _discover_by_convention(source_root)
+
+
+def _discover_apm_package(source_root: Path) -> list[Discovered]:
+    """Discover an apm package's primitives under ``.apm/`` and map them to agentry types.
+
+    A ``(type, name)`` is resolved by reconcile via this index, so the artifact keeps its
+    real ``.apm/`` path (e.g. ``design-reviewer.agent.md``) while installing under agentry's
+    own naming (``.claude/agents/design-reviewer.md``). apm ``instructions`` are skipped.
+    """
+    apm = source_root / APM_PACKAGE_DIR
+    found: list[Discovered] = []
+    for subdir, (ctype, suffix) in APM_LAYOUT.items():
+        base = apm / subdir
+        if not base.is_dir():
+            continue
+        for entry in sorted(base.iterdir()):
+            if suffix is None:
+                if entry.is_dir():
+                    found.append(Discovered(ctype, entry.name, entry))
+            elif entry.is_file() and entry.name.endswith(suffix):
+                found.append(Discovered(ctype, entry.name[: -len(suffix)], entry))
+    return found
 
 
 def _name_for(ctype: ComponentType, path: Path) -> str:

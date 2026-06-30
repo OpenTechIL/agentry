@@ -231,6 +231,15 @@ Most skills on GitHub don't follow agentry's `skills/<name>/` layout. Three ways
    at it and install by name. The catalog schema (including the `copy` and `namespaced` per-repo
    flags) is documented in [docs/architecture.md](docs/architecture.md#4-source-repo-layout--convention-or-descriptor).
 
+4. **Microsoft apm packages** — a repo with an apm `.apm/` tree works as a source as-is:
+   agentry discovers its skills/agents/prompts and installs them under agentry's naming, no
+   republishing. `agy import apm` translates the `apm.yml` manifest; this consumes the package.
+
+   ```bash
+   agy source add some-apm-pkg https://github.com/org/apm-package
+   agy add some-apm-pkg/skill/<name>     # or `agy list` to see what it provides
+   ```
+
 ## Contribute a repo to the starter catalog
 
 Want a repo added to [`registry/repositories.json`](registry/repositories.json)? Two ways:

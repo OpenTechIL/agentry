@@ -65,8 +65,9 @@ tracks so removal deletes exactly those and nothing else. See `installers/genera
 
 ## 4. Source-repo layout — convention or descriptor
 
-A source (git repo or local dir) provides components in one of two ways. `discovery.py`
-picks the descriptor when present, else falls back to the convention scan.
+A source (git repo or local dir) provides components in one of three ways, in precedence
+order: an explicit `agentry.yaml` **descriptor**, a Microsoft apm **`.apm/` package tree**
+(consumed directly — see below), else agentry's own **convention** scan.
 
 **Convention** — mirror the standard agent layout:
 
@@ -94,6 +95,18 @@ provides:
 
 The component *type* still dictates shape (dir vs file + extension); the descriptor only
 says *where*. Absent ⇒ convention scan (full back-compat).
+
+**apm packages (`.apm/`).** A Microsoft apm package keeps its primitives under a `.apm/`
+tree with apm's own names: `.apm/skills/<name>/`, `.apm/agents/<name>.agent.md`,
+`.apm/prompts/<name>.prompt.md`, `.apm/instructions/<name>.instructions.md`. When a source
+root contains `.apm/` (and no agentry descriptor), `discovery` reads it directly and maps
+each primitive to its agentry type — skills → `skill`, agents → `agent`, **prompts →
+`command`** — stripping the compound extension for the name and skipping `instructions`
+(no agentry equivalent). The discovered artifact keeps its real `.apm/` path, so it installs
+under agentry's own naming (e.g. `.apm/agents/x.agent.md` → a symlink at
+`.claude/agents/x.md`). So an apm package repo is consumable as an agentry source with no
+republishing — the package-tree counterpart to `agy import apm`, which translates the
+`apm.yml` manifest.
 
 **Consumer-side overrides (third way).** When a source follows neither layout — a common
 case for third-party skills whose repo *is* the skill — the consumer's `.agentry.yml`
