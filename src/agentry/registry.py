@@ -39,22 +39,45 @@ def _is_url(location: str) -> bool:
 
 
 def _normalize_url(location: str) -> str:
-    """Rewrite a GitHub *web* URL to one that serves raw bytes.
+    """Rewrite a browser *web* URL for a catalog JSON to one that serves raw bytes.
 
-    A ``github.com/<owner>/<repo>/blob/<ref>/<path>`` (or ``/raw/``) URL renders an HTML
-    page, not the JSON itself — fetching it yields markup or a 404. The raw content lives
-    on ``raw.githubusercontent.com``. This lets a user paste the URL straight from their
-    browser. Non-GitHub and already-raw URLs pass through unchanged.
+    A web URL renders an HTML page, not the JSON — fetching it yields markup or a 404.
+    This lets a user paste the URL straight from their browser, across the common hosts:
+
+    * **GitHub** — ``github.com/<o>/<r>/blob/<ref>/<path>`` (or ``/raw/``)
+      → ``raw.githubusercontent.com/<o>/<r>/<ref>/<path>``.
+    * **GitLab** (incl. nested groups) — ``gitlab.com/<ns…>/-/blob/<ref>/<path>``
+      → ``gitlab.com/<ns…>/-/raw/<ref>/<path>`` (raw is served on the same host).
+    * **Bitbucket** — ``bitbucket.org/<o>/<r>/src/<ref>/<path>``
+      → ``bitbucket.org/<o>/<r>/raw/<ref>/<path>``.
+
+    Already-raw URLs and any other host pass through unchanged — a direct raw URL always
+    works (these are only browser-paste niceties). Self-hosted GitLab/Gitea/Gogs are not
+    detected by host, so paste their raw URL directly.
     """
-    prefix = "https://github.com/"
-    if not location.startswith(prefix):
+    gh = "https://github.com/"
+    if location.startswith(gh):
+        parts = location[len(gh) :].split("/")
+        # owner / repo / (blob|raw) / ref / path...
+        if len(parts) >= 5 and parts[2] in ("blob", "raw"):
+            owner, repo, _, ref, *path = parts
+            return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{'/'.join(path)}"
         return location
-    rest = location[len(prefix) :]
-    parts = rest.split("/")
-    # owner / repo / (blob|raw) / ref / path...
-    if len(parts) >= 5 and parts[2] in ("blob", "raw"):
-        owner, repo, _, ref, *path = parts
-        return f"https://raw.githubusercontent.com/{owner}/{repo}/{ref}/{'/'.join(path)}"
+    # GitLab keeps a `/-/` infix between the (possibly nested-group) namespace and the verb.
+    if location.startswith("https://gitlab.com/") and "/-/" in location:
+        ns, _, tail = location.partition("/-/")
+        verb, _, rest = tail.partition("/")  # rest = <ref>/<path...>
+        if verb in ("blob", "raw") and rest:
+            return f"{ns}/-/raw/{rest}"
+        return location
+    bb = "https://bitbucket.org/"
+    if location.startswith(bb):
+        parts = location[len(bb) :].split("/")
+        # owner / repo / (src|raw) / ref / path...
+        if len(parts) >= 5 and parts[2] in ("src", "raw"):
+            owner, repo, _, ref, *path = parts
+            return f"{bb}{owner}/{repo}/raw/{ref}/{'/'.join(path)}"
+        return location
     return location
 
 
@@ -98,11 +121,18 @@ def load_catalog(root: Path, registry: Registry) -> RepositoryIndex:
 def parse_repo_url(url: str) -> tuple[str, str | None, str | None, str]:
     """Split a (possibly browser-pasted) repo URL into authoring inputs.
 
-    Returns ``(clean_url, ref, subdir, default_name)``. A
-    ``github.com/<owner>/<repo>/tree/<ref>/<subdir...>`` URL yields the bare repo URL plus the
-    ``ref`` and ``subdir`` it points at, so a user can paste straight from their browser. A
-    plain repo URL passes through with ``ref``/``subdir`` of ``None``. ``default_name`` is the
-    repo basename (trailing ``.git`` stripped), used when the CLI name argument is omitted.
+    Returns ``(clean_url, ref, subdir, default_name)``. A browser "tree" URL yields the bare
+    repo URL plus the ``ref`` and ``subdir`` it points at, so a user can paste straight from
+    their browser:
+
+    * **GitHub** — ``github.com/<o>/<r>/tree/<ref>/<subdir…>``.
+    * **GitLab** (incl. nested groups) — ``gitlab.com/<ns…>/-/tree/<ref>/<subdir…>``.
+    * **Bitbucket** — ``bitbucket.org/<o>/<r>/src/<ref>/<subdir…>``.
+
+    A plain repo URL passes through with ``ref``/``subdir`` of ``None``. ``default_name`` is
+    the repo basename (trailing ``.git`` stripped), used when the CLI name argument is
+    omitted. Any git URL clones regardless of host (see :func:`agentry.resolver.resolve`);
+    this only adds browser-paste ergonomics for the hosts above.
 
     This is the repo-URL counterpart to :func:`_normalize_url`, which rewrites *raw-JSON*
     catalog URLs; both let the same browser URL be pasted for different inputs.
@@ -110,13 +140,27 @@ def parse_repo_url(url: str) -> tuple[str, str | None, str | None, str]:
     clean = url.rstrip("/")
     ref: str | None = None
     subdir: str | None = None
-    prefix = "https://github.com/"
-    if clean.startswith(prefix):
-        parts = clean[len(prefix) :].split("/")
+    gh = "https://github.com/"
+    bb = "https://bitbucket.org/"
+    if clean.startswith(gh):
+        parts = clean[len(gh) :].split("/")
         # owner / repo / tree / ref / subdir...
         if len(parts) >= 4 and parts[2] == "tree":
             owner, repo, _, ref, *rest = parts
-            clean = f"{prefix}{owner}/{repo}"
+            clean = f"{gh}{owner}/{repo}"
+            subdir = "/".join(rest) or None
+    elif clean.startswith("https://gitlab.com/") and "/-/tree/" in clean:
+        # <ns…>/-/tree/<ref>/<subdir…>  (ns may be nested groups)
+        ns, _, tail = clean.partition("/-/tree/")
+        ref, _, rest = tail.partition("/")
+        clean = ns
+        subdir = rest or None
+    elif clean.startswith(bb):
+        parts = clean[len(bb) :].split("/")
+        # owner / repo / src / ref / subdir...
+        if len(parts) >= 4 and parts[2] == "src":
+            owner, repo, _, ref, *rest = parts
+            clean = f"{bb}{owner}/{repo}"
             subdir = "/".join(rest) or None
     name = clean.rstrip("/").rsplit("/", 1)[-1]
     if name.endswith(".git"):

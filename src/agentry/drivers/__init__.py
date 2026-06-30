@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from ..models import Config
-from . import claude, codex, copilot, cursor, gemini, kimi, kiro, opencode, windsurf
+from . import agents, claude, codex, copilot, cursor, gemini, kimi, kiro, opencode, windsurf
 from .base import Driver, HookEventPolicy, NamespacePolicy, TransformFn
 
 #: Built-in agent drivers, by target name. Override or extend per project via
@@ -31,6 +31,7 @@ BUILTIN_DRIVERS: dict[str, Driver] = {
     kimi.DRIVER.name: kimi.DRIVER,
     copilot.DRIVER.name: copilot.DRIVER,
     kiro.DRIVER.name: kiro.DRIVER,
+    agents.DRIVER.name: agents.DRIVER,
 }
 
 

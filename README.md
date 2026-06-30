@@ -107,9 +107,12 @@ agy sync                                        # reconcile to match config + lo
 ## Common commands
 
 - `agy init [-t TARGET]...` — create `.agentry.yml` and add `.agentry/` to `.gitignore`.
-- `agy source add NAME URL [--ref R] [--subdir DIR]` — register a source, download, sync.
+- `agy source add NAME URL [--ref R] [--subdir DIR]` — register a source, download, sync. Any
+  git host works (GitHub, GitLab, Bitbucket, Azure DevOps, Gitea, Gogs); browser "tree"/"blob"
+  URLs from GitHub, GitLab, and Bitbucket are accepted and tidied automatically.
 - `agy add <ref>` — enable a component (or whole catalog repo) and install it.
-- `agy sync` — reconcile on-disk state to config + lock (idempotent).
+- `agy sync [--frozen]` — reconcile on-disk state to config + lock (idempotent). `--frozen`
+  installs strictly from `.agentry.lock` and fails on any unpinned source or drift (for CI).
 - `agy status` — report drift between config and what's installed.
 - `agy update [SOURCE]` — re-resolve refs to latest and rewrite `.agentry.lock`.
 - `agy version` — print the installed version.

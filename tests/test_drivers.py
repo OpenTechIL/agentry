@@ -33,6 +33,7 @@ ALL_AGENTS = {
     "kimi",
     "copilot",
     "kiro",
+    "agents",
 }
 
 
@@ -128,10 +129,22 @@ def test_profile_override_preserves_claude_policies():
         ("copilot", _C.AGENT, ".github/agents/x.agent.md"),
         ("copilot", _C.COMMAND, ".github/prompts/x.prompt.md"),
         ("kiro", _C.SKILL, ".kiro/skills/x"),
+        ("agents", _C.SKILL, ".agents/skills/x"),
     ],
 )
 def test_new_driver_link_dests(name, ctype, expected):
     assert BUILTIN_DRIVERS[name].link_dest(ctype, "x") == expected
+
+
+def test_universal_agents_target_is_skills_only():
+    # The tool-neutral .agents/ layout maps skills only; everything else is intentionally
+    # unmapped (no cross-tool directory standard; AGENTS.md composition is a transform).
+    agents = BUILTIN_DRIVERS["agents"]
+    assert agents.supports(_C.SKILL)
+    assert not agents.supports(_C.AGENT)
+    assert not agents.supports(_C.COMMAND)
+    assert not agents.supports(_C.MCP)
+    assert not agents.supports(_C.HOOK)
 
 
 @pytest.mark.parametrize(

@@ -257,14 +257,14 @@ flowchart LR
 
 ### Built-in drivers
 
-| Type | Claude Code | OpenCode | Cursor | Gemini CLI | Windsurf | Kimi | Codex | Copilot | Kiro |
-|---|---|---|---|---|---|---|---|---|---|
-| skill | `.claude/skills/{name}` | `.opencode/skills/{name}` | — | `.gemini/skills/{name}` | `.windsurf/skills/{name}` | `.kimi-code/skills/{name}` | `.agents/skills/{name}` | `.github/skills/{name}` | `.kiro/skills/{name}` |
-| agent | `.claude/agents/{name}.md` | `.opencode/agents/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/agents/{name}.md` | — | — | — | `.github/agents/{name}.agent.md` | — |
-| command | `.claude/commands/{name}.md` | `.opencode/commands/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/commands/{name}.toml` | `.windsurf/workflows/{name}.md` | — | — | `.github/prompts/{name}.prompt.md` | — |
-| tool | `.claude/tools/{name}` | `.opencode/tools/{name}` | — | — | — | — | — | — | — |
-| hook | merge `.claude/settings.json` → `hooks` | — | — | merge `.gemini/settings.json` → `hooks` | merge `.windsurf/hooks.json` → `hooks` | — | — | — | — |
-| mcp | merge `.mcp.json` → `mcpServers` | merge `opencode.json` → `mcp` | merge `.cursor/mcp.json` → `mcpServers` | merge `.gemini/settings.json` → `mcpServers` | — | merge `.kimi-code/mcp.json` → `mcpServers` | merge `.codex/config.toml` → `mcp_servers` | merge `.vscode/mcp.json` → `servers` | merge `.kiro/settings/mcp.json` → `mcpServers` |
+| Type | Claude Code | OpenCode | Cursor | Gemini CLI | Windsurf | Kimi | Codex | Copilot | Kiro | Agents (universal) |
+|---|---|---|---|---|---|---|---|---|---|---|
+| skill | `.claude/skills/{name}` | `.opencode/skills/{name}` | — | `.gemini/skills/{name}` | `.windsurf/skills/{name}` | `.kimi-code/skills/{name}` | `.agents/skills/{name}` | `.github/skills/{name}` | `.kiro/skills/{name}` | `.agents/skills/{name}` |
+| agent | `.claude/agents/{name}.md` | `.opencode/agents/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/agents/{name}.md` | — | — | — | `.github/agents/{name}.agent.md` | — | — |
+| command | `.claude/commands/{name}.md` | `.opencode/commands/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/commands/{name}.toml` | `.windsurf/workflows/{name}.md` | — | — | `.github/prompts/{name}.prompt.md` | — | — |
+| tool | `.claude/tools/{name}` | `.opencode/tools/{name}` | — | — | — | — | — | — | — | — |
+| hook | merge `.claude/settings.json` → `hooks` | — | — | merge `.gemini/settings.json` → `hooks` | merge `.windsurf/hooks.json` → `hooks` | — | — | — | — | — |
+| mcp | merge `.mcp.json` → `mcpServers` | merge `opencode.json` → `mcp` | merge `.cursor/mcp.json` → `mcpServers` | merge `.gemini/settings.json` → `mcpServers` | — | merge `.kimi-code/mcp.json` → `mcpServers` | merge `.codex/config.toml` → `mcp_servers` | merge `.vscode/mcp.json` → `servers` | merge `.kiro/settings/mcp.json` → `mcpServers` | — |
 
 A `—` means the agent either has no such concept or expects a format agentry can't yet
 write. The newest drivers map what installs cleanly: skills everywhere, and MCP/hooks
@@ -328,6 +328,7 @@ config.py       .agentry.yml round-trip (ruamel, comment-preserving) + mutators
 lockfile.py     .agentry.lock read/write
 spec.py         capability-map dataclasses (TargetSpec / MergeDest / LinkMergeDest)
 drivers/        one module per AI agent (claude, opencode, cursor, codex, gemini, windsurf, kimi, copilot, kiro)
+                 plus `agents` — the tool-neutral .agents/skills universal target
   base.py       Driver = capability map + optional policies (hook-event, namespace, transform)
   __init__.py   BUILTIN_DRIVERS registry + resolve_drivers()
 targets.py      effective capability map: BUILTIN_TARGETS (from drivers) + target_profiles merge

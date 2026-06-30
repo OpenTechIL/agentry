@@ -94,6 +94,8 @@ class Target:
     KIMI = "kimi"
     COPILOT = "copilot"
     KIRO = "kiro"
+    #: Tool-neutral Agent-Skills layout (.agents/skills); portable across AGENTS.md-aware tools.
+    AGENTS = "agents"
 
 
 BUILTIN_TARGET_NAMES: frozenset[str] = frozenset(
@@ -107,6 +109,7 @@ BUILTIN_TARGET_NAMES: frozenset[str] = frozenset(
         Target.KIMI,
         Target.COPILOT,
         Target.KIRO,
+        Target.AGENTS,
     }
 )
 
