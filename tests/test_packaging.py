@@ -42,3 +42,26 @@ def test_scoop_manifest_is_valid_json():
     data = json.loads(Path("packaging/scoop/agy.json").read_text(encoding="utf-8"))
     assert data["version"]
     assert data["bin"]  # the installed executable
+
+
+def test_nfpm_config_builds_agy_packages():
+    """The nfpm config must install the frozen binary to /usr/bin/agy."""
+    from ruamel.yaml import YAML
+
+    data = YAML(typ="safe").load(Path("packaging/nfpm.yaml").read_text(encoding="utf-8"))
+    assert data["name"] == "agy"
+    assert data["arch"] == "amd64"
+    # Version is injected from the environment at build time, not hard-coded.
+    assert data["version"] == "${VERSION}"
+    dsts = {c["dst"] for c in data["contents"]}
+    assert "/usr/bin/agy" in dsts
+
+
+def test_inno_installer_script_exists():
+    """The Inno Setup script must build a versioned, per-user agy installer."""
+    text = Path("packaging/windows/agy.iss").read_text(encoding="utf-8")
+    # Version is passed on the ISCC command line (/DMyAppVersion=...).
+    assert "MyAppVersion" in text
+    # Per-user install (no admin) matching install.ps1.
+    assert "PrivilegesRequired=lowest" in text
+    assert "OutputBaseFilename=agy-{#MyAppVersion}-windows-x86_64-setup" in text

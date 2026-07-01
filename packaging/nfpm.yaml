@@ -1,0 +1,31 @@
+# packaging/nfpm.yaml — build native Linux packages (.deb / .rpm) for `agy`.
+#
+# Consumed by release-binaries.yml. The PyInstaller one-file binary must exist
+# at ./dist/agy first (`uv run --extra build pyinstaller packaging/agy.spec`).
+# VERSION is supplied via the environment (nfpm expands ${VERSION}):
+#
+#   VERSION=1.2.3 nfpm package -f packaging/nfpm.yaml -p deb -t ./out
+#   VERSION=1.2.3 nfpm package -f packaging/nfpm.yaml -p rpm -t ./out
+#
+# Produces: agy_<version>_amd64.deb and agy-<version>.x86_64.rpm
+name: agy
+arch: amd64
+platform: linux
+version: ${VERSION}
+version_schema: semver
+section: utils
+priority: optional
+maintainer: agentry contributors <noreply@github.com>
+vendor: OpenTech
+homepage: https://github.com/OpenTechIL/agentry
+license: MIT
+description: |
+  A dependency manager for AI coding agents.
+  Install skills, agents, commands, tools, hooks and MCP servers per project —
+  declare them in .agentry.yml, pin them in .agentry.lock, and reconcile with a
+  single `agy sync`.
+contents:
+  - src: ./dist/agy
+    dst: /usr/bin/agy
+    file_info:
+      mode: 0755
