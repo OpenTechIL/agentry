@@ -1,11 +1,27 @@
 # .github/workflows/release-binaries.yml
 name: Release Binaries
 
-# Builds standalone `agy` executables and attaches them to the GitHub Release
-# for a v* tag. This is the sole release/distribution channel (no PyPI).
+# Builds standalone `agy` executables + native installers and attaches them to
+# the GitHub Release for a v* tag. This is the sole release/distribution channel
+# (no PyPI).
+#
+# Artifacts per release:
+#   agy-<version>-linux-x86_64                 raw binary
+#   agy-<version>-macos-x86_64                 raw binary
+#   agy-<version>-macos-arm64                  raw binary
+#   agy-<version>-windows-x86_64.exe           raw binary
+#   agy-<version>-windows-x86_64-setup.exe     Inno Setup installer
+#   agy_<version>_amd64.deb                    Debian/Ubuntu package
+#   agy-<version>.x86_64.rpm                   Fedora/RHEL package
+#   agy-<version>-linux-x86_64.tar.gz          tarball
+#   SHA256SUMS.txt                             checksums for all of the above
+#   <asset>.cosign.bundle                      keyless Sigstore signature per asset
+#
+# Every asset is signed with cosign keyless (Sigstore) via GitHub OIDC — no
+# secrets or certificates required. See packaging/README.md for how users verify.
 #
 # workflow_dispatch builds + uploads artifacts for inspection but does NOT
-# create a Release (dry run).
+# create a Release or sign (dry run).
 on:
   push:
     tags: ["v*"]
@@ -43,17 +59,48 @@ jobs:
           else
             echo "version=$(./dist/agy${{ matrix.ext }} version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
           fi
-      - name: Rename artifact
+
+      # --- Linux: native packages (.deb / .rpm) + tarball, from ./dist/agy ---
+      - name: Build Linux packages
+        if: matrix.target == 'linux-x86_64'
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          curl -fsSL "https://github.com/goreleaser/nfpm/releases/download/v2.41.3/nfpm_2.41.3_amd64.deb" -o /tmp/nfpm.deb
+          sudo dpkg -i /tmp/nfpm.deb
+          nfpm package -f packaging/nfpm.yaml -p deb -t .
+          nfpm package -f packaging/nfpm.yaml -p rpm -t .
+          tar -czf "agy-${VERSION}-linux-x86_64.tar.gz" -C dist agy
+
+      # --- Windows: Inno Setup installer, from dist\agy.exe ---
+      - name: Build Windows installer
+        if: matrix.target == 'windows-x86_64'
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            "/DMyAppVersion=${{ steps.ver.outputs.version }}" `
+            packaging\windows\agy.iss
+          # Keep every release asset flat at the repo root for a clean upload.
+          Move-Item dist\agy-*-setup.exe .
+
+      - name: Rename raw binary
         shell: bash
         run: mv "dist/agy${{ matrix.ext }}" "agy-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
       - name: Smoke test
         shell: bash
         run: ./agy-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }} version
-      - name: Upload artifact
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: agy-${{ matrix.target }}
-          path: agy-*
+          # Raw binary, plus any installer/packages produced above — all live
+          # flat at the repo root, so a single set of globs keeps the layout.
+          path: |
+            agy-*
+            *.deb
+          if-no-files-found: error
 
   release:
     name: Publish GitHub Release
@@ -61,22 +108,32 @@ jobs:
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: write   # create the release + upload assets
+      id-token: write   # cosign keyless signing via OIDC
     steps:
-      - name: Download all binaries
+      - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
           merge-multiple: true
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
       - name: Generate checksums
         working-directory: artifacts
         run: |
-          sha256sum agy-* > SHA256SUMS.txt
+          sha256sum agy-* agy_* > SHA256SUMS.txt
           cat SHA256SUMS.txt
+      - name: Sign all assets (cosign keyless)
+        working-directory: artifacts
+        run: |
+          shopt -s nullglob
+          for f in agy-* agy_* SHA256SUMS.txt; do
+            case "$f" in *.cosign.bundle) continue ;; esac
+            echo "Signing $f"
+            cosign sign-blob --yes --bundle "$f.cosign.bundle" "$f"
+          done
       - name: Create / update Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/agy-*
-            artifacts/SHA256SUMS.txt
+          files: artifacts/*
           generate_release_notes: true
