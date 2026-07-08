@@ -764,6 +764,42 @@ def test_link_merge_warns_on_unrewritable_command(project: Path, tmp_path: Path)
     assert any("may not resolve" in w and "elsewhere" in w for w in res.warnings)
 
 
+def test_link_merge_file_component_no_plugin_root_unset_warning(project: Path, tmp_path: Path):
+    """Mirror the real `agy add superpowers` config: a HOOK resolved by *discovery* to the file
+    `hooks/hooks.json` (name="hooks", no explicit path) under a link+merge profile. The generic
+    dead-placeholder scan is `is_file()`-gated, so it sees the raw `${CLAUDE_PLUGIN_ROOT}` — but
+    link+merge rewrites it away, so warning about it (and telling the user to "set it") is a false
+    positive. It must stay silent while still rewriting the command."""
+    source = _hooks_source(tmp_path)
+    store = ConfigStore.load(project)
+    store.doc["target_profiles"] = {
+        "claude": {
+            "hook": {
+                "strategy": "link+merge",
+                "dest": ".claude/hooks/agentry/{repo}@{ref}/{name}",
+                "file": ".claude/settings.json",
+                "pointer": "hooks",
+                "rewrite_from": "${CLAUDE_PLUGIN_ROOT}/hooks",
+                "rewrite_to": "${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}",
+            }
+        }
+    }
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(source)))
+    # No path= → discovery resolves the component to the FILE hooks/hooks.json.
+    store.add_component(Component(source="s", type=ComponentType.HOOK, name="hooks"))
+    store.save()
+
+    res = sync(project)
+    assert not any("CLAUDE_PLUGIN_ROOT" in w or "which is unset" in w for w in res.warnings), (
+        res.warnings
+    )
+
+    settings = json.loads((project / ".claude/settings.json").read_text())
+    cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "${CLAUDE_PLUGIN_ROOT}" not in cmd
+    assert cmd == "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/hooksrc@main/hooks/graph.mjs"
+
+
 def test_explicit_path_root_is_skill(project: Path, tmp_path: Path):
     # A repo whose *root* is the skill (no skills/<name>/ wrapper, no descriptor).
     skill_repo = tmp_path / "cool-skill"

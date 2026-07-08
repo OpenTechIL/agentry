@@ -10,6 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased] — 2026-06-25
 
 ### Fixed
+- Dead-placeholder env scan (`envscan.unset_env_refs`) no longer flags `${…PLUGIN_ROOT}`
+  variables as unset. They are host-injected and rewritten by the `link+merge` path, so the
+  generic "set it before your agent runs" advice was a false positive when a link+merge hook
+  is resolved by discovery to a file (raw `${CLAUDE_PLUGIN_ROOT}` seen before rewrite). The
+  plain-`merge` path still warns about them via `plugin_root_refs`.
 - `superpowers` catalog entry now carries a `claude` hook `target_profiles` rule
   (`link+merge` with `${CLAUDE_PLUGIN_ROOT}/hooks` → `${CLAUDE_PROJECT_DIR}/.claude/hooks/…`
   rewrite). Without it, installing `superpowers` merged a plugin-only `${CLAUDE_PLUGIN_ROOT}`

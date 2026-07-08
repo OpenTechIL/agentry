@@ -4,6 +4,18 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ---
 
+## 2026-07-09 — Dead-placeholder env scanner must never flag `*_PLUGIN_ROOT`
+
+**Context:** Dogfooding `agy add superpowers` into this repo (materializing `.agentry.yml`/`.agentry.lock`, `.claude/skills/*`, `.claude/hooks/`, and a `SessionStart` hook) surfaced a false-positive from the dead-placeholder env scanner in [envscan.py](https://github.com/OpenTechIL/agentry/blob/main/src/agentry/envscan.py): `${CLAUDE_PLUGIN_ROOT}` was reported as an unset env var with the generic "set it before your agent runs" advice — which is categorically wrong for a host-injected, rewritten variable.
+
+**Findings:**
+
+- **`unset_env_refs()` is `is_file()`-gated and sees the *raw* fragment.** For a HOOK resolved by discovery to a file (`hooks/hooks.json`, `name="hooks"`, no explicit path) under a `link+merge` profile, the scan runs against the pre-rewrite command still containing `${CLAUDE_PLUGIN_ROOT}`. link+merge rewrites that token away, so warning about it is a false positive.
+- **Fix: skip any `*_PLUGIN_ROOT` name unconditionally.** Added `_PLUGIN_ROOT_NAME = re.compile(r"[A-Z0-9_]*PLUGIN_ROOT\Z")` — the bare-name analogue of `link_merge._PLUGIN_ROOT_RE` (which matches the full `${...}` token) — and `continue` on a match inside `unset_env_refs`. These vars are host-injected; the plain-`merge` path already warns about them accurately via `plugin_root_refs`, so the generic scanner stays silent and leaves them to those paths. Complements the catalog/`link+merge` fix from [the 2026-06-30 entry](#2026-06-30--plugin-style-hooks-need-a-linkmerge-profile-not-plain-merge).
+- **Regression test** (`test_link_merge_file_component_no_plugin_root_unset_warning` in `tests/test_reconcile.py`) mirrors the real `agy add superpowers` config: it asserts `sync` emits no `CLAUDE_PLUGIN_ROOT`/"which is unset" warning *and* that the installed command is rewritten to the `${CLAUDE_PROJECT_DIR}` form.
+
+---
+
 ## 2026-06-30 — Plugin-style hooks need a `link+merge` profile, not plain `merge`
 
 **Context:** Installing `superpowers` for target `claude` produced a startup error: `SessionStart:startup hook error … Hook command references ${CLAUDE_PLUGIN_ROOT} but the hook is not associated with a plugin`. Root-caused to the catalog entry lacking a hook `target_profiles` rule.

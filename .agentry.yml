@@ -1,0 +1,83 @@
+# agentry — AI agent dependencies for this project.
+# Declare sources and components here; run `agy sync` to install.
+version: 1
+targets:
+  - claude
+target_profiles:
+  claude:
+    hook:
+      strategy: link+merge
+      dest: .claude/hooks/agentry/{repo}@{ref}/{name}
+      file: .claude/settings.json
+      pointer: hooks
+      rewrite_from: ${CLAUDE_PLUGIN_ROOT}/hooks
+      rewrite_to: ${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/{repo}@{ref}/{name}
+sources:
+  - name: superpowers
+    type: git
+    url: https://github.com/obra/superpowers
+    ref: main
+components:
+  - source: superpowers
+    type: skill
+    name: brainstorming
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: dispatching-parallel-agents
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: executing-plans
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: finishing-a-development-branch
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: receiving-code-review
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: requesting-code-review
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: subagent-driven-development
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: systematic-debugging
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: test-driven-development
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: using-git-worktrees
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: using-superpowers
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: verification-before-completion
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: writing-plans
+    enabled: true
+  - source: superpowers
+    type: skill
+    name: writing-skills
+    enabled: true
+  - source: superpowers
+    type: hook
+    name: hooks
+    enabled: true
+repositories:
+  - name: starter
+    location: registry/repositories.json

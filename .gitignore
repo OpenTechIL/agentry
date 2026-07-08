@@ -20,3 +20,12 @@ site/
 # Virtual envs
 .venv/
 .claude/settings.local.json
+
+# agentry local dependency store (downloaded; do not commit)
+.agentry/
+.local.*
+.tmp.*
+.ignore.*
+
+# macOS
+.DS_Store
