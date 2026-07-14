@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [Unreleased] — 2026-06-25
+## [Unreleased]
+
+## [0.1.3] — 2026-07-14
 
 ### Fixed
 - Dead-placeholder env scan (`envscan.unset_env_refs`) no longer flags `${…PLUGIN_ROOT}`
