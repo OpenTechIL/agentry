@@ -91,7 +91,9 @@ def main(argv: list[str]) -> int:
 
     _run("git", "add", str(PYPROJECT), str(INIT), str(CHANGELOG))
     _run("git", "commit", "-m", f"chore(release): v{version}")
-    _run("git", "tag", f"v{version}")
+    # Annotated tag: `git push --follow-tags` only pushes annotated tags, so a
+    # lightweight tag would silently stay local and never trigger the release.
+    _run("git", "tag", "-a", f"v{version}", "-m", f"v{version}")
     print(f"\nTagged v{version}. Push with:\n  git push --follow-tags")
     return 0
 
