@@ -58,6 +58,13 @@ curl -fsSL https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.sh 
 irm https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.ps1 | iex
 ```
 
+Or via a package manager:
+
+```bash
+brew install OpenTechIL/tap/agy   # macOS / Linux — Homebrew tap
+scoop install agy                 # Windows — from a bucket with the manifest
+```
+
 Prefer a double-click installer or a native package (`.pkg`, `.exe`, `.deb`, `.rpm`)? Grab it
 from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest). Or run
 straight from git with [`uv`](https://docs.astral.sh/uv/) — no install needed:
