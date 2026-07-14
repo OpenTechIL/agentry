@@ -1,0 +1,26 @@
+#!/bin/sh
+# packaging/macos/scripts/postinstall — run by the agy component pkg after payload
+# extraction. This is a per-user (enable_currentUserHome) install, so it runs as the
+# user with $HOME pointing at their home directory.
+#
+# A GUI .pkg can't print a terminal note the way install.sh does, so ensure
+# ~/.local/bin is on PATH by adding an export line to the common login shell profiles,
+# idempotently. Mirrors install.sh's PATH advice.
+set -eu
+
+BIN_DIR="$HOME/.local/bin"
+LINE="export PATH=\"$BIN_DIR:\$PATH\""
+
+for profile in "$HOME/.zprofile" "$HOME/.bash_profile"; do
+  # Skip if this dir is already exported in the profile.
+  if [ -f "$profile" ] && grep -qF "$BIN_DIR" "$profile"; then
+    continue
+  fi
+  {
+    echo ""
+    echo "# Added by agentry (agy) installer"
+    echo "$LINE"
+  } >> "$profile"
+done
+
+exit 0

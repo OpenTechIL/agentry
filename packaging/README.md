@@ -9,6 +9,8 @@ binary build produces (`release-binaries.yml`): a bare binary per target, native
 agy-<version>-linux-x86_64                 raw binary
 agy-<version>-macos-x86_64                 raw binary
 agy-<version>-macos-arm64                  raw binary
+agy-<version>-macos-x86_64.pkg             macOS installer (per-user)
+agy-<version>-macos-arm64.pkg              macOS installer (per-user)
 agy-<version>-windows-x86_64.exe           raw binary
 agy-<version>-windows-x86_64-setup.exe     Inno Setup installer
 agy_<version>_amd64.deb                    Debian/Ubuntu package
@@ -36,6 +38,24 @@ build time (`VERSION=<version> nfpm package -f packaging/nfpm.yaml -p deb -t .`)
 sudo apt install ./agy_<version>_amd64.deb      # Debian/Ubuntu
 sudo dnf install ./agy-<version>.x86_64.rpm      # Fedora/RHEL
 ```
+
+## macOS installer — `macos/distribution.xml`
+
+A [`productbuild`](https://developer.apple.com/library/archive/documentation/DeveloperTools/Reference/DistributionDefinitionRef/Introduction/Introduction.html)
+distribution compiled in CI. The workflow wraps the frozen binary in a component pkg with
+`pkgbuild`, then runs `productbuild` against this distribution to produce a per-user
+installer (`agy-<version>-macos-{x86_64,arm64}.pkg`, no admin required). `enable_currentUserHome`
+lays the payload down relative to the user's home, so `agy` installs to `~/.local/bin/agy` —
+same location as `install.sh`. The `macos/scripts/postinstall` script adds `~/.local/bin` to
+PATH in `~/.zprofile` / `~/.bash_profile` (idempotently), since a GUI installer can't print a
+terminal note. The version is injected via a `${VERSION}` placeholder at build time.
+
+```sh
+installer -pkg agy-<version>-macos-arm64.pkg -target CurrentUserHomeDirectory   # or double-click
+```
+
+Like the other assets it is **not** OS code-signed or notarized (see the signing note below),
+so the macOS Gatekeeper first-run prompt still applies.
 
 ## Homebrew — `homebrew/agy.rb`
 

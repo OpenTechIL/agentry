@@ -57,6 +57,19 @@ def test_nfpm_config_builds_agy_packages():
     assert "/usr/bin/agy" in dsts
 
 
+def test_macos_pkg_distribution_is_per_user():
+    """The macOS productbuild distribution must build a per-user, versioned installer."""
+    text = Path("packaging/macos/distribution.xml").read_text(encoding="utf-8")
+    # Per-user install (no admin): payload goes into the user's home.
+    assert 'enable_currentUserHome="true"' in text
+    # References the component pkg productbuild wraps.
+    assert "agy-component.pkg" in text
+    # Version is injected at build time, not hard-coded.
+    assert "${VERSION}" in text
+    # The PATH-fixup script the pkg runs must exist.
+    assert Path("packaging/macos/scripts/postinstall").is_file()
+
+
 def test_inno_installer_script_exists():
     """The Inno Setup script must build a versioned, per-user agy installer."""
     text = Path("packaging/windows/agy.iss").read_text(encoding="utf-8")
