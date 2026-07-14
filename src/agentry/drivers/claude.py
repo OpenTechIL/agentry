@@ -64,6 +64,7 @@ DRIVER = Driver(
             _C.HOOK: MergeDest(".claude/settings.json", "hooks"),
             _C.MCP: MergeDest(".mcp.json", "mcpServers"),
         },
+        memory_file=".claude/CLAUDE.md",
     ),
     # Commands at .claude/commands/<repo>/adr.md are invoked as /<repo>:adr; agents
     # discover recursively so a subfolder just tidies them. Skills/tools stay flat.

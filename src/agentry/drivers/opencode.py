@@ -23,5 +23,6 @@ DRIVER = Driver(
         merge={
             _C.MCP: MergeDest("opencode.json", "mcp", aliases=("mcpServers",)),
         },
+        memory_file="AGENTS.md",
     ),
 )

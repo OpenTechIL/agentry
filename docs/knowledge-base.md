@@ -4,6 +4,38 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ---
 
+## 2026-07-09 — `agy emit triggers`: register skill triggers, don't auto-mutate memory files
+
+**Context:** Added `agy emit triggers`, which writes each installed skill's "use when …" text
+(its `SKILL.md` `description`) into every active target's always-loaded memory file
+(`.claude/CLAUDE.md`, `AGENTS.md`, …) so harnesses that don't auto-load skills still know when
+to invoke them. Introduces `TargetSpec.memory_file` (per-driver) and the repo's first **markdown**
+merge.
+
+**Findings / decisions:**
+
+- **Explicit `emit` command, not a `sync` side effect.** `agy sync` reconciles installed
+  *artifacts*; a memory file is hand-authored prose. Mutating it during sync would surprise
+  users and can't be `--check`-verified in CI. `emit triggers` mirrors `emit agents-md`: a
+  deterministic, committable, `--check`-able artifact step. (Contrast: `emit agents-md` owns a
+  whole file; `emit triggers` owns only a marker-delimited block *inside* a file.)
+- **Marker-block merge preserves the never-clobber guarantee for markdown.** `merge_managed_block`
+  ([emit.py](https://github.com/OpenTechIL/agentry/blob/main/src/agentry/emit.py)) replaces only
+  the span between `<!-- BEGIN agentry:triggers -->` / `<!-- END agentry:triggers -->`, appends if
+  absent, and raises on an unbalanced `BEGIN` rather than risk duplicating/clobbering. Idempotent
+  by construction (`merge(merge(x)) == merge(x)`), so `--check` and committed output are stable.
+  Locked in by `test_emit_triggers_never_clobbers_hand_authored_memory` in `tests/test_guarantees.py`.
+- **`TargetSpec.memory_file` must be threaded through `_apply_profile`.** `targets._apply_profile`
+  reconstructs `TargetSpec(...)` when a project sets `target_profiles`; the new field has to be
+  carried explicitly (`memory_file=base.memory_file if base else None`) or an override silently
+  drops a built-in's memory file. Guarded by `test_memory_file_survives_target_profiles_override`.
+- **Skills only.** Only `skill` components carry auto-invoke semantics (SKILL.md `description` =
+  when to use). Agents/commands are invoked explicitly, so they're excluded from the block.
+- **Claude memory path.** Uses `.claude/CLAUDE.md` (Claude Code also reads project-root `CLAUDE.md`);
+  it's a single per-driver constant if the convention shifts.
+
+---
+
 ## 2026-07-09 — Dead-placeholder env scanner must never flag `*_PLUGIN_ROOT`
 
 **Context:** Dogfooding `agy add superpowers` into this repo (materializing `.agentry.yml`/`.agentry.lock`, `.claude/skills/*`, `.claude/hooks/`, and a `SessionStart` hook) surfaced a false-positive from the dead-placeholder env scanner in [envscan.py](https://github.com/OpenTechIL/agentry/blob/main/src/agentry/envscan.py): `${CLAUDE_PLUGIN_ROOT}` was reported as an unset env var with the generic "set it before your agent runs" advice — which is categorically wrong for a host-injected, rewritten variable.

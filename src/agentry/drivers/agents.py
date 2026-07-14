@@ -27,5 +27,6 @@ DRIVER = Driver(
         link={
             _C.SKILL: ".agents/skills/{name}",
         },
+        memory_file="AGENTS.md",
     ),
 )

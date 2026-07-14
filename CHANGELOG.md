@@ -22,6 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SessionStart` hook error.
 
 ### Added
+- `agy emit triggers` — registers a **skill-trigger** block (each installed skill's name →
+  its `SKILL.md` `description`, i.e. *when to auto-invoke it*) into every active target's
+  memory file (`.claude/CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, …). Teaches harnesses that don't
+  auto-load skills when to reach for an agentry-managed skill. Writes only a marker-delimited
+  block (hand-authored content preserved), is idempotent, and supports `--check` for CI and
+  `-o FILE` to target a single file. Backed by a new `TargetSpec.memory_file` (declared per
+  built-in driver) — the repo's first markdown merge, alongside the existing JSON config merges.
 - Defensive guard in the plain-`merge` hook path (`reconcile.py`): when a hook fragment
   still references a `${…PLUGIN_ROOT}` variable after filtering, `agy sync` now emits a
   warning pointing at the `link+merge` profile fix instead of silently installing a hook

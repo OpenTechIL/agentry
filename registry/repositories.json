@@ -104,6 +104,36 @@
         "url": "https://github.com/juliusbrussee/caveman",
         "ref": "main"
       }
+    },
+    "markitdown-for-ai": {
+      "summary": "MarkItDown4AI — converts documents (PDF, DOCX, PPTX, XLSX, HTML) to Markdown for AI agents.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/OpenTechIL/markitdown-for-ai",
+        "ref": "main"
+      },
+      "expose": [
+        {
+          "type": "skill",
+          "name": "document-to-markdown",
+          "path": "skills/document-to-markdown"
+        }
+      ]
+    },
+    "use-agentry": {
+      "summary": "Teaches AI tools to route 'add skill <url>' and pasted 'npx skills add …' requests through agentry (agy), so skills stay tracked in .agentry.yml/.agentry.lock.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/OpenTechIL/agentry",
+        "ref": "main"
+      },
+      "expose": [
+        {
+          "type": "skill",
+          "name": "use-agentry",
+          "path": "skills/use-agentry"
+        }
+      ]
     }
   }
 }

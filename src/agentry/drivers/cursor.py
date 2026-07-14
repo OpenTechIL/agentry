@@ -21,5 +21,6 @@ DRIVER = Driver(
         merge={
             _C.MCP: MergeDest(".cursor/mcp.json", "mcpServers"),
         },
+        memory_file=".cursor/rules/agentry-triggers.mdc",
     ),
 )

@@ -29,5 +29,6 @@ DRIVER = Driver(
         merge={
             _C.MCP: MergeDest(".codex/config.toml", "mcp_servers", aliases=("mcpServers",)),
         },
+        memory_file="AGENTS.md",
     ),
 )

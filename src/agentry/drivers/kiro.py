@@ -28,5 +28,7 @@ DRIVER = Driver(
         merge={
             _C.MCP: MergeDest(".kiro/settings/mcp.json", "mcpServers"),
         },
+        # Kiro auto-loads steering documents under .kiro/steering/ as repo-wide context.
+        memory_file=".kiro/steering/agentry-triggers.md",
     ),
 )

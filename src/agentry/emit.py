@@ -17,6 +17,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from ruamel.yaml import YAML
+
 from .discovery import index as discovery_index
 from .models import ComponentType, Config
 from .resolver import effective_root
@@ -52,6 +54,40 @@ def _strip_frontmatter(text: str) -> str:
     return text
 
 
+def _frontmatter_block(text: str) -> str | None:
+    """Return the raw YAML between a leading ``---`` frontmatter fence, or ``None``."""
+    if not (text.startswith("---\n") or text.startswith("---\r\n")):
+        return None
+    end = text.find("\n---", 3)
+    if end == -1:
+        return None
+    nl = text.find("\n", 3)  # first line after the opening fence
+    return text[nl + 1 : end + 1] if nl != -1 else None
+
+
+def _frontmatter_description(text: str) -> str | None:
+    """Extract the ``description`` field from a component's leading YAML frontmatter.
+
+    Returns the value collapsed to a single line (whitespace runs squeezed), or ``None`` when
+    there is no frontmatter or no ``description``. Parsed with ``YAML(typ="safe")`` — the same
+    reader :mod:`agentry.discovery` uses for source descriptors.
+    """
+    block = _frontmatter_block(text)
+    if block is None:
+        return None
+    try:
+        data = YAML(typ="safe").load(block)
+    except Exception:  # noqa: BLE001 — malformed frontmatter shouldn't crash the emit
+        return None
+    if not isinstance(data, dict):
+        return None
+    desc = data.get("description")
+    if not isinstance(desc, str):
+        return None
+    collapsed = " ".join(desc.split())
+    return collapsed or None
+
+
 def compose_agents_md(items: list[EmitItem]) -> str:
     """Deterministically compose an AGENTS.md from component bodies. Pure (no I/O)."""
     out: list[str] = ["# AGENTS.md", "", GENERATED_NOTE]
@@ -59,6 +95,65 @@ def compose_agents_md(items: list[EmitItem]) -> str:
         body = _strip_frontmatter(it.text).strip()
         out += ["", f"## {it.name} ({it.type.value})", "", body]
     return "\n".join(out).rstrip() + "\n"
+
+
+# -- skill-trigger registration -------------------------------------------------------------
+#
+# ``agy emit triggers`` writes a small, marker-delimited block into each target's memory file
+# (``.claude/CLAUDE.md``, ``AGENTS.md``, …) listing each installed skill and its "use when …"
+# trigger (the SKILL.md ``description``). Unlike ``emit agents-md`` — which owns a whole file —
+# a trigger block is spliced into a hand-authored file, so it must touch ONLY the region
+# between its markers. This is the repo's only markdown merge; all others are JSON.
+
+TRIGGERS_BEGIN = "<!-- BEGIN agentry:triggers -->"
+TRIGGERS_END = "<!-- END agentry:triggers -->"
+_TRIGGERS_MANAGED_NOTE = (
+    "<!-- Managed by agentry; edits between these markers are overwritten. "
+    "Run `agy emit triggers` to refresh. -->"
+)
+
+
+def compose_triggers_block(items: list[EmitItem]) -> str:
+    """Compose the marker-delimited skill-trigger block (markers included). Pure (no I/O).
+
+    Each item becomes one bullet mapping the skill name to its single-line ``description``;
+    skills without a description degrade to a bare ``- **<name>**`` line.
+    """
+    out: list[str] = [
+        TRIGGERS_BEGIN,
+        _TRIGGERS_MANAGED_NOTE,
+        "## Agentry-managed skills",
+        "",
+        "Auto-invoke a skill below when the situation matches its trigger:",
+        "",
+    ]
+    for it in items:
+        desc = _frontmatter_description(it.text)
+        out.append(f"- **{it.name}** — {desc}" if desc else f"- **{it.name}**")
+    out.append(TRIGGERS_END)
+    return "\n".join(out)
+
+
+def merge_managed_block(existing: str, block: str) -> str:
+    """Insert-or-replace the agentry trigger block in ``existing``, preserving everything else.
+
+    Pure and idempotent: ``merge(merge(x)) == merge(x)``. Replaces the span from the first
+    ``BEGIN`` marker through the first ``END`` after it; if no block is present, appends one
+    after the existing content. Raises :class:`ValueError` on an unbalanced ``BEGIN`` with no
+    following ``END`` rather than risk duplicating or clobbering content.
+    """
+    start = existing.find(TRIGGERS_BEGIN)
+    if start == -1:
+        if not existing.strip():
+            return block + "\n"
+        return existing.rstrip("\n") + "\n\n" + block + "\n"
+    end = existing.find(TRIGGERS_END, start)
+    if end == -1:
+        raise ValueError(
+            f"found {TRIGGERS_BEGIN!r} without a matching {TRIGGERS_END!r}; refusing to write"
+        )
+    end += len(TRIGGERS_END)
+    return existing[:start] + block + existing[end:]
 
 
 def gather_items(root: Path, config: Config) -> list[EmitItem]:

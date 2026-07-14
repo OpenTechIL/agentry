@@ -304,6 +304,21 @@ def test_shipped_catalog_is_valid():
     assert gph.generate is not None and gph.generate.produces == [".claude/skills/graphify"]
 
 
+def test_shipped_catalog_exposes_use_agentry_skill():
+    # The self-hosting `use-agentry` skill must be installable by name (`agy add use-agentry`)
+    # and point at this repo's conventional skills/use-agentry/ layout.
+    from agentry.models import RepositoryIndex
+
+    path = Path(__file__).resolve().parent.parent / "registry" / "repositories.json"
+    idx = RepositoryIndex.model_validate(json.loads(path.read_text()))
+    entry = idx.repositories["use-agentry"]
+    assert entry.source.url == "https://github.com/OpenTechIL/agentry"
+    exposed = entry.expose[0]
+    assert exposed.type is ComponentType.SKILL
+    assert exposed.name == "use-agentry"
+    assert exposed.path == "skills/use-agentry"
+
+
 def test_shipped_repositories_catalog_has_arckit_hook_profile():
     # The curated repositories.json must declare arckit's claude hook link+merge profile so
     # `agy add arckit` rewrites ${CLAUDE_PLUGIN_ROOT} instead of merging it in verbatim.

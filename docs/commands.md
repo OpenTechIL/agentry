@@ -63,7 +63,44 @@ undefined target resolvable without hand-writing `target_profiles`.
 | Command | What it does |
 |---|---|
 | `agy emit agents-md [-o FILE] [--check] [--agent] [--allow-transform] [--yes]` | Compose a portable `AGENTS.md` from your skills/agents/commands. Deterministic by default (`--check` verifies it's current, for CI); `--agent` synthesizes it via your own agent CLI (`transform.command`), gated by `--allow-transform`, with a diff preview + confirm (`--yes` to auto-apply) |
+| `agy emit triggers [--check] [-o FILE]` | Register a skill-trigger block into every active target's memory file (`.claude/CLAUDE.md`, `AGENTS.md`, …). `--check` verifies they're current, for CI; `-o FILE` writes one explicit file instead of fanning out |
 | `agy import apm [--file apm.yml] [--dry-run]` | Translate another agent package manager's manifest into `.agentry.yml` — sources, components, targets, and inline MCP servers — then run `agy sync` |
 
 > Tip: a source repo that ships an `.apm/` package tree is consumable directly — `agy add` /
 > `agy list` see its skills/agents/prompts with no republishing.
+
+### `agy emit triggers` — skill triggers into memory files
+
+Many harnesses don't *auto-load* an installed skill; they only invoke it if the always-loaded
+instruction/memory file tells them when. `agy emit triggers` composes one bullet per installed
+skill — its name mapped to its `SKILL.md` `description` (the "use when …" trigger) — and splices
+that list into **every active target's memory file**, the way `agy sync` fans installs out:
+
+| Target | Memory file |
+|---|---|
+| claude | `.claude/CLAUDE.md` |
+| codex · opencode · kimi · `agents` | `AGENTS.md` |
+| gemini | `GEMINI.md` |
+| copilot | `.github/copilot-instructions.md` |
+| cursor | `.cursor/rules/agentry-triggers.mdc` |
+| windsurf | `.windsurf/rules/agentry-triggers.md` |
+| kiro | `.kiro/steering/agentry-triggers.md` |
+
+The block is delimited by markers so only it is written — everything else in the file is left
+intact — and the merge is idempotent (same skills + descriptions → byte-identical output), so
+committing the result and running `--check` in CI is safe:
+
+```markdown
+<!-- BEGIN agentry:triggers -->
+<!-- Managed by agentry; edits between these markers are overwritten. Run `agy emit triggers` to refresh. -->
+## Agentry-managed skills
+
+Auto-invoke a skill below when the situation matches its trigger:
+
+- **code-reviewer** — Use when reviewing a pull request or a diff before merging.
+- **pdf-processing** — Use when extracting text or tables from PDF files.
+<!-- END agentry:triggers -->
+```
+
+Only `skill` components are listed — agents and commands are invoked explicitly, not
+auto-triggered. Pass `-o FILE` to write a single explicit file instead of fanning out.

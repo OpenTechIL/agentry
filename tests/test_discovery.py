@@ -6,6 +6,15 @@ from agentry import discovery
 from agentry.models import ComponentType
 
 
+def test_repo_self_hosts_use_agentry_skill():
+    """This repo's own skills/use-agentry/ is discoverable by convention (no descriptor)."""
+    repo_root = Path(__file__).resolve().parent.parent
+    found = {(d.type, d.name) for d in discovery.discover(repo_root)}
+    assert (ComponentType.SKILL, "use-agentry") in found
+    skill_md = repo_root / "skills" / "use-agentry" / "SKILL.md"
+    assert skill_md.is_file()
+
+
 def test_discover_all_types(local_source: Path):
     found = {(d.type, d.name) for d in discovery.discover(local_source)}
     assert (ComponentType.SKILL, "code-reviewer") in found

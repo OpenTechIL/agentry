@@ -112,6 +112,25 @@ def test_profile_override_preserves_claude_policies():
     assert dropped == ["Nope"]
 
 
+def test_every_builtin_driver_declares_a_memory_file():
+    # `agy emit triggers` fans out to each target's memory file; every built-in should have one.
+    for name, driver in resolve_drivers(Config()).items():
+        assert driver.spec.memory_file, f"{name} is missing a memory_file"
+
+
+def test_memory_file_survives_target_profiles_override():
+    # A profile override rebuilds the TargetSpec; the built-in's memory_file must carry through
+    # (guards the _apply_profile reconstruction dropping the field).
+    cfg = Config(
+        target_profiles={
+            "claude": {
+                _C.TOOL: ProfileRule(strategy=Strategy.LINK, dest=".claude/plugins/tools/{name}")
+            }
+        }
+    )
+    assert resolve_drivers(cfg)["claude"].spec.memory_file == ".claude/CLAUDE.md"
+
+
 # -- new-agent capability maps -------------------------------------------
 
 

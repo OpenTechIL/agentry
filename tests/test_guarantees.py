@@ -78,6 +78,38 @@ def test_remove_is_fully_reversible(tmp_path: Path, local_source: Path):
     ).get("mcpServers", {})
 
 
+def test_emit_triggers_never_clobbers_hand_authored_memory(tmp_path: Path):
+    """Registering skill triggers writes ONLY its marker-delimited block: hand-authored prose
+    above and below survives, a refresh is byte-stable, and a description change touches only
+    the managed span. The markdown analog of the JSON never-clobber guarantee."""
+    from agentry.emit import (
+        TRIGGERS_BEGIN,
+        EmitItem,
+        compose_triggers_block,
+        merge_managed_block,
+    )
+
+    def block(desc: str) -> str:
+        return compose_triggers_block(
+            [EmitItem(_C.SKILL, "greeter", f"---\nname: greeter\ndescription: {desc}\n---\nbody\n")]
+        )
+
+    existing = "# CLAUDE.md\n\nHand-written rules.\n"
+    merged = merge_managed_block(existing, block("Use when greeting."))
+    assert merged.startswith("# CLAUDE.md\n\nHand-written rules.")  # prose above preserved
+    assert "Use when greeting." in merged
+
+    # Refresh with identical inputs is byte-for-byte stable (no churn).
+    assert merge_managed_block(merged, block("Use when greeting.")) == merged
+
+    # A trigger change rewrites only the block; surrounding prose is untouched.
+    updated = merge_managed_block(merged, block("Use when saying farewell."))
+    assert "Use when saying farewell." in updated
+    assert "Use when greeting." not in updated
+    assert updated.startswith("# CLAUDE.md\n\nHand-written rules.")
+    assert updated.count(TRIGGERS_BEGIN) == 1
+
+
 def test_merge_never_clobbers_hand_authored_keys(tmp_path: Path, local_source: Path):
     """Merging an MCP server preserves a hand-authored entry in the same file, and removing
     agentry's entry leaves the hand-authored one intact. Guards apm #20 / #1764 (silent

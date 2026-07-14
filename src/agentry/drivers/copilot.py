@@ -34,5 +34,6 @@ DRIVER = Driver(
         merge={
             _C.MCP: MergeDest(".vscode/mcp.json", "servers", aliases=("mcpServers",)),
         },
+        memory_file=".github/copilot-instructions.md",
     ),
 )

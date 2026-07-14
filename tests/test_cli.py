@@ -265,6 +265,92 @@ def test_emit_agents_md_no_components(tmp_path, monkeypatch):
     assert not (project / "AGENTS.md").exists()
 
 
+def _described_skill_source(root, name="greeter", desc="Use when the user says hello."):
+    d = root / "skills" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {desc}\n---\n# body\n")
+    return root
+
+
+def test_emit_triggers_fans_out_to_target_memory_files(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude", "opencode"]).save()
+    _described_skill_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    runner.invoke(app, ["add", "team/skill/greeter"])
+
+    res = runner.invoke(app, ["emit", "triggers"])
+    assert res.exit_code == 0
+    # claude -> .claude/CLAUDE.md, opencode -> AGENTS.md
+    for path in (project / ".claude" / "CLAUDE.md", project / "AGENTS.md"):
+        doc = path.read_text()
+        assert "## Agentry-managed skills" in doc
+        assert "- **greeter** — Use when the user says hello." in doc
+
+    # Idempotent: --check passes right after a write.
+    assert runner.invoke(app, ["emit", "triggers", "--check"]).exit_code == 0
+
+    # A description change makes memory files stale → --check fails (the CI verify path).
+    (tmp_path / "team" / "skills" / "greeter" / "SKILL.md").write_text(
+        "---\nname: greeter\ndescription: Use when the user waves goodbye.\n---\n# body\n"
+    )
+    stale = runner.invoke(app, ["emit", "triggers", "--check"])
+    assert stale.exit_code == 1
+    assert "Out of date" in stale.output
+
+
+def test_emit_triggers_output_override_single_file(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    _described_skill_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    runner.invoke(app, ["add", "team/skill/greeter"])
+
+    res = runner.invoke(app, ["emit", "triggers", "-o", "NOTES.md"])
+    assert res.exit_code == 0
+    assert "- **greeter** — Use when the user says hello." in (project / "NOTES.md").read_text()
+    # Fan-out target was NOT written when -o is given.
+    assert not (project / ".claude" / "CLAUDE.md").exists()
+
+
+def test_emit_triggers_preserves_hand_authored_prose(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    _described_skill_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    runner.invoke(app, ["add", "team/skill/greeter"])
+
+    mem = project / ".claude" / "CLAUDE.md"
+    mem.parent.mkdir(parents=True, exist_ok=True)
+    mem.write_text("# Project rules\n\nAlways run tests.\n")
+
+    runner.invoke(app, ["emit", "triggers"])
+    doc = mem.read_text()
+    assert "# Project rules" in doc and "Always run tests." in doc  # hand prose survives
+    assert "## Agentry-managed skills" in doc
+
+    # A second run is byte-identical (idempotent, no churn).
+    before = mem.read_text()
+    runner.invoke(app, ["emit", "triggers"])
+    assert mem.read_text() == before
+
+
+def test_emit_triggers_no_skills(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    monkeypatch.chdir(project)
+    out = runner.invoke(app, ["emit", "triggers"]).output
+    assert "No skill components" in out
+    assert not (project / ".claude" / "CLAUDE.md").exists()
+
+
 def _project_with_component(tmp_path, monkeypatch):
     project = tmp_path / "proj"
     project.mkdir()

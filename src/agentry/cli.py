@@ -1294,5 +1294,90 @@ def emit_agents_md(
     console.print(f"[green]Wrote[/green] {output} [dim]from {len(items)} component(s)[/dim].")
 
 
+def _trigger_memory_files(config, root: Path) -> list[Path]:
+    """Resolved memory-file paths (deduped, sorted) for every active target that declares one."""
+    from .drivers import resolve_drivers
+
+    drivers = resolve_drivers(config)
+    seen: dict[Path, None] = {}
+    for tname in sorted(config.active_targets()):
+        driver = drivers.get(tname)
+        mem = driver.spec.memory_file if driver else None
+        if not mem:
+            continue
+        path = root / mem
+        seen.setdefault(path, None)
+    return list(seen)
+
+
+@emit_app.command("triggers")
+def emit_triggers(
+    check: bool = typer.Option(
+        False, "--check", help="Verify memory files are up to date; exit 1 if not (for CI)."
+    ),
+    output: Path | None = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Write to this single file instead of fanning out to every target's memory file.",
+    ),
+) -> None:
+    """Register a skill-trigger block into each target's memory file (CLAUDE.md, AGENTS.md, …).
+
+    Composes one bullet per installed skill — its name mapped to its SKILL.md ``description``
+    (the "use when …" trigger) — and splices it, between managed markers, into every active
+    target's always-loaded instruction file. Only the marker-delimited block is written, so
+    the rest of a hand-authored memory file is left untouched; refresh is idempotent. Use
+    ``--check`` in CI, or ``-o PATH`` to target a single file.
+    """
+    from .emit import compose_triggers_block, gather_items, merge_managed_block
+
+    config = _load().parsed()
+    root = _root()
+    items = [i for i in gather_items(root, config) if i.type is ComponentType.SKILL]
+    if not items:
+        console.print("[yellow]No skill components to register as triggers.[/yellow]")
+        raise typer.Exit(0)
+
+    block = compose_triggers_block(items)
+
+    if output is not None:
+        targets = [output if output.is_absolute() else root / output]
+    else:
+        targets = _trigger_memory_files(config, root)
+        if not targets:
+            console.print(
+                "[yellow]No active target declares a memory file; nothing to register.[/yellow]"
+            )
+            raise typer.Exit(0)
+
+    stale: list[Path] = []
+    for path in targets:
+        current = path.read_text(encoding="utf-8") if path.is_file() else ""
+        try:
+            desired = merge_managed_block(current, block)
+        except ValueError as exc:
+            err.print(f"[red]{path}: {exc}[/red]")
+            raise typer.Exit(1)
+        rel = path.relative_to(root) if path.is_relative_to(root) else path
+        if check:
+            if current != desired:
+                stale.append(rel)
+            continue
+        if current == desired:
+            console.print(f"[dim]{rel} already up to date.[/dim]")
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(desired, encoding="utf-8")
+        console.print(f"[green]Registered[/green] {rel} [dim]({len(items)} skill(s))[/dim].")
+
+    if check:
+        if stale:
+            listed = ", ".join(str(p) for p in stale)
+            err.print(f"[red]Out of date:[/red] {listed}. Run `agy emit triggers` to refresh.")
+            raise typer.Exit(1)
+        console.print(f"[green]Triggers up to date[/green] ({len(items)} skill(s)).")
+
+
 if __name__ == "__main__":
     app()

@@ -24,5 +24,6 @@ DRIVER = Driver(
         merge={
             _C.MCP: MergeDest(".kimi-code/mcp.json", "mcpServers"),
         },
+        memory_file="AGENTS.md",
     ),
 )

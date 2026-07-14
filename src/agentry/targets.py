@@ -85,7 +85,14 @@ def _apply_profile(
         else:
             merge[ctype] = MergeDest(rule.file, rule.pointer)  # type: ignore[arg-type]
             _clear(ctype, keep=merge)
-    return TargetSpec(name=name, link=link, copy=copy, merge=merge, link_merge=link_merge)
+    return TargetSpec(
+        name=name,
+        link=link,
+        copy=copy,
+        merge=merge,
+        link_merge=link_merge,
+        memory_file=base.memory_file if base else None,
+    )
 
 
 def resolve_targets(config: Config) -> dict[str, TargetSpec]:

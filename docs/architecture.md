@@ -260,7 +260,10 @@ dataclass that *composes* two things:
 
 1. A **capability map** (`spec.TargetSpec`): per component type, a **link**/**copy**
    destination (path template) or a **merge** destination (config file + JSON pointer). A
-   type absent from the map is unsupported for that agent → skipped with a warning.
+   type absent from the map is unsupported for that agent → skipped with a warning. The spec
+   also carries a **`memory_file`** — the tool's always-loaded instruction file
+   (`.claude/CLAUDE.md`, `AGENTS.md`, …) that `agy emit triggers` registers skill triggers
+   into (`None` = the tool has no such concept). It survives a `target_profiles` override.
 2. Optional **per-agent policies** for behavior that isn't pure path placement:
    - `HookEventPolicy` — validate hook-event keys (Claude Code rejects a `settings.json`
      carrying unknown event keys, so the claude driver drops them with a warning). No-op
@@ -313,9 +316,12 @@ flowchart LR
 | tool | `.claude/tools/{name}` | `.opencode/tools/{name}` | — | — | — | — | — | — | — | — |
 | hook | merge `.claude/settings.json` → `hooks` | — | — | merge `.gemini/settings.json` → `hooks` | merge `.windsurf/hooks.json` → `hooks` | — | — | — | — | — |
 | mcp | merge `.mcp.json` → `mcpServers` | merge `opencode.json` → `mcp` | merge `.cursor/mcp.json` → `mcpServers` | merge `.gemini/settings.json` → `mcpServers` | — | merge `.kimi-code/mcp.json` → `mcpServers` | merge `.codex/config.toml` → `mcp_servers` | merge `.vscode/mcp.json` → `servers` | merge `.kiro/settings/mcp.json` → `mcpServers` | — |
+| memory (`emit triggers`) | `.claude/CLAUDE.md` | `AGENTS.md` | `.cursor/rules/agentry-triggers.mdc` | `GEMINI.md` | `.windsurf/rules/agentry-triggers.md` | `AGENTS.md` | `AGENTS.md` | `.github/copilot-instructions.md` | `.kiro/steering/agentry-triggers.md` | `AGENTS.md` |
 
 A `—` means the agent either has no such concept or expects a format agentry can't yet
-write. The newest drivers map what installs cleanly: skills everywhere, and MCP/hooks
+write. The **memory** row is the always-loaded instruction file `agy emit triggers` writes a
+marker-delimited skill-trigger block into (a markdown merge — like the JSON config merges, it
+writes only the block it owns and leaves the rest of the file untouched). The newest drivers map what installs cleanly: skills everywhere, and MCP/hooks
 merged wherever the destination is JSON **or TOML**. The merge installer chooses the codec
 by the destination's extension — Codex's MCP servers merge into `.codex/config.toml` under
 the snake_case `[mcp_servers]` table (written with `tomlkit`, preserving the rest of the

@@ -25,5 +25,6 @@ DRIVER = Driver(
         merge={
             _C.HOOK: MergeDest(".windsurf/hooks.json", "hooks"),
         },
+        memory_file=".windsurf/rules/agentry-triggers.md",
     ),
 )

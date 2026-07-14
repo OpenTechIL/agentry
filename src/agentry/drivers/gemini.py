@@ -26,5 +26,6 @@ DRIVER = Driver(
             _C.MCP: MergeDest(".gemini/settings.json", "mcpServers"),
             _C.HOOK: MergeDest(".gemini/settings.json", "hooks"),
         },
+        memory_file="GEMINI.md",
     ),
 )

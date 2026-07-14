@@ -161,6 +161,11 @@ agy sync                                        # reconcile to match config + lo
   skills/agents/commands. Deterministic by default (`--check` verifies it in CI); `--agent`
   *synthesizes* it via your own agent CLI (`transform.command` in `.agentry.yml`), gated by
   `--allow-transform`, with a diff preview + confirmation (`--yes` to auto-apply in CI).
+- `agy emit triggers [--check] [-o FILE]` — register a **skill-trigger** block (each skill's
+  name → its `description`, i.e. *when to auto-invoke it*) into every active target's memory
+  file (`.claude/CLAUDE.md`, `AGENTS.md`, `GEMINI.md`, …). Writes only a marker-delimited block,
+  so hand-authored content is untouched; idempotent and `--check`-able for CI. Use this so
+  harnesses that don't auto-load skills still know when to reach for an agentry-managed skill.
 - `agy update [SOURCE]` — re-resolve refs to latest and rewrite `.agentry.lock`.
 - `agy version` — print the installed version.
 
@@ -180,6 +185,13 @@ agy sync                                        # reconcile to match config + lo
 File/dir components install via **symlink** by default (live-updating into the `.agentry/`
 store); switch any to a committable real copy with `strategy: copy`. Target support varies by
 tool (e.g. Cursor is rules-only); unsupported combinations are skipped with a warning.
+
+Beyond these six component types, each target also declares a **memory file** — the
+always-loaded instruction file the tool reads on every session (`.claude/CLAUDE.md`,
+`AGENTS.md`, `GEMINI.md`, `.github/copilot-instructions.md`, …). `agy emit triggers` registers
+a marker-delimited **skill-trigger** block there, so harnesses that don't auto-load installed
+skills still learn *when* to invoke each one. Like a config merge, it writes only the block it
+owns and leaves the rest of your memory file untouched.
 
 Both sides of the mapping are data-driven: a source repo can self-describe its layout
 (`agentry.yaml`), components can declare recursive version-aware `requires`, tool-specific
@@ -284,6 +296,22 @@ Most skills on GitHub don't follow agentry's `skills/<name>/` layout. Three ways
    agy source add some-pkg https://github.com/org/some-pkg
    agy add some-pkg/skill/<name>     # or `agy list` to see what it provides
    ```
+
+### Let your AI tool drive `agy` for you
+
+There's a skill that closes the loop: install it and your AI tool (Claude Code, Codex, …)
+learns to run these `agy` commands itself.
+
+```bash
+agy add use-agentry
+```
+
+Afterward, telling the tool *"add skill `https://github.com/OpenTechIL/markitdown-for-ai`"*
+makes it run the `agy source add … && agy add … && agy sync` flow for you — so the skill lands
+in `.agentry.yml`/`.agentry.lock` instead of being installed opaquely. Paste a raw
+`npx skills add owner/repo` command and it offers to run the agentry equivalent or the command
+as-is. (The skill lives in this repo at
+[`skills/use-agentry/`](skills/use-agentry/SKILL.md) — agentry managing itself.)
 
 ## Contribute a repo to the starter catalog
 
