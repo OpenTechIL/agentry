@@ -9,6 +9,8 @@ name: Release Binaries
 #   agy-<version>-linux-x86_64                 raw binary
 #   agy-<version>-macos-x86_64                 raw binary
 #   agy-<version>-macos-arm64                  raw binary
+#   agy-<version>-macos-x86_64.pkg             macOS installer (per-user)
+#   agy-<version>-macos-arm64.pkg              macOS installer (per-user)
 #   agy-<version>-windows-x86_64.exe           raw binary
 #   agy-<version>-windows-x86_64-setup.exe     Inno Setup installer
 #   agy_<version>_amd64.deb                    Debian/Ubuntu package
@@ -83,6 +85,37 @@ jobs:
             packaging\windows\agy.iss
           # Keep every release asset flat at the repo root for a clean upload.
           Move-Item dist\agy-*-setup.exe .
+
+      # --- macOS: per-user .pkg installer (~/.local/bin), from ./dist/agy ---
+      - name: Build macOS installer
+        if: startsWith(matrix.target, 'macos-')
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          # Payload rooted at the user's home; enable_currentUserHome maps it to ~,
+          # so ./local/bin/agy lands at ~/.local/bin/agy (matches install.sh).
+          mkdir -p pkgroot/.local/bin
+          cp dist/agy pkgroot/.local/bin/agy
+          chmod +x pkgroot/.local/bin/agy
+          chmod +x packaging/macos/scripts/postinstall
+          pkgbuild --root pkgroot \
+            --identifier com.opentech.agentry \
+            --version "$VERSION" \
+            --scripts packaging/macos/scripts \
+            --install-location / \
+            agy-component.pkg
+          sed "s/\${VERSION}/$VERSION/g" packaging/macos/distribution.xml > distribution.xml
+          productbuild --distribution distribution.xml \
+            --package-path . \
+            "agy-${VERSION}-${TARGET}.pkg"
+          # Verify the payload lands at ~/.local/bin/agy.
+          pkgutil --expand-full "agy-${VERSION}-${TARGET}.pkg" /tmp/pkgcheck
+          ls /tmp/pkgcheck/*.pkg/Payload/.local/bin/agy
+          # Drop intermediates so only the final product pkg is uploaded
+          # (agy-component.pkg would otherwise match the agy-* upload glob).
+          rm -rf agy-component.pkg distribution.xml pkgroot /tmp/pkgcheck
 
       - name: Rename raw binary
         shell: bash
