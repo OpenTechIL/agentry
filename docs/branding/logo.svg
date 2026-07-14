@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="48" viewBox="0 0 120 48" role="img" aria-label="agentry logo">
+  <title>agentry</title>
+  <g fill="none" stroke="#5A4FCF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- left bracket [ -->
+    <path d="M28 10 H16 V38 H28" />
+    <!-- chevron > -->
+    <path d="M52 16 L68 24 L52 32" />
+    <!-- right bracket ] -->
+    <path d="M92 10 H104 V38 H92" />
+  </g>
+</svg>
