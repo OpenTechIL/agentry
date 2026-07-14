@@ -97,11 +97,30 @@ curl -fsSL https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.sh 
 irm https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.ps1 | iex
 ```
 
-This downloads the right binary for your OS/arch from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest), verifies its checksum, and installs `agy`. Pin a version with `AGENTRY_VERSION=0.1.0` or change the location with `AGENTRY_INSTALL_DIR`. (macOS binaries are unsigned — on first run, allow it via System Settings → Privacy & Security.)
+This downloads the right binary for your OS/arch from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest), verifies its checksum against `SHA256SUMS.txt`, and installs `agy` to `~/.local/bin` (macOS/Linux) or `%LOCALAPPDATA%\Programs\agentry` (Windows). Pin a version with `AGENTRY_VERSION=0.1.3`, or change the location with `AGENTRY_INSTALL_DIR`.
 
 **Tell your coding agent** to install it on a machine:
 
 > Run: `curl -fsSL https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.sh | sh` (or the PowerShell line above on Windows), then verify with `agy version`.
+
+### Native installers
+
+Prefer a double-click installer or a native package? Grab the matching asset from the
+[latest release](https://github.com/OpenTechIL/agentry/releases/latest) (`<version>` is e.g. `0.1.3`):
+
+| Platform | Asset | Install | Lands at |
+|---|---|---|---|
+| macOS (Apple Silicon) | `agy-<version>-macos-arm64.pkg` | double-click | `~/.local/bin/agy` (per-user, no admin) |
+| macOS (Intel) | `agy-<version>-macos-x86_64.pkg` | double-click | `~/.local/bin/agy` (per-user, no admin) |
+| Windows | `agy-<version>-windows-x86_64-setup.exe` | double-click | `%LOCALAPPDATA%\Programs\agentry` (adds to PATH) |
+| Debian/Ubuntu | `agy_<version>_amd64.deb` | `sudo apt install ./agy_<version>_amd64.deb` | `/usr/bin/agy` |
+| Fedora/RHEL | `agy-<version>-1.x86_64.rpm` | `sudo dnf install ./agy-<version>-1.x86_64.rpm` | `/usr/bin/agy` |
+
+The macOS `.pkg` adds `~/.local/bin` to your `PATH` automatically. Every release asset is
+signed with [cosign](https://github.com/OpenTechIL/agentry/blob/main/packaging/README.md#signing--cosign-keyless-sigstore)
+(a `.cosign.bundle` per asset) for verifiable provenance. The binaries and installers are **not**
+OS-notarized, so on first run macOS Gatekeeper / Windows SmartScreen will warn — allow it via
+**System Settings → Privacy & Security** (macOS) or **More info → Run anyway** (Windows).
 
 ### With Python (uv / pipx)
 
@@ -119,14 +138,23 @@ uv pip install git+https://github.com/OpenTechIL/agentry   # then: agy <command>
 
 ### Homebrew · Scoop · devcontainers
 
-Package-manager and devcontainer integrations live in [`packaging/`](packaging/): a Homebrew
-formula, a Scoop manifest, and a [devcontainer Feature](packaging/devcontainer) that installs
-`agy` and runs `agy sync --frozen` on create. See [packaging/README.md](packaging/README.md)
-for how each is wired to releases (and the status of binary signing).
+Package-manager and devcontainer integrations live in [`packaging/`](packaging/):
+
+```bash
+brew install OpenTechIL/tap/agy   # macOS/Linux — via the Homebrew tap
+scoop install agy                 # Windows — from a bucket that includes the manifest
+```
+
+Plus a [devcontainer Feature](packaging/devcontainer) that installs `agy` and runs
+`agy sync --frozen` on create. See [packaging/README.md](packaging/README.md) for how each is
+wired to releases (and the status of binary signing).
 
 ## Quickstart
 
+Verify the install, then set up a project:
+
 ```bash
+agy version                                     # confirm agy is installed
 agy init --target claude --target opencode      # create .agentry.yml + .gitignore
 agy source add team-skills https://github.com/org/team-skills --ref main
 agy list                                        # see what's available
@@ -135,6 +163,9 @@ agy add team-skills/mcp/github                  # merge an MCP server into .mcp.
 agy status                                      # check install state / drift
 agy sync                                        # reconcile to match config + lock
 ```
+
+New to agentry? See [How install works](#how-install-works) for what `agy sync` writes and
+how to reverse it.
 
 ## Common commands
 

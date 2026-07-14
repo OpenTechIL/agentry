@@ -49,14 +49,25 @@ project (no compile step, no static artifact to regenerate, no silent overwrites
 
 ## Get started
 
-Run straight from git with [`uv`](https://docs.astral.sh/uv/) — no global install needed:
+Install the standalone binary (no Python required):
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.sh | sh
+# Windows (PowerShell)
+irm https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.ps1 | iex
+```
+
+Prefer a double-click installer or a native package (`.pkg`, `.exe`, `.deb`, `.rpm`)? Grab it
+from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest). Or run
+straight from git with [`uv`](https://docs.astral.sh/uv/) — no install needed:
 
 ```bash
 uvx --from git+https://github.com/OpenTechIL/agentry agy --help
 ```
 
-See the [README](https://github.com/OpenTechIL/agentry#readme) for the full quickstart and
-command reference.
+See the [README](https://github.com/OpenTechIL/agentry#readme) for all install methods, the
+full quickstart, and the command reference.
 
 ## Learn more
 
