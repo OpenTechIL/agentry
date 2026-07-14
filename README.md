@@ -145,9 +145,11 @@ brew install OpenTechIL/tap/agy   # macOS/Linux — via the Homebrew tap
 scoop install agy                 # Windows — from a bucket that includes the manifest
 ```
 
-Plus a [devcontainer Feature](packaging/devcontainer) that installs `agy` and runs
-`agy sync --frozen` on create. See [packaging/README.md](packaging/README.md) for how each is
-wired to releases (and the status of binary signing).
+The Homebrew tap (`OpenTechIL/homebrew-tap`) is refreshed automatically on every release, so
+`brew upgrade agy` always tracks the latest version. Plus a
+[devcontainer Feature](packaging/devcontainer) that installs `agy` and runs `agy sync --frozen`
+on create. See [packaging/README.md](packaging/README.md) for how each is wired to releases
+(and the status of binary signing).
 
 ## Quickstart
 

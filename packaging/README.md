@@ -59,11 +59,21 @@ so the macOS Gatekeeper first-run prompt still applies.
 
 ## Homebrew — `homebrew/agy.rb`
 
-A formula for a tap (e.g. `OpenTechIL/homebrew-tap`): then `brew install OpenTechIL/tap/agy`.
+A formula for a tap (`OpenTechIL/homebrew-tap`): then `brew install OpenTechIL/tap/agy`.
 It selects the macOS/Linux binary by arch and verifies its `sha256`. **`version` and the
-`sha256` values are release-specific**; the placeholders (64 zeros) are filled per release —
-read them from `SHA256SUMS.txt` (the lines are `<sha256>  agy-<version>-<target>`). This can be
-automated with a release step that bumps the formula in the tap repo.
+`sha256` values are release-specific**; the in-repo `agy.rb` keeps 64-zero placeholders so the
+structure stays reviewable, and they're filled per release from `SHA256SUMS.txt` (the lines are
+`<sha256>  agy-<version>-<target>`).
+
+This is **automated**: the `homebrew` job in `release-binaries.yml` runs on every `v*` tag,
+renders the formula with `scripts/render_homebrew.py <version> SHA256SUMS.txt homebrew/agy.rb`
+(the render keys each sha off the `agy-<version>-<target>` asset named in the url line above it),
+and pushes the result to `Formula/agy.rb` in the tap repo. Two one-time prerequisites:
+
+1. Create the tap repo **`OpenTechIL/homebrew-tap`** (formulas live in `Formula/`).
+2. Add a repo secret **`HOMEBREW_TAP_TOKEN`** to `OpenTechIL/agentry` — a fine-grained PAT (or
+   deploy key) with `contents: write` on `homebrew-tap`. The default `GITHUB_TOKEN` can't push
+   to a different repo. Until the secret exists the job logs a skip and the release still succeeds.
 
 ## Scoop — `scoop/agy.json`
 
