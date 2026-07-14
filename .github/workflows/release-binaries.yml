@@ -113,6 +113,9 @@ jobs:
           # Verify the payload lands at ~/.local/bin/agy.
           pkgutil --expand-full "agy-${VERSION}-${TARGET}.pkg" /tmp/pkgcheck
           ls /tmp/pkgcheck/*.pkg/Payload/.local/bin/agy
+          # Drop intermediates so only the final product pkg is uploaded
+          # (agy-component.pkg would otherwise match the agy-* upload glob).
+          rm -rf agy-component.pkg distribution.xml pkgroot /tmp/pkgcheck
 
       - name: Rename raw binary
         shell: bash
