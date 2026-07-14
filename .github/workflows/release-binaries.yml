@@ -40,18 +40,34 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: ubuntu-latest,  target: linux-x86_64,   ext: "" }
-          - { runner: macos-13,       target: macos-x86_64,    ext: "" }
-          - { runner: macos-14,       target: macos-arm64,     ext: "" }
-          - { runner: windows-latest, target: windows-x86_64,  ext: ".exe" }
+          - { runner: ubuntu-latest,  target: linux-x86_64,   ext: "",     pyarch: "" }
+          # GitHub retired the macos-13 (Intel) image in Dec 2025, so macOS
+          # x86_64 is cross-built on the arm64 runner via an x86_64 CPython
+          # under Rosetta 2 (see the "Build binary" step).
+          - { runner: macos-14,       target: macos-x86_64,    ext: "",     pyarch: x86_64 }
+          - { runner: macos-14,       target: macos-arm64,     ext: "",     pyarch: "" }
+          - { runner: windows-latest, target: windows-x86_64,  ext: ".exe", pyarch: "" }
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      - name: Ensure Rosetta 2 (macOS x86_64 cross build)
+        if: matrix.pyarch == 'x86_64'
+        run: sudo softwareupdate --install-rosetta --agree-to-license || true
       - name: Build binary
-        run: uv run --extra build pyinstaller packaging/agy.spec
+        shell: bash
+        run: |
+          if [ -n "${{ matrix.pyarch }}" ]; then
+            # Cross-build for Intel on the arm64 runner: an x86_64 CPython runs
+            # under Rosetta, so PyInstaller freezes an x86_64 binary with x86_64
+            # dependency wheels.
+            uv run --python "cpython-3.12-macos-${{ matrix.pyarch }}" \
+              --extra build pyinstaller packaging/agy.spec
+          else
+            uv run --extra build pyinstaller packaging/agy.spec
+          fi
       - name: Resolve version
         id: ver
         shell: bash
