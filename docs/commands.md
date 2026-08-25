@@ -9,7 +9,7 @@ behind these commands.
 | Command | What it does |
 |---|---|
 | `agy version` | Print the installed agentry version |
-| `agy init [-t TARGET]...` | Create `.agentry.yml`, add `.agentry/` to `.gitignore` |
+| `agy init [-t TARGET]... [--no-default-catalog]` | Create `.agentry.yml`, add `.agentry/` to `.gitignore`, register the default `agentry` catalog (skip with `--no-default-catalog`) |
 | `agy list` | Show discovered components grouped by source, with state |
 | `agy search [QUERY]` | Search catalogs for repos (filter by QUERY); lists components with no query |
 | `agy add <source>/<type>/<name> [--path P]` | Enable a component and install it (`--path` = explicit artifact location) |

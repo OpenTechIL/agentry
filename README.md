@@ -171,7 +171,9 @@ how to reverse it.
 
 ## Common commands
 
-- `agy init [-t TARGET]...` — create `.agentry.yml` and add `.agentry/` to `.gitignore`.
+- `agy init [-t TARGET]... [--no-default-catalog]` — create `.agentry.yml` and add
+  `.agentry/` to `.gitignore`. Registers agentry's curated catalog (`agentry`) by default so
+  `agy add <name>` works immediately; `--no-default-catalog` skips it.
 - `agy source add NAME URL [--ref R] [--subdir DIR]` — register a source, download, sync. Any
   git host works (GitHub, GitLab, Bitbucket, Azure DevOps, Gitea, Gogs); browser "tree"/"blob"
   URLs from GitHub, GitLab, and Bitbucket are accepted and tidied automatically.
@@ -309,16 +311,23 @@ Most skills on GitHub don't follow agentry's `skills/<name>/` layout. Three ways
    repo names to their source, so you install by name without knowing the URL or flags:
 
    ```bash
-   agy catalog add default https://catalog.example.com/repositories.json
    agy add arckit                   # whole repo: every component it provides
    agy add arckit --type skill      # only skills (repeatable)
    agy add arckit@code-review,lint  # only the named components
+
+   # add your own catalog alongside (or instead of) the default one
+   agy catalog add team https://catalog.example.com/repositories.json
+   agy catalog remove agentry       # drop the default catalog
    ```
 
-   A **starter catalog** ships at [`registry/repositories.json`](registry/repositories.json) with
-   six curated repos — `arckit`, `ui-ux-pro-max`, `graphify`, `superpowers`, `ponytail` (guides
+   `agy init` registers the **default catalog** — this repo's
+   [`registry/repositories.json`](registry/repositories.json), served from
+   `raw.githubusercontent.com/OpenTechIL/agentry/refs/heads/main` — under the name `agentry`,
+   so the names below resolve on a fresh install with no extra setup. It carries
+   nine curated repos — `arckit`, `ui-ux-pro-max`, `graphify`, `superpowers`, `markitdown-for-ai`,
+   `use-agentry`, `claude-skills` (66 language/framework/infra expert skills), `ponytail` (guides
    agents toward minimal, necessary code), and `caveman` (compresses agent output while preserving
-   accuracy). Point a catalog at it and install by name. The catalog schema (including the `copy`
+   accuracy). The catalog schema (including the `copy`
    and `namespaced` per-repo flags) is documented in [docs/architecture.md](docs/architecture.md#4-source-repo-layout--convention-or-descriptor).
 
 4. **`.apm/`-format packages** — a repo with an `.apm/` package tree works as a source as-is:

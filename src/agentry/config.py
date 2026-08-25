@@ -20,12 +20,22 @@ LOCK_NAME = ".agentry.lock"
 STORE_DIR = ".agentry"
 MANIFEST_NAME = ".manifest.json"
 
+# The curated catalog `agy init` seeds into a new project, so `agy add <name>` resolves out of
+# the box. Drop it with `agy catalog remove agentry` (or `agy init --no-default-catalog`).
+DEFAULT_CATALOG_NAME = "agentry"
+DEFAULT_CATALOG_URL = (
+    "https://raw.githubusercontent.com/OpenTechIL/agentry/refs/heads/main/"
+    "registry/repositories.json"
+)
+
 
 def _yaml() -> YAML:
     y = YAML()
     y.preserve_quotes = True
     y.indent(mapping=2, sequence=4, offset=2)
     y.default_flow_style = False
+    # Never fold long scalars (catalog URLs) onto a continuation line.
+    y.width = 4096
     return y
 
 
@@ -55,17 +65,27 @@ class ConfigStore:
         return cls(root, doc)
 
     @classmethod
-    def create(cls, root: Path, targets: list[str]) -> ConfigStore:
+    def create(
+        cls, root: Path, targets: list[str], *, default_catalog: bool = False
+    ) -> ConfigStore:
+        """Build a fresh config document.
+
+        ``default_catalog`` registers agentry's curated catalog under
+        :data:`DEFAULT_CATALOG_NAME`; the CLI turns it on for user-facing installs.
+        """
         doc = CommentedMap()
         doc["version"] = 1
         doc["targets"] = CommentedSeq(targets)
         doc["sources"] = CommentedSeq()
         doc["components"] = CommentedSeq()
+        store = cls(root, doc)
+        if default_catalog:
+            store.add_repository(Registry(name=DEFAULT_CATALOG_NAME, location=DEFAULT_CATALOG_URL))
         doc.yaml_set_start_comment(
             "agentry — AI agent dependencies for this project.\n"
             "Declare sources and components here; run `agy sync` to install.\n"
         )
-        return cls(root, doc)
+        return store
 
     # -- validated view ---------------------------------------------------
 
