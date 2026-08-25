@@ -12,7 +12,7 @@ from rich.table import Table
 from rich.tree import Tree
 
 from . import __version__, deps, discovery
-from .config import LOCK_NAME, ConfigStore
+from .config import DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL, LOCK_NAME, ConfigStore
 from .deps import DependencyError
 from .lockfile import load_lock, save_lock
 from .models import Component, ComponentType, GeneratorSpec, Source, SourceType, Target
@@ -369,6 +369,11 @@ def init(
         help="Target AI tool(s): claude, opencode, cursor, codex, gemini, windsurf, kimi "
         "(or a custom tool defined under target_profiles). Repeatable.",
     ),
+    default_catalog: bool = typer.Option(
+        True,
+        "--default-catalog/--no-default-catalog",
+        help="Register agentry's curated catalog so `agy add <name>` works out of the box.",
+    ),
 ) -> None:
     """Create .agentry.yml and add .agentry/ to .gitignore."""
     root = _root()
@@ -376,12 +381,14 @@ def init(
         err.print("[yellow]Already initialized (.agentry.yml exists).[/yellow]")
         raise typer.Exit(1)
     targets = _parse_targets(target) or [Target.CLAUDE]
-    store = ConfigStore.create(root, targets)
+    store = ConfigStore.create(root, targets, default_catalog=default_catalog)
     store.save()
     from .gitignore import ensure_gitignore
 
     changed = ensure_gitignore(root)
     console.print(f"[green]Initialized agentry[/green] for targets: {', '.join(targets)}")
+    if default_catalog:
+        console.print(f"  [dim]catalog '{DEFAULT_CATALOG_NAME}' → {DEFAULT_CATALOG_URL}[/dim]")
     if changed:
         console.print("  [dim]added .agentry/ to .gitignore[/dim]")
 
@@ -1185,7 +1192,7 @@ def import_apm(
                 f"{result.targets} not added — edit `targets` in .agentry.yml if you want them[/yellow]"
             )
     else:
-        store = ConfigStore.create(_root(), result.targets or [Target.CLAUDE])
+        store = ConfigStore.create(_root(), result.targets or [Target.CLAUDE], default_catalog=True)
     for s in result.sources:
         store.add_source(s)
     for c in result.components:

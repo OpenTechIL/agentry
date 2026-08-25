@@ -130,7 +130,10 @@ curated components. `agy add <repo>` consults them in order and synthesizes the 
 Components a user would hand-write, installing all of them, a `@name`-selected subset, or a
 `--type`-filtered subset — so catalogs add resolution only, no new install mechanics. The
 catalog is the JSON contract a hosted "artifactory" server would serve, so file and server are
-interchangeable. URL catalogs are cached under `.agentry/repositories/`.
+interchangeable. URL catalogs are cached under `.agentry/repositories/`. `agy init` seeds this
+list with agentry's own curated catalog (`agentry` → `registry/repositories.json` on
+`raw.githubusercontent.com`, see `DEFAULT_CATALOG_URL` in `config.py`) so name-based installs
+work on a fresh project; `--no-default-catalog` starts empty.
 
 A conventional-layout repo needs only a `source`; `expose` declares curated components (and
 carries the `path`/`generate` for artifacts discovery can't infer). Two optional per-repo flags

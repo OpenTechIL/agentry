@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `agy init` now registers agentry's curated catalog by default (name `agentry`, pointing at
+  `https://raw.githubusercontent.com/OpenTechIL/agentry/refs/heads/main/registry/repositories.json`),
+  so `agy add arckit` and friends resolve on a fresh install with no `agy catalog add` step.
+  Opt out with `agy init --no-default-catalog`; drop it later with `agy catalog remove agentry`.
+
+### Changed
+- `.agentry.yml` writes no longer fold long scalars onto a continuation line (ruamel width),
+  keeping catalog URLs on one line.
+
 ## [0.1.3] — 2026-07-14
 
 ### Fixed

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from agentry.config import ConfigStore
+from agentry.config import DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL, ConfigStore
 from agentry.models import Component, ComponentType, Source, SourceType, Target
 
 
@@ -59,3 +59,14 @@ def test_remove_source_drops_components(project: Path):
     cfg = ConfigStore.load(project).parsed()
     assert cfg.sources == []
     assert cfg.components == []
+
+
+def test_create_seeds_default_catalog_when_requested(tmp_path: Path):
+    # Off by default (library callers opt in); `agy init` turns it on.
+    plain = ConfigStore.create(tmp_path, [Target.CLAUDE]).parsed()
+    assert plain.repositories == []
+
+    seeded = ConfigStore.create(tmp_path, [Target.CLAUDE], default_catalog=True).parsed()
+    assert [(r.name, r.location) for r in seeded.repositories] == [
+        (DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL)
+    ]

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typer.testing import CliRunner
 
 from agentry.cli import app
-from agentry.config import ConfigStore
+from agentry.config import DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL, ConfigStore
 from conftest import make_source
 
 runner = CliRunner()
@@ -447,3 +447,28 @@ def test_doctor_strict_fails_on_warnings(tmp_path, monkeypatch):
     runner.invoke(app, ["add", "team/mcp/gh"])
     assert runner.invoke(app, ["doctor"]).exit_code == 0  # warnings don't fail by default
     assert runner.invoke(app, ["doctor", "--strict"]).exit_code == 1
+
+
+def test_init_registers_default_catalog(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+
+    res = runner.invoke(app, ["init"])
+    assert res.exit_code == 0
+
+    cfg = ConfigStore.load(project).parsed()
+    assert [(r.name, r.location) for r in cfg.repositories] == [
+        (DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL)
+    ]
+    # Reported at init time so the user knows where `agy add <name>` resolves from.
+    assert DEFAULT_CATALOG_NAME in res.output
+
+
+def test_init_no_default_catalog_opts_out(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+
+    assert runner.invoke(app, ["init", "--no-default-catalog"]).exit_code == 0
+    assert ConfigStore.load(project).parsed().repositories == []
