@@ -357,6 +357,10 @@ Want a repo added to [`registry/repositories.json`](registry/repositories.json)?
 - **Request via an issue** — prefer not to open a PR? [File an issue](https://github.com/OpenTechIL/agentry/issues)
   with the repo URL and a one-line summary, and a maintainer will add it.
 
+With the [`use-agentry`](skills/use-agentry/SKILL.md) skill installed, either route is one
+sentence: *"add `https://github.com/owner/repo` to the agentry registry"* and your AI tool runs
+the `agy catalog add-repo` + `gh pr create` flow (or files the issue) for you.
+
 ## FAQ
 
 **Is agentry an agent, or a runtime?**

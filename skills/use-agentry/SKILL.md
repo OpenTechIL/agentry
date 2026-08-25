@@ -1,6 +1,6 @@
 ---
 name: use-agentry
-description: Use when the user asks to add or install an AI skill — "add skill <github url or owner/repo>", "install skill …" — or when they paste a skill-manager command like `npx skills add …`. Routes skill installation through agentry (`agy`) so the skill is tracked in `.agentry.yml`/`.agentry.lock` instead of installed opaquely.
+description: Use when the user asks to add or install an AI skill — "add skill <github url or owner/repo>", "install skill …" — or when they paste a skill-manager command like `npx skills add …`. Also use when they want a repo listed in agentry's starter catalog/registry ("add <repo> to the agentry registry", "publish this skill so others can `agy add` it by name") — it drives `gh` to file the issue or open the catalog PR. Routes skill installation through agentry (`agy`) so the skill is tracked in `.agentry.yml`/`.agentry.lock` instead of installed opaquely.
 ---
 
 # Use agentry (`agy`) to install skills
@@ -13,12 +13,16 @@ reversible.
 
 ## When this skill applies
 
-Trigger on either:
+Trigger on any of:
 
 - **Natural-language request** — "add skill `<X>`", "install skill `<X>`", "get the skill at
   `<X>`", where `<X>` is a GitHub URL or `owner/repo` shorthand.
 - **A pasted skill-manager command** — e.g. `npx skills add owner/repo`,
   `npx @something/skills install …`, or any other tool that installs an agent skill.
+- **A catalog-contribution request** — "add `<X>` to the agentry registry/catalog", "get this
+  skill listed so `agy add <name>` works", "open a PR/issue to register `<X>`". That path is
+  [Contributing a repo to the starter catalog](#contributing-a-repo-to-the-starter-catalog),
+  not an install.
 
 ## Behavior
 
@@ -96,9 +100,142 @@ Let `<X>` be a full GitHub URL or `owner/repo` shorthand.
 - Confirm where it landed: `agy why <name>/skill/<skill>` or `agy status`.
 - Report the installed path(s) to the user.
 
+## Contributing a repo to the starter catalog
+
+Installing is local; **contributing** gets a repo listed in agentry's starter catalog
+(`registry/repositories.json` in `OpenTechIL/agentry`) so anyone can `agy add <name>` by name.
+Two routes — file an issue for a maintainer, or open the PR yourself.
+
+### Preflight
+
+```bash
+gh auth status                                   # must be authenticated
+gh repo view <owner>/<repo> --json visibility,isArchived,defaultBranchRef
+```
+
+The catalog only lists repos that are **public and anonymously clonable** — if the target is
+private or archived, say so and stop. If `gh` is missing or unauthenticated, tell the user to
+install it / run `gh auth login`; do not fall back to the web UI on their behalf.
+
+Check for a duplicate before writing anything:
+
+```bash
+gh issue list --repo OpenTechIL/agentry --state all --search "<name> in:title"
+gh pr list   --repo OpenTechIL/agentry --state all --search "<name> in:title"
+```
+
+Then ask the user which route they want (issue = fastest, a maintainer authors the entry;
+PR = you author it and they review).
+
+### Route A — request it via an issue
+
+Blank issues are disabled in the web UI, but `gh` posts through the API, so a plain body is
+fine. Mirror the feature-request template's shape so a maintainer can act without a round trip:
+
+```bash
+gh issue create --repo OpenTechIL/agentry \
+  --title "catalog: add <name> (<owner>/<repo>)" \
+  --label enhancement \
+  --body "$(cat <<'EOF'
+### Repo
+
+https://github.com/<owner>/<repo> (ref: `main`, subdir: `<none>`)
+
+### Catalog name
+
+`<name>`
+
+### Summary
+
+<one line, ≤100 chars, as it should appear in `summary`>
+
+### Components it provides
+
+<output of `agy list` for the source, or the repo's skills/ layout — real names only>
+
+### Notes
+
+<generate-style installer? hooks needing target_profiles? namespacing? otherwise "none">
+EOF
+)"
+```
+
+Report the issue URL back to the user.
+
+### Route B — open the pull request
+
+1. **Work in a clone of `agentry`, never in the user's project.** If the cwd already *is* the
+   agentry repo, just branch. Otherwise fork+clone to a scratch dir:
+
+   ```bash
+   cd <scratch-dir>
+   gh repo fork OpenTechIL/agentry --clone   # creates the fork if needed, then clones it here
+   cd agentry
+   git switch -c catalog/add-<name>
+   ```
+
+2. **Author the entry with `agy`, not by hand** — it writes the schema correctly and defaults
+   to `registry/repositories.json` (run it from the clone root):
+
+   ```bash
+   agy catalog add-repo https://github.com/<owner>/<repo> <name> \
+     --summary "<one line>" \
+     --discover                      # clone the repo and pre-fill `expose` with real names
+   ```
+
+   A `https://github.com/<owner>/<repo>/tree/<ref>/<subdir>` URL infers `ref` and `subdir`;
+   otherwise pass `--ref` / `--subdir` explicitly. Omit `--discover` only when the whole repo
+   should be exposed. Add `--force` solely to update an entry the user already owns.
+
+3. **Verify before committing:**
+
+   ```bash
+   git diff registry/repositories.json
+   python3 -c "import json;json.load(open('registry/repositories.json'))"
+   uv run --extra dev pytest tests/test_registry.py -q
+   ```
+
+4. **Commit and open the PR** (imperative subject, per this repo's convention):
+
+   ```bash
+   git commit -am "add <name> to starter catalog"
+   git push -u origin catalog/add-<name>
+   gh pr create --repo OpenTechIL/agentry --base main \
+     --head <fork-owner>:catalog/add-<name> \
+     --title "add <name> to starter catalog" \
+     --body "$(cat <<'EOF'
+## What & why
+
+Adds `<name>` (https://github.com/<owner>/<repo>) to the starter catalog so it installs by
+name with `agy add <name>`. <One line on what the repo provides.>
+
+## Checklist
+
+- [x] Catalog-only change — entry generated with `agy catalog add-repo --discover`
+- [x] `registry/repositories.json` parses and `uv run --extra dev pytest tests/test_registry.py` passes
+- [x] Repo is public, anonymously clonable, and pinned to ref `<ref>`
+- [x] No code/behavior change, so no new tests or docs updates
+
+## Notes for reviewers
+
+<components exposed, and anything unusual: generate installers, hooks, namespacing>
+EOF
+)"
+```
+
+   Drop `--head` when you're in a direct clone with push access. Then report the PR URL. If the
+   push fails for lack of permission, the fork step was skipped — fork first rather than retrying
+   against `OpenTechIL/agentry`.
+
 ## Guardrails
 
 - Never guess a component name — use `agy list` to read the real names a source provides.
+- Catalog contributions go through a branch on a fork (or a topic branch) and a PR — never
+  commit to `main` or push directly to `OpenTechIL/agentry`.
+- Don't edit `registry/repositories.json` inside the user's own project (their `.agentry/`
+  store or a vendored copy); the catalog only counts in the `agentry` repo.
+- Show the user the issue/PR body before it goes out, and don't invent a summary for a repo
+  you haven't looked at.
 - Surface `agy`'s own errors to the user rather than working around them.
 - Don't mix installers: if a skill is managed by `agy`, remove it with `agy remove …`, not by
   deleting files.
