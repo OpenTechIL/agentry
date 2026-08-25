@@ -196,12 +196,17 @@ def add_entry(
     repos[name] = entry.model_dump(
         mode="json", by_alias=True, exclude_none=True, exclude_defaults=False
     )
-    # Drop noise the curated file never carries: empty target_profiles, absent expose.
+    # Drop noise the curated file never carries: empty target_profiles, absent expose, and
+    # flags left at their default (an explicit non-default value is kept).
     body = repos[name]
     if not body.get("target_profiles"):
         body.pop("target_profiles", None)
     if body.get("expose") is None:
         body.pop("expose", None)
+    if body.get("copy") is False:
+        body.pop("copy", None)
+    if body.get("namespaced") is True:
+        body.pop("namespaced", None)
     try:
         RepositoryIndex.model_validate(doc)
     except ValueError as exc:

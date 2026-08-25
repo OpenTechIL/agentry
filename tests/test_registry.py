@@ -587,6 +587,24 @@ def test_catalog_add_repo_minimal(tmp_path):
     assert "expose" not in entry
     assert "target_profiles" not in entry
     assert "summary" not in entry
+    # Flags left at their default stay out of the file, matching the curated catalog's style.
+    assert "copy" not in entry
+    assert "namespaced" not in entry
+
+
+def test_add_entry_keeps_non_default_flags(tmp_path):
+    """Defaults are dropped, but an explicitly non-default flag must survive the round trip."""
+    catalog = tmp_path / "repositories.json"
+    reg.add_entry(
+        catalog,
+        "cool",
+        RepositoryEntry(
+            source=RegistrySource(url="https://github.com/o/r"), copy=True, namespaced=False
+        ),
+    )
+    entry = json.loads(catalog.read_text())["repositories"]["cool"]
+    assert entry["copy"] is True
+    assert entry["namespaced"] is False
 
 
 def test_catalog_add_repo_derives_name_and_infers_ref_subdir(tmp_path):

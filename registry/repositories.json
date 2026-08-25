@@ -134,6 +134,14 @@
           "path": "skills/use-agentry"
         }
       ]
+    },
+    "claude-skills": {
+      "summary": "Fullstack dev skill pack — 66 language, framework and infra expert skills (Python, TypeScript, Go, React, Kubernetes, …) plus workflow commands.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/jeffallan/claude-skills",
+        "ref": "main"
+      }
     }
   }
 }
