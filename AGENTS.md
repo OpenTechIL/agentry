@@ -72,7 +72,8 @@ fixtures and a tiny local `file://` git repo.
 uv run pytest                   # full suite (configured with -q)
 uv run pytest tests/test_reconcile.py          # one file
 uv run pytest -k idempotent -v                 # one pattern
-uv run pytest --cov=agentry                    # with coverage (pytest-cov)
+uv run pytest --cov=agentry                    # with coverage (CI gates at 85%)
+uv run mypy                                    # type-check src/ (CI runs this too)
 ```
 
 Testing rules:
@@ -89,7 +90,7 @@ Testing rules:
 1. Branch off `main`; keep PRs small and focused — one behavior change per PR where possible.
 2. Make the change in `src/agentry/`, add/adjust tests, and **update
    [docs/architecture.md](docs/architecture.md)** if behavior changed.
-3. `uv run pytest` must pass; `uv run agentry --help` must still work.
+3. `uv run pytest` and `uv run mypy` must pass; `uv run agentry --help` must still work.
 4. Imperative commit subjects, lower-case, no trailing period:
    `add cursor mcp target`, `fix local symlink drift`.
 5. Open the PR with a short rationale and note any safety/idempotency considerations.

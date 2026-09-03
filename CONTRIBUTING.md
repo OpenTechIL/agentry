@@ -15,6 +15,7 @@ uv pip install -e ".[dev]"      # editable install + pytest + ruff + pre-commit
 uv run pre-commit install       # enable the git hooks (one-time)
 uv run agentry --help               # smoke test the CLI
 uv run pytest                   # run the test suite
+uv run mypy                     # type-check src/
 ```
 
 Other extras, if you need them: `.[docs]` for `uv run mkdocs serve` (live preview of the
@@ -25,8 +26,9 @@ The CLI installs under three names — `agentry` (canonical), plus the short ali
 and `agyx`. `agy` is also Google's Antigravity CLI command; use `agentry` in docs, tests
 and commit messages.
 
-The `pre-commit` hooks run `ruff format` and `ruff check --fix` (the same rules CI
-enforces) plus a few hygiene checks on each commit. Run them across the whole repo
+The `pre-commit` hooks run `ruff format`, `ruff check --fix` and `mypy` (the same rules
+and version CI enforces — `.pre-commit-config.yaml` pins ruff to match) plus a few hygiene
+checks on each commit. Run them across the whole repo
 anytime with `uv run pre-commit run --all-files`.
 
 ## Project layout
@@ -95,8 +97,10 @@ target; the suffix-less file applies to every other target that supports the typ
 - Keep `agentry sync` **idempotent** and the **safety invariants** intact (never touch
   unmanaged files/links or hand-added config entries). There are tests guarding both;
   don't weaken them.
-- Before opening a PR, run `uv run pytest`, `uvx ruff check .`, and
-  `uvx ruff format --check .`. CI runs the same checks on Python 3.10–3.13.
+- Before opening a PR, run `uv run pytest`, `uv run mypy`, `uvx ruff check .`, and
+  `uvx ruff format --check .`. CI runs the same checks on Python 3.10–3.13, plus a
+  macOS and a Windows job on 3.12 (symlink behaviour differs there), and gates coverage
+  at 85% — so a PR that drops coverage fails.
 
 ## What CI does
 

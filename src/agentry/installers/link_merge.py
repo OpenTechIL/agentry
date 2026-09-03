@@ -16,13 +16,14 @@ Removal undoes both halves; the manifest records the link path and the owned mer
 from __future__ import annotations
 
 import re
+from typing import Any
 
 #: A ``${...PLUGIN_ROOT}`` shell var (e.g. ``${CLAUDE_PLUGIN_ROOT}``). These expand only
 #: inside a real installed plugin; surviving into a plain config merge means a dead command.
 _PLUGIN_ROOT_RE = re.compile(r"\$\{[A-Z0-9_]*PLUGIN_ROOT\}")
 
 
-def _rewrite_strings(value, frm: str, to: str):
+def _rewrite_strings(value: Any, frm: str, to: str) -> Any:
     """Deep-copy ``value`` replacing every occurrence of ``frm`` with ``to`` in strings."""
     if isinstance(value, str):
         return value.replace(frm, to) if frm else value
@@ -42,7 +43,7 @@ def _plugin_var(rewrite_from: str) -> str | None:
     return None
 
 
-def _collect_leftovers(value, token: str, out: list[str]) -> None:
+def _collect_leftovers(value: Any, token: str, out: list[str]) -> None:
     """Gather string values still containing ``token`` after rewriting (likely dead paths)."""
     if isinstance(value, str):
         if token in value:
@@ -55,7 +56,7 @@ def _collect_leftovers(value, token: str, out: list[str]) -> None:
             _collect_leftovers(v, token, out)
 
 
-def plugin_root_refs(fragment) -> list[str]:
+def plugin_root_refs(fragment: Any) -> list[str]:
     """String values in ``fragment`` that still reference a ``${*_PLUGIN_ROOT}`` var.
 
     Used to guard the plain-merge path: a hook merged into a config file (rather than
@@ -68,7 +69,7 @@ def plugin_root_refs(fragment) -> list[str]:
     return out
 
 
-def _collect_matching(value, out: list[str]) -> None:
+def _collect_matching(value: Any, out: list[str]) -> None:
     if isinstance(value, str):
         if _PLUGIN_ROOT_RE.search(value):
             out.append(value)

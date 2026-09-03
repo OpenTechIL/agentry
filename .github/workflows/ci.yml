@@ -23,10 +23,14 @@ jobs:
         uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
+      # Pinned so a new ruff release can't fail an unrelated PR, and so the version here
+      # matches .pre-commit-config.yaml (they must be bumped together).
       - name: Ruff lint
-        run: uvx ruff check --output-format=github .
+        run: uvx ruff@0.15.20 check --output-format=github .
       - name: Ruff format check
-        run: uvx ruff format --check .
+        run: uvx ruff@0.15.20 format --check .
+      - name: Type check
+        run: uv run --extra dev mypy
 
   test:
     name: Test (py${{ matrix.python-version }})
@@ -42,5 +46,31 @@ jobs:
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
+      # --cov-fail-under is the point: coverage was measured before but never gated, so a
+      # PR could drop it 20 points and still go green. Set at the level measured when the
+      # gate was introduced; raise it, never lower it.
       - name: Run tests
-        run: uv run --extra dev pytest --cov=agentry --cov-report=term-missing
+        run: >-
+          uv run --extra dev pytest
+          --cov=agentry --cov-report=term-missing --cov-fail-under=85
+
+  # Symlinks are the default install strategy, and Windows refuses them without Developer
+  # Mode — yet the release workflow ships Windows and macOS binaries while tests ran on
+  # Ubuntu only. One job per OS on a single Python version: enough to catch a
+  # path/symlink/line-ending regression without quadrupling the matrix.
+  test-os:
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Run tests
+        run: uv run --extra dev pytest -q

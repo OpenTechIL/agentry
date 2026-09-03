@@ -28,6 +28,7 @@ from .models import (
     RepositoryIndex,
     Strategy,
 )
+from .naming import repo_basename
 
 #: Seconds to wait for a catalog fetch. urllib's default is the *global socket* timeout,
 #: i.e. none — without this a hung catalog host blocks ``add``/``list``/``sync`` forever,
@@ -98,7 +99,8 @@ def _load_raw(root: Path, registry: Registry) -> str:
     """Fetch a catalog's raw JSON (caching URL fetches under ``.agentry/repositories/``)."""
     if _is_url(registry.location):
         url = _normalize_url(registry.location)
-        req = urllib.request.Request(
+        # S310: the scheme is gated by _is_url() above and re-checked after redirects below.
+        req = urllib.request.Request(  # noqa: S310
             url, headers={"User-Agent": "agentry", "Accept": "application/json"}
         )
         try:
@@ -132,13 +134,37 @@ def _load_raw(root: Path, registry: Registry) -> str:
     return path.read_text(encoding="utf-8")
 
 
+#: Per-process memo for :func:`load_catalog`, keyed by ``(root, name, location)``.
+#: ``find_repo``/``list_repos``/``find_target``/``list_targets`` each loop over every
+#: configured catalog, and a single CLI command calls several of them — without this, one
+#: `agentry add` issued the same HTTP fetch three or four times. It also makes failure
+#: deterministic within a command: a catalog that resolved once won't intermittently fail
+#: later in the same run.
+_CATALOG_CACHE: dict[tuple[str, str, str], RepositoryIndex] = {}
+
+
+def clear_catalog_cache() -> None:
+    """Drop the in-process catalog memo. For tests, and after mutating ``repositories``."""
+    _CATALOG_CACHE.clear()
+
+
 def load_catalog(root: Path, registry: Registry) -> RepositoryIndex:
-    """Load (and for URLs, cache under ``.agentry/``) a repository catalog."""
+    """Load (and for URLs, cache under ``.agentry/``) a repository catalog.
+
+    Memoized for the lifetime of the process — see :data:`_CATALOG_CACHE`. Errors are not
+    cached, so a transient failure can be retried within the same run.
+    """
+    key = (str(root), registry.name, registry.location)
+    cached = _CATALOG_CACHE.get(key)
+    if cached is not None:
+        return cached
     raw = _load_raw(root, registry)
     try:
-        return RepositoryIndex.model_validate(json.loads(raw))
+        index = RepositoryIndex.model_validate(json.loads(raw))
     except (ValueError, json.JSONDecodeError) as exc:
         raise RegistryError(f"catalog '{registry.name}': invalid index: {exc}") from exc
+    _CATALOG_CACHE[key] = index
+    return index
 
 
 def parse_repo_url(url: str) -> tuple[str, str | None, str | None, str]:
@@ -175,9 +201,10 @@ def parse_repo_url(url: str) -> tuple[str, str | None, str | None, str]:
     elif clean.startswith("https://gitlab.com/") and "/-/tree/" in clean:
         # <ns…>/-/tree/<ref>/<subdir…>  (ns may be nested groups)
         ns, _, tail = clean.partition("/-/tree/")
-        ref, _, rest = tail.partition("/")
+        gl_ref, _, gl_rest = tail.partition("/")
         clean = ns
-        subdir = rest or None
+        ref = gl_ref
+        subdir = gl_rest or None
     elif clean.startswith(bb):
         parts = clean[len(bb) :].split("/")
         # owner / repo / src / ref / subdir...
@@ -185,9 +212,7 @@ def parse_repo_url(url: str) -> tuple[str, str | None, str | None, str]:
             owner, repo, _, ref, *rest = parts
             clean = f"{bb}{owner}/{repo}"
             subdir = "/".join(rest) or None
-    name = clean.rstrip("/").rsplit("/", 1)[-1]
-    if name.endswith(".git"):
-        name = name[: -len(".git")]
+    name = repo_basename(clean)
     return clean, ref, subdir, name
 
 

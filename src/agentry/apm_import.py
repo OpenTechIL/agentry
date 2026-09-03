@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .models import Component, ComponentType, Source, SourceType
+from .naming import repo_basename
 from .progname import prog
 
 #: apm primitive directory → agentry component type. apm "prompts" are agentry "commands";
@@ -104,9 +105,7 @@ def parse_apm_dep(spec: str) -> _ParsedDep:
 
     # Full git URL (https / ssh / scp-like).
     if "://" in body or body.startswith("git@"):
-        tail = body.rsplit("/", 1)[-1]
-        repo = tail[:-4] if tail.endswith(".git") else tail
-        return _ParsedDep(kind="url", url=body, ref=ref, repo=repo, raw=spec)
+        return _ParsedDep(kind="url", url=body, ref=ref, repo=repo_basename(body), raw=spec)
 
     # Shorthand: [host/]owner/repo[/subpath...]. A first segment containing '.' is the host.
     parts = body.split("/")
@@ -150,8 +149,13 @@ def _mcp_fragment(entry: dict) -> tuple[str, dict] | None:
     return name, {name: body}
 
 
-def translate_apm(doc: dict) -> ApmImport:
-    """Translate a parsed ``apm.yml`` document into an :class:`ApmImport`. Pure (no I/O)."""
+def translate_apm(doc: object) -> ApmImport:
+    """Translate a parsed ``apm.yml`` document into an :class:`ApmImport`. Pure (no I/O).
+
+    Takes ``object`` rather than ``dict`` deliberately: the input is whatever the YAML
+    parser produced from a file agentry didn't write, so the shape check below is a real
+    runtime guard, not a redundant assertion.
+    """
     out = ApmImport()
     if not isinstance(doc, dict):
         out.warnings.append("apm.yml is not a mapping; nothing imported")
@@ -179,6 +183,9 @@ def translate_apm(doc: dict) -> ApmImport:
             continue
         if dep.kind == "bundle":
             out.warnings.append(f"'{spec}': bundle/unrecognized spec — skipped")
+            continue
+        if not dep.repo:
+            out.warnings.append(f"'{spec}': could not derive a source name — skipped")
             continue
         if dep.kind == "local":
             _add_source(Source(name=dep.repo, type=SourceType.LOCAL, path=dep.path))

@@ -19,10 +19,10 @@ from pathlib import Path
 
 from . import deps, discovery
 from .config import ConfigStore
-from .drivers import resolve_drivers
+from .drivers import Driver, resolve_drivers
 from .envscan import unset_env_refs
 from .lockfile import load_lock
-from .models import MERGE_TYPES, ComponentType
+from .models import MERGE_TYPES, Component, ComponentType, Config, Source
 from .progname import CANONICAL, prog
 from .reconcile import status
 from .resolver import ResolveError, effective_root
@@ -60,6 +60,57 @@ def command_name_check() -> Check | None:
     )
 
 
+def _component_checks(
+    root: Path,
+    comp: Component,
+    config: Config,
+    sources_by_name: dict[str, Source],
+    drivers: dict[str, Driver],
+    indexes: dict[str, dict[tuple[ComponentType, str], Path]],
+) -> list[Check]:
+    """Checks for one enabled component: does its source exist, does it provide the
+    artifact, does any active target install this type, and are its ``${VAR}`` refs set.
+
+    Split out of :func:`run_checks` so that function reads as a list of check *categories*
+    rather than one nested loop, and so the per-component rules can be tested directly.
+    """
+    src = sources_by_name.get(comp.source)
+    if src is None:
+        return [Check("error", "component", f"{comp.ref}: unknown source '{comp.source}'")]
+    if comp.generate is not None:
+        return []  # self-installing; artifact resolution doesn't apply
+
+    artifact: Path | None
+    if comp.path is not None:
+        artifact = effective_root(root, src) / comp.path
+    else:
+        artifact = indexes.get(comp.source, {}).get((comp.type, comp.name))
+    if artifact is None or not artifact.exists():
+        return [Check("error", "component", f"{comp.ref}: not provided by source '{comp.source}'")]
+
+    checks: list[Check] = []
+    installs_into = [
+        t
+        for t in comp.applies_to(config.targets)
+        if (d := drivers.get(t)) and d.supports(comp.type)
+    ]
+    if not installs_into:
+        checks.append(
+            Check("warn", "support", f"{comp.ref}: no active target installs a '{comp.type.value}'")
+        )
+    if comp.type in MERGE_TYPES and artifact.is_file():
+        for var in unset_env_refs(artifact.read_text(encoding="utf-8")):
+            checks.append(
+                Check(
+                    "warn",
+                    "env",
+                    f"{comp.ref}: references ${{{var}}}, which is unset — set it before your "
+                    "agent runs (agentry ships the placeholder; the runtime resolves it)",
+                )
+            )
+    return checks
+
+
 def run_checks(root: Path) -> list[Check]:
     """Run all preflight checks for the project at ``root``. Read-only."""
     config = ConfigStore.load(root).parsed()
@@ -91,48 +142,8 @@ def run_checks(root: Path) -> list[Check]:
             indexes[src.name] = discovery.index(sp)
 
     for comp in augmented.components:
-        if not comp.enabled:
-            continue
-        src = sources_by_name.get(comp.source)
-        if src is None:
-            checks.append(
-                Check("error", "component", f"{comp.ref}: unknown source '{comp.source}'")
-            )
-            continue
-        if comp.generate is not None:
-            continue  # self-installing; artifact resolution doesn't apply
-        if comp.path is not None:
-            artifact = effective_root(root, src) / comp.path
-        else:
-            artifact = indexes.get(comp.source, {}).get((comp.type, comp.name))
-        if artifact is None or not artifact.exists():
-            checks.append(
-                Check("error", "component", f"{comp.ref}: not provided by source '{comp.source}'")
-            )
-            continue
-        installs_into = [
-            t
-            for t in comp.applies_to(config.targets)
-            if (d := drivers.get(t)) and d.supports(comp.type)
-        ]
-        if not installs_into:
-            checks.append(
-                Check(
-                    "warn",
-                    "support",
-                    f"{comp.ref}: no active target installs a '{comp.type.value}'",
-                )
-            )
-        if comp.type in MERGE_TYPES and artifact.is_file():
-            for var in unset_env_refs(artifact.read_text(encoding="utf-8")):
-                checks.append(
-                    Check(
-                        "warn",
-                        "env",
-                        f"{comp.ref}: references ${{{var}}}, which is unset — set it before your "
-                        "agent runs (agentry ships the placeholder; the runtime resolves it)",
-                    )
-                )
+        if comp.enabled:
+            checks.extend(_component_checks(root, comp, config, sources_by_name, drivers, indexes))
 
     try:
         rows, _ = status(root)

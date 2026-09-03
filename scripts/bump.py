@@ -53,12 +53,13 @@ def bump_changelog(text: str, version: str, date: str) -> str:
 
 
 def _run(*args: str) -> None:
-    subprocess.run(args, cwd=ROOT, check=True)
+    # S603: a maintainer-run release helper; every call site below passes literal argv.
+    subprocess.run(args, cwd=ROOT, check=True)  # noqa: S603
 
 
 def _is_dirty() -> bool:
     out = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain"],  # noqa: S607
         cwd=ROOT,
         check=True,
         capture_output=True,

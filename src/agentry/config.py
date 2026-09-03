@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+from typing import Any
 
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
@@ -231,7 +232,7 @@ def _profile_rule_map(rule: ProfileRule) -> CommentedMap:
     return item
 
 
-def _plain(obj):
+def _plain(obj: Any) -> Any:
     """Recursively convert ruamel CommentedMap/Seq into plain dict/list."""
     if isinstance(obj, dict):
         return {k: _plain(v) for k, v in obj.items()}

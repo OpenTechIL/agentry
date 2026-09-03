@@ -38,6 +38,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   generated files stay byte-stable however the tool was invoked.
 - `.agentry.yml` writes no longer fold long scalars onto a continuation line (ruamel width),
   keeping catalog URLs on one line.
+- Tooling: mypy is now configured and runs in CI and pre-commit (the codebase was
+  pervasively annotated but had no checker); 16 missing signatures are annotated, starting
+  with `Driver.strategy`, whose `| None` return callers already branched on. ruff gains
+  `S` (bandit), `BLE`, `RUF100` and `C901` — the existing `# noqa: S310/S603/BLE001`
+  comments suppressed rules that were never selected, so they claimed a check that wasn't
+  happening. Coverage is gated at 85% (previously measured and ignored). CI adds a macOS
+  and a Windows job, since symlinks are the default install strategy and only Ubuntu was
+  tested. ruff is pinned to one version in both CI and pre-commit, which previously
+  disagreed despite a comment claiming otherwise.
+- Internal: `compute_desired` returned a bare 6-tuple from 153 lines; it now returns a
+  named `DesiredPlan` and the strategy dispatch is its own function. Catalog loads are
+  memoized per process — `find_repo`/`list_repos`/`find_target`/`list_targets` each looped
+  over every catalog, so one command re-fetched the same URL three or four times. The
+  repo-basename derivation existed in four copies and is now one (`naming.py`). Added
+  direct tests for the installer primitives, `envscan` and the `Driver` abstraction, which
+  were only ever exercised transitively.
 - The module map is maintained in `docs/architecture.md` §8 only. `AGENTS.md` and
   `CONTRIBUTING.md` link to it; their own copies had drifted and are gone.
 

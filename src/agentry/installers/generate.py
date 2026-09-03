@@ -42,7 +42,10 @@ def run_generator(root: Path, spec: GeneratorSpec) -> None:
     """Run ``setup`` commands then ``command`` from the project root (no shell)."""
     for cmd in (*spec.setup, spec.command):
         try:
-            proc = subprocess.run(
+            # S603: argv is catalog/config-supplied by design — this *is* the generate
+            # strategy. It is never a shell string, and the caller gates it on explicit
+            # consent (`sync --allow-run` or a SHA-pinned `agentry trust`).
+            proc = subprocess.run(  # noqa: S603
                 cmd, cwd=str(root), capture_output=True, text=True, timeout=GENERATE_TIMEOUT
             )
         except subprocess.TimeoutExpired as exc:

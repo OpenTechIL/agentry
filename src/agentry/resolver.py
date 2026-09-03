@@ -46,8 +46,10 @@ GIT_TIMEOUT = 300.0
 
 def _git(args: list[str], cwd: Path | None = None) -> str:
     try:
-        proc = subprocess.run(
-            ["git", *args],
+        # S603/S607: fixed argv (never a shell string), and `git` is intentionally taken
+        # from PATH — pinning an absolute path would break every non-standard install.
+        proc = subprocess.run(  # noqa: S603
+            ["git", *args],  # noqa: S607
             cwd=str(cwd) if cwd else None,
             capture_output=True,
             text=True,
@@ -115,6 +117,8 @@ def resolve(root: Path, source: Source, *, pinned: str | None, normalize: bool =
 
 
 def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
+    if source.url is None:  # normally guaranteed by Source._check_locator
+        raise ResolveError(f"git source '{source.name}' has no url")
     if not (dest / ".git").is_dir():
         if dest.exists() or dest.is_symlink():
             _remove(dest)
@@ -134,6 +138,8 @@ def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
 
 
 def _resolve_local(root: Path, source: Source, dest: Path, *, normalize: bool = True) -> LockEntry:
+    if source.path is None:  # normally guaranteed by Source._check_locator
+        raise ResolveError(f"local source '{source.name}' has no path")
     target = (root / source.path).resolve()
     if not target.is_dir():
         raise ResolveError(f"local source '{source.name}' path not found: {target}")

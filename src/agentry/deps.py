@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -30,6 +31,7 @@ from . import discovery
 from .config import LOCK_NAME
 from .lockfile import upsert_entry
 from .models import Component, Config, Dependency, Lock, Source, SourceType
+from .naming import repo_basename
 from .progname import prog
 from .resolver import ResolveError, effective_root, resolve
 
@@ -61,10 +63,7 @@ class _Node:
 
 
 def _repo_basename(url: str) -> str:
-    tail = url.rstrip("/").rsplit("/", 1)[-1]
-    if tail.endswith(".git"):
-        tail = tail[:-4]
-    return tail or "dep"
+    return repo_basename(url, fallback="dep")
 
 
 def _synth_name(url: str, taken: set[str]) -> str:
@@ -201,7 +200,7 @@ def _resolve_dep_source(
     requester_source: str,
     sources_by_name: dict[str, Source],
     url_index: dict[str, tuple[str, str]],
-    ensure_resolved,
+    ensure_resolved: Callable[[Source], None],
     warnings: list[str],
 ) -> Source | None:
     """Map one dependency onto a (possibly synthesized) source, enforcing version policy."""
@@ -233,7 +232,10 @@ def _resolve_dep_source(
         return src
 
     # url-based — transitive, recorded in the lock only.
-    url = dep.url  # validator guarantees url is set when source is not
+    url = dep.url
+    if url is None:  # Dependency's validator guarantees url when source is unset
+        warnings.append(f"{requester_ref} has a dependency with neither 'source' nor 'url'")
+        return None
     ref = dep.ref or "main"
     if url in url_index:
         existing_ref, owner = url_index[url]
@@ -262,7 +264,7 @@ def _sibling_source(
     base: Source,
     subdir: str,
     sources_by_name: dict[str, Source],
-    ensure_resolved,
+    ensure_resolved: Callable[[Source], None],
     warnings: list[str],
 ) -> Source | None:
     """A sibling view of ``base`` rooted at a different ``subdir`` of the same repo.

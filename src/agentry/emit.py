@@ -168,10 +168,10 @@ def gather_items(root: Path, config: Config) -> list[EmitItem]:
     ``path``) so the emit reflects exactly the components the project installs.
     """
     indexes: dict[str, dict[tuple[ComponentType, str], Path]] = {}
-    for src in config.sources:
-        sp = effective_root(root, src)
+    for indexed in config.sources:
+        sp = effective_root(root, indexed)
         if sp.exists():
-            indexes[src.name] = discovery_index(sp)
+            indexes[indexed.name] = discovery_index(sp)
 
     items: list[EmitItem] = []
     for comp in config.components:
@@ -180,6 +180,7 @@ def gather_items(root: Path, config: Config) -> list[EmitItem]:
         src = config.source(comp.source)
         if src is None:
             continue
+        artifact: Path | None
         if comp.path is not None:
             artifact = effective_root(root, src) / comp.path
         else:

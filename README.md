@@ -491,6 +491,7 @@ git clone https://github.com/OpenTechIL/agentry && cd agentry
 uv venv && uv pip install -e ".[dev]"   # editable install + test/lint tooling
 uv run pre-commit install               # format & lint on every commit
 uv run pytest                           # run the suite
+uv run mypy                             # type-check src/
 ```
 
 CI runs `ruff` and the `pytest` matrix on Python 3.10–3.13; keeping `agentry sync` idempotent and the

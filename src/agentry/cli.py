@@ -24,6 +24,7 @@ from .lockfile import load_lock, save_lock
 from .models import (
     Component,
     ComponentType,
+    Config,
     GeneratorSpec,
     ProfileRule,
     Source,
@@ -1071,13 +1072,19 @@ def catalog_add_repo(
     from .resolver import ResolveError, effective_root, resolve
 
     clean_url, url_ref, url_subdir, default_name = reg.parse_repo_url(git_url)
-    name = name or default_name
-    ref = ref or url_ref or "main"
-    subdir = subdir or url_subdir
+    entry_name = name or default_name
+    entry_ref = ref or url_ref or "main"
+    entry_subdir = subdir or url_subdir
 
     expose: list[ExposeEntry] | None = None
     if discover:
-        source = Source(name=name, type=SourceType.GIT, url=clean_url, ref=ref, subdir=subdir)
+        source = Source(
+            name=entry_name,
+            type=SourceType.GIT,
+            url=clean_url,
+            ref=entry_ref,
+            subdir=entry_subdir,
+        )
         try:
             resolve(_root(), source, pinned=None)
             found = discovery.discover(effective_root(_root(), source))
@@ -1090,22 +1097,24 @@ def catalog_add_repo(
     try:
         entry = RepositoryEntry(
             summary=summary,
-            source=RegistrySource(type=SourceType.GIT, url=clean_url, ref=ref, subdir=subdir),
+            source=RegistrySource(
+                type=SourceType.GIT, url=clean_url, ref=entry_ref, subdir=entry_subdir
+            ),
             expose=expose,
         )
-        reg.add_entry(file, name, entry, force=force)
+        reg.add_entry(file, entry_name, entry, force=force)
     except (reg.RegistryError, ValueError) as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
 
     scope = f"{len(expose)} curated" if expose else "whole repo"
-    console.print(f"[green]Added[/green] {name} → [dim]{file}[/dim] ([cyan]{scope}[/cyan])")
+    console.print(f"[green]Added[/green] {entry_name} → [dim]{file}[/dim] ([cyan]{scope}[/cyan])")
 
 
 # -- target sub-commands -------------------------------------------------
 
 
-def _describe_overlay(profile: dict[str, ProfileRule]) -> list[str]:
+def _describe_overlay(profile: dict[ComponentType, ProfileRule]) -> list[str]:
     """One human-readable line per component type in a driver overlay, for the prompt."""
     lines: list[str] = []
     for ctype, rule in sorted(profile.items(), key=lambda kv: str(kv[0])):
@@ -1411,7 +1420,7 @@ def emit_agents_md(
     console.print(f"[green]Wrote[/green] {output} [dim]from {len(items)} component(s)[/dim].")
 
 
-def _trigger_memory_files(config, root: Path) -> list[Path]:
+def _trigger_memory_files(config: Config, root: Path) -> list[Path]:
     """Resolved memory-file paths (deduped, sorted) for every active target that declares one."""
     from .drivers import resolve_drivers
 

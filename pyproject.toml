@@ -29,7 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 tui = ["textual>=0.60"]
-dev = ["pytest>=8.0", "pytest-cov>=7.1.0", "ruff>=0.6", "pre-commit>=3.7"]
+dev = ["pytest>=8.0", "pytest-cov>=7.1.0", "ruff>=0.6", "pre-commit>=3.7", "mypy>=1.11"]
 lint = ["ruff>=0.6"]
 docs = ["mkdocs>=1.6", "mkdocs-material>=9.5,<10"]
 build = ["pyinstaller>=6.0"]
@@ -57,6 +57,27 @@ testpaths = ["tests"]
 addopts = "-q"
 pythonpath = ["."]
 
+[tool.mypy]
+# The codebase is already pervasively annotated but had no checker, so the annotations were
+# earning nothing. Started strict-ish rather than fully strict: `disallow_untyped_defs` is
+# the rule that pays here (it caught the unannotated `Driver.strategy` return, whose
+# `| None` callers branch on), while third-party stubs are not worth chasing yet.
+python_version = "3.10"
+files = ["src/agentry"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+warn_unreachable = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Typer builds command signatures out of defaults, and pydantic validators are dynamic.
+# Both produce noise that says nothing about correctness.
+module = ["agentry.cli"]
+disallow_untyped_defs = false
+
 [tool.ruff]
 target-version = "py310"
 line-length = 100
@@ -65,12 +86,29 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 # E/F: pyflakes + pycodestyle, I: import sorting, UP: pyupgrade,
 # B: flake8-bugbear, SIM: flake8-simplify. Low-noise, high-signal defaults.
-select = ["E", "F", "I", "UP", "B", "SIM"]
+# S: flake8-bandit, BLE: blind-except, RUF100: unused-noqa. These three go together: the
+# codebase carried `# noqa: S310` / `S603` / `BLE001` suppressions for rules that were never
+# selected, so they read as "a linter checked this" while nothing did. With S and BLE on,
+# the suppressions are real; with RUF100 on, a stale one fails the build.
+# C901: cap cyclomatic complexity, so a function can't quietly grow back into a 150-liner.
+select = ["E", "F", "I", "UP", "B", "SIM", "S", "BLE", "RUF100", "C901"]
 ignore = [
     "E501",  # line length is enforced by `ruff format`, not the linter
     "B008",  # function call in default arg — required by Typer (typer.Option/Argument)
     "B904",  # raise-without-from — Typer raises typer.Exit in except for clean CLI errors
 ]
+
+[tool.ruff.lint.mccabe]
+# A ratchet, not an aspiration: `cli.import_apm` and `deps.resolve_graph` both sit at
+# exactly 16, so any further growth in them fails the build. Lower this as they get split.
+max-complexity = 16
+
+[tool.ruff.lint.per-file-ignores]
+# Tests assert on behaviour, so bandit's test-oriented rules are noise there: `assert` is
+# the point (S101), and the fixture repos/URLs it flags as hardcoded secrets or unsafe
+# temp paths are inert strings (S105-S108), as are the deliberate `subprocess` calls that
+# build a local git repo (S603/S607).
+"tests/**" = ["S101", "S105", "S106", "S107", "S108", "S603", "S607"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["agentry"]

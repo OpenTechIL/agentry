@@ -6,8 +6,21 @@ from pathlib import Path
 
 import pytest
 
+from agentry import registry as reg
 from agentry.config import ConfigStore
 from agentry.models import Target
+
+
+@pytest.fixture(autouse=True)
+def _clear_catalog_cache():
+    """Catalogs are memoized per process; tests write and rewrite local catalog files.
+
+    Without this, a test that edits a catalog would silently see the previous test's parsed
+    index — the classic cross-test leak a process-lifetime cache introduces.
+    """
+    reg.clear_catalog_cache()
+    yield
+    reg.clear_catalog_cache()
 
 
 def make_source(root: Path) -> Path:
