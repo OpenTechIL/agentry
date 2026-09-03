@@ -2,10 +2,15 @@ name: Docs
 
 # Builds the MkDocs site on every push to main and on PRs that touch the docs
 # (the PR build is strict, so broken links/anchors fail review before merge).
-# Only pushes to main deploy to GitHub Pages.
+# Pushes to main and manual runs deploy to GitHub Pages; PR builds never deploy.
 #
-# One-time setup: repo Settings -> Pages -> Build and deployment ->
-# Source = "GitHub Actions".
+# REQUIRES repo Settings -> Pages -> Build and deployment -> Source = "GitHub Actions"
+# (API: `build_type: "workflow"`). If that is set to "Deploy from a branch" instead, Pages
+# builds the repo root with Jekyll and silently discards this workflow's artifact — while
+# every run here still reports success. That is exactly what happened up to 2026-09-03:
+# the published site was a Jekyll-rendered README and none of docs/ was reachable, with a
+# green Docs badge the whole time. A passing run is NOT evidence the site is live; check
+# a real page (e.g. /troubleshooting/) after changing anything about Pages.
 on:
   push:
     branches: [main]
@@ -48,7 +53,10 @@ jobs:
 
   deploy:
     needs: build
-    if: github.event_name == 'push'
+    # Everything except a PR build, so `workflow_dispatch` can actually publish. It was
+    # `== 'push'`, which left the manual trigger able to build but never deploy — useless
+    # in the one situation you reach for it (re-publishing after a Pages config change).
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

@@ -4,6 +4,46 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ---
 
+## 2026-09-03: A green Docs workflow did not mean the docs site was published
+
+**Context:** After merging #43 — which added three new pages (`troubleshooting`,
+`config-reference`, `authoring`), a docs-site badge and a "Rendered site" link to the
+README — a check of the live site found **every subpage 404ing**, including pre-existing
+ones like `/commands/` and `/architecture/`. Only `/` returned 200, serving a
+Jekyll-rendered README.
+
+**Cause:** GitHub Pages was configured as `build_type: "legacy"` (Settings → Pages → Source
+= "Deploy from a branch", `main` at `/`). In that mode Pages builds the repo root with
+Jekyll and **silently discards** the artifact `docs.yml` uploads. `docs.yml`'s own header
+had documented "One-time setup: … Source = GitHub Actions" as a required step — it was
+never performed, so the MkDocs site had likely *never* been published.
+
+**Fix:** `PUT /repos/OpenTechIL/agentry/pages` with `build_type=workflow`, then re-run a
+push-triggered Docs run. Verified live afterwards: all eight pages 200, and every
+cross-page anchor resolves under MkDocs' slugifier.
+
+**Learnings:**
+
+- **A passing workflow is not evidence of a deployed site.** `actions/deploy-pages`
+  succeeded on every run while nothing it produced was ever served. The Docs badge was
+  green throughout. The only real check is fetching a page that only the new build could
+  produce — `curl -o /dev/null -w '%{http_code}' <site>/troubleshooting/`. Treat "CI is
+  green" and "the artifact is live" as independent claims.
+- **`mkdocs build --strict` validates the build, not the deployment.** It caught genuine
+  anchor breakage during the PR and gave real confidence — about the wrong layer.
+- **`workflow_dispatch` was declared but the deploy job excluded it** (`if: github.event_name
+  == 'push'`), so the manual trigger could build and never publish. That is precisely the
+  situation you reach for it in: re-publishing after a Pages settings change. Recovering
+  needed a re-run of the original push-triggered run instead. If a job is gated on the event
+  name, check the gate against every trigger in `on:`.
+- **Raw `.md` under a Jekyll-served root returns 200,** so the README's relative
+  `docs/*.md` links "worked" while serving unrendered Markdown source. A link checker that
+  only asserts a 2xx would have passed — status codes don't prove a page rendered.
+- **Adding a badge or a "rendered site" link makes a silent infra gap load-bearing.** The
+  gap predated #43, but that PR was the first thing to publicly promise the site existed.
+
+---
+
 ## 2026-09-03: `agy` collides with Google's Antigravity CLI — canonical name is now `agentry`
 
 **Context:** `agy` was the only console script. Google shipped the **Antigravity CLI** (the
