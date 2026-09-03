@@ -10,8 +10,11 @@ the work or office of an agent.) It signals exactly what the tool does: a regist
 agent components you manage like dependencies.
 
 - Package / project name: `agentry`
-- CLI command: `agy` (short, fast to type, like `pip` / `npm` / `uv`)
-- Always lowercase: `agentry`, `agy` — never "Agentry" mid-sentence, never "AGY".
+- CLI command: `agentry` — canonical, and what docs, help text and error messages should say.
+- Short aliases: `agyx` and `agy`. Both are installed, but never use them in prose or
+  examples. `agy` is *also* the command for Google's Antigravity CLI, so writing it as
+  agentry's name teaches readers something ambiguous.
+- Always lowercase: `agentry`, `agyx`, `agy` — never "Agentry" mid-sentence, never "AGY".
 - Dotfiles: `.agentry.yml`, `.agentry.lock`, `.agentry/`.
 
 ## Logo
@@ -75,7 +78,7 @@ For splash/help/release notes:
  | (_| | (_| |  __/ | | | |_| |  | |_| |
   \__,_|\__, |\___|_| |_|\__|_|   \__, |
         |___/                     |___/
-  AI agent dependencies, managed.   agy
+  AI agent dependencies, managed.   agentry
 ```
 
 ## Naming conventions (in product)

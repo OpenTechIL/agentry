@@ -4,9 +4,55 @@ Project-specific pitfalls, patterns, constraints, and discoveries captured durin
 
 ---
 
-## 2026-07-09 — `agy emit triggers`: register skill triggers, don't auto-mutate memory files
+## 2026-09-03: `agy` collides with Google's Antigravity CLI — canonical name is now `agentry`
 
-**Context:** Added `agy emit triggers`, which writes each installed skill's "use when …" text
+**Context:** `agy` was the only console script. Google shipped the **Antigravity CLI** (the
+Gemini CLI successor) in May 2026 using the same command name, distributed as a single Go
+binary. Homebrew already surfaced the clash on a maintainer's machine: *"The following
+agentry executables are shadowed by other commands earlier in your PATH: agy (shadowed by
+/Users/…/.local/bin/agy)"*. The conflict was even visible inside this repo — the vendored
+superpowers checkout documents Antigravity's CLI at
+`.agentry/superpowers/skills/using-superpowers/references/antigravity-tools.md`.
+
+**Decision:** non-breaking. Keep `agy`, add `agentry` as the **canonical** name, add `agyx`
+as a short alias that cannot collide, and detect the ambiguity at runtime. A hard rename
+(this repo's usual posture for CLI renames — see the `publish` → `catalog add-repo` and
+`registry` → `catalog` entries below) was rejected here because `agy` is already installed
+on users' machines by five distribution channels, and unlike an internal subcommand rename
+the breakage would be a missing binary rather than a clear error message.
+
+**Learnings:**
+
+- **A frozen binary has exactly one executable name.** PyInstaller emits one file, so the
+  aliases can't come from the build — every channel has to create them itself: symlinks for
+  nfpm/Homebrew/`install.sh`/the macOS pkg, `.cmd` shims for Inno Setup and `install.ps1`
+  (Windows has no unprivileged symlink), and Scoop's `[exe, alias]` shim-pair form. Only
+  `[project.scripts]` gets three names for free. `tests/test_packaging.py` was rewritten
+  around `BIN`/`ALIASES` constants for exactly this reason: a missed channel otherwise
+  surfaces only as a broken release asset.
+- **Release-asset names are a compatibility boundary.** `install.sh`/`install.ps1` fetch
+  `agy-<version>-<target>` when self-updating, so renaming assets breaks *already
+  installed* copies of the installer. Publish both names for one release and have the
+  installers try the current name first with a fallback. This is easy to forget because
+  nothing in CI exercises the previously shipped installer.
+- **Homebrew has a first-class alias mechanism.** A symlink at `Aliases/agy →
+  ../Formula/agentry.rb` in the tap keeps `brew install OpenTechIL/tap/agy` resolving; two
+  formula files would have fought over the same binary.
+- **Don't interpolate the invoked name into text you write to disk.** Hints get `prog()`
+  (from `progname.py`) so an `agyx` user isn't told to run `agy`, but the `emit` markers and
+  the `.agentry.yml` header keep the canonical name — otherwise generated file content would
+  depend on which alias the user typed, and `emit --check` would flap in CI.
+- **Click derives the program name from `argv[0]`,** so `--help` output adapted to each
+  alias for free. Only hardcoded strings inside help/error text needed changing.
+- **`agy --version` never worked.** The bug-report template had been asking for it since the
+  template was written; version was only a subcommand. Worth auditing issue templates
+  against the actual CLI surface.
+
+---
+
+## 2026-07-09: `agentry emit triggers` registers skill triggers, doesn't auto-mutate memory files
+
+**Context:** Added `agentry emit triggers`, which writes each installed skill's "use when …" text
 (its `SKILL.md` `description`) into every active target's always-loaded memory file
 (`.claude/CLAUDE.md`, `AGENTS.md`, …) so harnesses that don't auto-load skills still know when
 to invoke them. Introduces `TargetSpec.memory_file` (per-driver) and the repo's first **markdown**
@@ -14,7 +60,7 @@ merge.
 
 **Findings / decisions:**
 
-- **Explicit `emit` command, not a `sync` side effect.** `agy sync` reconciles installed
+- **Explicit `emit` command, not a `sync` side effect.** `agentry sync` reconciles installed
   *artifacts*; a memory file is hand-authored prose. Mutating it during sync would surprise
   users and can't be `--check`-verified in CI. `emit triggers` mirrors `emit agents-md`: a
   deterministic, committable, `--check`-able artifact step. (Contrast: `emit agents-md` owns a
@@ -36,19 +82,19 @@ merge.
 
 ---
 
-## 2026-07-09 — Dead-placeholder env scanner must never flag `*_PLUGIN_ROOT`
+## 2026-07-09: Dead-placeholder env scanner must never flag `*_PLUGIN_ROOT`
 
-**Context:** Dogfooding `agy add superpowers` into this repo (materializing `.agentry.yml`/`.agentry.lock`, `.claude/skills/*`, `.claude/hooks/`, and a `SessionStart` hook) surfaced a false-positive from the dead-placeholder env scanner in [envscan.py](https://github.com/OpenTechIL/agentry/blob/main/src/agentry/envscan.py): `${CLAUDE_PLUGIN_ROOT}` was reported as an unset env var with the generic "set it before your agent runs" advice — which is categorically wrong for a host-injected, rewritten variable.
+**Context:** Dogfooding `agentry add superpowers` into this repo (materializing `.agentry.yml`/`.agentry.lock`, `.claude/skills/*`, `.claude/hooks/`, and a `SessionStart` hook) surfaced a false-positive from the dead-placeholder env scanner in [envscan.py](https://github.com/OpenTechIL/agentry/blob/main/src/agentry/envscan.py): `${CLAUDE_PLUGIN_ROOT}` was reported as an unset env var with the generic "set it before your agent runs" advice — which is categorically wrong for a host-injected, rewritten variable.
 
 **Findings:**
 
 - **`unset_env_refs()` is `is_file()`-gated and sees the *raw* fragment.** For a HOOK resolved by discovery to a file (`hooks/hooks.json`, `name="hooks"`, no explicit path) under a `link+merge` profile, the scan runs against the pre-rewrite command still containing `${CLAUDE_PLUGIN_ROOT}`. link+merge rewrites that token away, so warning about it is a false positive.
 - **Fix: skip any `*_PLUGIN_ROOT` name unconditionally.** Added `_PLUGIN_ROOT_NAME = re.compile(r"[A-Z0-9_]*PLUGIN_ROOT\Z")` — the bare-name analogue of `link_merge._PLUGIN_ROOT_RE` (which matches the full `${...}` token) — and `continue` on a match inside `unset_env_refs`. These vars are host-injected; the plain-`merge` path already warns about them accurately via `plugin_root_refs`, so the generic scanner stays silent and leaves them to those paths. Complements the catalog/`link+merge` fix from [the 2026-06-30 entry](#2026-06-30-plugin-style-hooks-need-a-linkmerge-profile-not-plain-merge).
-- **Regression test** (`test_link_merge_file_component_no_plugin_root_unset_warning` in `tests/test_reconcile.py`) mirrors the real `agy add superpowers` config: it asserts `sync` emits no `CLAUDE_PLUGIN_ROOT`/"which is unset" warning *and* that the installed command is rewritten to the `${CLAUDE_PROJECT_DIR}` form.
+- **Regression test** (`test_link_merge_file_component_no_plugin_root_unset_warning` in `tests/test_reconcile.py`) mirrors the real `agentry add superpowers` config: it asserts `sync` emits no `CLAUDE_PLUGIN_ROOT`/"which is unset" warning *and* that the installed command is rewritten to the `${CLAUDE_PROJECT_DIR}` form.
 
 ---
 
-## 2026-06-30 — Plugin-style hooks need a `link+merge` profile, not plain `merge`
+## 2026-06-30: Plugin-style hooks need a `link+merge` profile, not plain `merge`
 
 **Context:** Installing `superpowers` for target `claude` produced a startup error: `SessionStart:startup hook error … Hook command references ${CLAUDE_PLUGIN_ROOT} but the hook is not associated with a plugin`. Root-caused to the catalog entry lacking a hook `target_profiles` rule.
 
@@ -56,13 +102,13 @@ merge.
 
 - **`${CLAUDE_PLUGIN_ROOT}` only expands inside a real installed Claude plugin** — never in project `.claude/settings.json`. Any repo that ships a plugin-style hook bundle (`hooks/hooks.json` whose command is `"${CLAUDE_PLUGIN_ROOT}/hooks/…"`) will break if merged verbatim.
 - **The Claude driver's default strategy for `HOOK` is `merge`** ([drivers/claude.py](https://github.com/OpenTechIL/agentry/blob/main/src/agentry/drivers/claude.py)), which copies the fragment as-is. The fix for plugin-style hooks is the **`link+merge`** strategy: it symlinks the hooks dir into `.claude/hooks/…` and rewrites the `${CLAUDE_PLUGIN_ROOT}/hooks` prefix to `${CLAUDE_PROJECT_DIR}/.claude/hooks/…`. It is **opt-in per repo** via the catalog's `target_profiles.<target>.hook` (see the `arckit` and now `superpowers` entries in `registry/repositories.json`).
-- **A catalog `target_profiles` only reaches a project at `agy add` time** (via `registry.build_install_profiles` → `ConfigStore.merge_target_profiles`). Fixing the catalog entry does **not** repair an already-installed project — you must add the profile to the project's local `.agentry.yml` and re-run `agy sync`. The manifest tracks the prior `merge`, so the re-sync cleanly removes it and installs the `link+merge` form (manifest entry moves from `merges` to `link_merges`).
-- **`agy sync` is a clean strategy-swap.** Changing a hook from `merge` to `link+merge` between syncs removes the old settings.json key and the orphaned state correctly — no manual cleanup needed.
+- **A catalog `target_profiles` only reaches a project at `agentry add` time** (via `registry.build_install_profiles` → `ConfigStore.merge_target_profiles`). Fixing the catalog entry does **not** repair an already-installed project — you must add the profile to the project's local `.agentry.yml` and re-run `agentry sync`. The manifest tracks the prior `merge`, so the re-sync cleanly removes it and installs the `link+merge` form (manifest entry moves from `merges` to `link_merges`).
+- **`agentry sync` is a clean strategy-swap.** Changing a hook from `merge` to `link+merge` between syncs removes the old settings.json key and the orphaned state correctly — no manual cleanup needed.
 - **Caveat (unverified):** `superpowers/hooks/session-start` picks its output format from env vars, emitting Claude's `hookSpecificOutput.additionalContext` only when `CLAUDE_PLUGIN_ROOT` is set. Under a settings hook that var is unset, so it takes the SDK-standard top-level `additionalContext` branch. This clears the *error*; whether Claude Code actually injects the context from a settings hook is a separate behavior to confirm in a live session.
 
 ---
 
-## 2026-06-27 — MkDocs `--strict` CI failures & guardrails
+## 2026-06-27: MkDocs `--strict` CI failures & guardrails
 
 **Context:** The GitHub Pages docs build ([.github/workflows/docs.yml](https://github.com/OpenTechIL/agentry/blob/main/.github/workflows/docs.yml)) failed because [commands.md](commands.md) carried a link to `../README.md` (outside `docs_dir`) and a broken heading anchor. Fixed the links, then hardened the pipeline against recurrence.
 
@@ -76,13 +122,13 @@ merge.
 
 ---
 
-## 2026-06-26 — Command rename: `publish` → `catalog add-repo`
+## 2026-06-26: Command rename: `publish` → `catalog add-repo`
 
-**Context:** README reorg for the OSS release surfaced that `agy publish` misrepresented its
+**Context:** README reorg for the OSS release surfaced that `agentry publish` misrepresented its
 action — it publishes nothing; it adds/edits a repo entry in a local catalog file (its success
-message is literally `Added {name} → {file}`). Renamed it to **`agy catalog add-repo`**, nested
+message is literally `Added {name} → {file}`). Renamed it to **`agentry catalog add-repo`**, nested
 under the `catalog` group. Hard rename, no alias (consistent with the earlier `repo`/`registry`
-rename below). `agy publish` never shipped in a release, so the CHANGELOG Unreleased entry was
+rename below). `agentry publish` never shipped in a release, so the CHANGELOG Unreleased entry was
 updated in place rather than logging a rename.
 
 **Findings:**
@@ -96,13 +142,13 @@ updated in place rather than logging a rename.
 
 ---
 
-## 2026-06-25 — Command rename: `repo`/`registry` → `catalog`/`publish`
+## 2026-06-25: Command rename: `repo`/`registry` → `catalog`/`publish`
 
 **Context:** Consolidated the confusing command trio for OSS release. The consumer side
-(`agy repo add`/`remove`/`list` — register/browse a catalog) became the **`agy catalog`**
-group. The producer side (`agy registry add` — author an entry in `registry/repositories.json`)
-became the flat top-level **`agy publish`** command. Hard rename — the old `repo` and
-`registry` command names are gone (no aliases). `agy source` is unchanged.
+(`agentry repo add`/`remove`/`list` — register/browse a catalog) became the **`agentry catalog`**
+group. The producer side (`agentry registry add` — author an entry in `registry/repositories.json`)
+became the flat top-level **`agentry publish`** command. Hard rename — the old `repo` and
+`registry` command names are gone (no aliases). `agentry source` is unchanged.
 
 **Findings:**
 
@@ -110,14 +156,14 @@ became the flat top-level **`agy publish`** command. Hard rename — the old `re
   model, and the `registry.py` module keep their names — renaming the config key would break
   existing files, and the module/model are user-invisible. So "catalog" is the user-facing
   noun while "registry"/"repositories" persist internally; this is intentional, not drift.
-- **`agy publish` is a flat command, not a group.** It was the lone `registry add` subcommand,
-  so collapsing the group to one verb drops the redundant `add` token (`agy publish <url>`).
+- **`agentry publish` is a flat command, not a group.** It was the lone `registry add` subcommand,
+  so collapsing the group to one verb drops the redundant `add` token (`agentry publish <url>`).
 
 ---
 
-## 2026-06-25 — Catalog consolidation & link+merge dest templating
+## 2026-06-25: Catalog consolidation & link+merge dest templating
 
-**Context:** Merged the skill-registry system (`skills.json` / `registries:` / `agy registry`) into the repository catalog (`repositories.json` / `repositories:` / `agy repo`) as the single name-based resolution path, and added install-time component selection. Paired with link+merge destination templating that namespaces linked dirs per repo+ref.
+**Context:** Merged the skill-registry system (`skills.json` / `registries:` / `agentry registry`) into the repository catalog (`repositories.json` / `repositories:` / `agentry repo`) as the single name-based resolution path, and added install-time component selection. Paired with link+merge destination templating that namespaces linked dirs per repo+ref.
 
 **Findings:**
 
@@ -125,9 +171,9 @@ became the flat top-level **`agy publish`** command. Hard rename — the old `re
 
 - **Convention discovery only scans `skills/<name>/`, not `.claude/skills/<name>/`** (see `discovery._discover_by_convention`). A repo that stores its skill at a non-standard path (e.g. `nextlevelbuilder/ui-ux-pro-max-skill` at `.claude/skills/...`) is **not** auto-discoverable and *must* carry an explicit `path` via an `expose` entry. Same for self-installing tools (graphify) which need `generate`. So `expose` is the declaration vehicle for "what discovery can't infer" — not just curation.
 
-- **`agy add` ref grammar is disambiguated by separators:** a catalog ref never contains `/`, a manual `<source>/<type>/<name>` ref never contains `@`. Routing logic: `@` → catalog ref with component selection; `/` → manual ref; otherwise → bare catalog repo. `--type` (skill/agent/command/hook/mcp) applies only to catalog refs; `@name[,name]` selects specific components (errors on no-match).
+- **`agentry add` ref grammar is disambiguated by separators:** a catalog ref never contains `/`, a manual `<source>/<type>/<name>` ref never contains `@`. Routing logic: `@` → catalog ref with component selection; `/` → manual ref; otherwise → bare catalog repo. `--type` (skill/agent/command/hook/mcp) applies only to catalog refs; `@name[,name]` selects specific components (errors on no-match).
 
-- **Interactive picker gating:** the bare-`agy add <repo>` interactive picker is guarded by `sys.stdin.isatty()`. Under pytest/`CliRunner` there's no TTY, so it deterministically installs everything — tests don't need to feed stdin. Use `monkeypatch.setattr(sys.stdin, "isatty", lambda: False)` to make that explicit/robust.
+- **Interactive picker gating:** the bare-`agentry add <repo>` interactive picker is guarded by `sys.stdin.isatty()`. Under pytest/`CliRunner` there's no TTY, so it deterministically installs everything — tests don't need to feed stdin. Use `monkeypatch.setattr(sys.stdin, "isatty", lambda: False)` to make that explicit/robust.
 
 - **Path templating in link+merge profiles uses literal `{key}` replacement, NOT `str.format`.** Rewrite targets embed shell vars like `${CLAUDE_PROJECT_DIR}` that `str.format` misreads as fields. `reconcile._expand` does plain `.replace("{key}", value)`. Available placeholders: `{name}`, `{source}`, `{repo}` (git URL / local path basename, `.git` stripped), `{ref}` (git ref with `/` → `-`). This lets profiles namespace linked dirs as `.claude/hooks/agentry/{repo}@{ref}/{name}` to avoid `{name}` collisions across repos.
 
@@ -137,13 +183,13 @@ became the flat top-level **`agy publish`** command. Hard rename — the old `re
 
 ---
 
-## 2026-06-25 — `agy registry add` (catalog authoring)
+## 2026-06-25: `agentry registry add` (catalog authoring)
 
-**Context:** Added `agy registry add <git-url> [name]` to author entries in the curated `registry/repositories.json` from a git/GitHub URL (minimal by default; `--discover` clones and pre-fills `expose`). Note this is *authoring* the catalog, distinct from `agy repo add` which *registers a catalog file* into a project's `.agentry.yml`.
+**Context:** Added `agentry registry add <git-url> [name]` to author entries in the curated `registry/repositories.json` from a git/GitHub URL (minimal by default; `--discover` clones and pre-fills `expose`). Note this is *authoring* the catalog, distinct from `agentry repo add` which *registers a catalog file* into a project's `.agentry.yml`.
 
 **Findings:**
 
-- **`agy registry` is safe to reuse as a command name.** The old skill-registry `agy registry` group was deleted in the catalog consolidation (commit `cb2f55a`), so the name was free to repurpose for catalog authoring. There is no naming collision.
+- **`agentry registry` is safe to reuse as a command name.** The old skill-registry `agentry registry` group was deleted in the catalog consolidation (commit `cb2f55a`), so the name was free to repurpose for catalog authoring. There is no naming collision.
 
 - **Typer forces argument order: required positionals before optional ones.** The plan called for `add <name> <url>` with an optional derived name, but Typer can't place an optional positional before a required one. Resolved by making the URL the first required arg and `name` the optional second (`add <url> [name]`), deriving the name from the repo basename when omitted.
 
@@ -157,9 +203,9 @@ became the flat top-level **`agy publish`** command. Hard rename — the old `re
 
 ---
 
-## 2026-06-25 — Per-harness hook/MCP fragment routing
+## 2026-06-25: Per-harness hook/MCP fragment routing
 
-**Context:** `agy add superpowers` wrote an invalid `hooks.sessionStart` (camelCase) key into `.claude/settings.json`, which Claude Code rejects. Root-caused and fixed; not a casing bug in agentry.
+**Context:** `agentry add superpowers` wrote an invalid `hooks.sessionStart` (camelCase) key into `.claude/settings.json`, which Claude Code rejects. Root-caused and fixed; not a casing bug in agentry.
 
 **Findings:**
 
@@ -169,13 +215,13 @@ became the flat top-level **`agy publish`** command. Hard rename — the old `re
 
 - **`harness_suffix` must require the hyphen *and* a known slug.** Matching a bare stem would misroute a legit `mcp/codex.json` (an MCP server literally named "codex"). Rule: `name.rpartition("-")` with a non-empty base and suffix ∈ `KNOWN_HARNESS_SLUGS`. Gate it to `MERGE_TYPES` only, or a skill like `using-superpowers` would be wrongly treated as a variant.
 
-- **The fix self-heals already-broken projects with no config migration.** reconcile recomputes affinity from `comp.name` (not a persisted field), so a previously-added `hooks-cursor` component is dropped from the *desired* merge set on the next `sync`. The existing prune path in `_reconcile_merges` (manifest-owned keys absent from desired → `remove_merge`) then deletes the stale `sessionStart` automatically. Verified live: re-running `agy sync` on the affected repo removed both `sessionStart` and the duplicate codex `SessionStart`, keeping only the canonical entry.
+- **The fix self-heals already-broken projects with no config migration.** reconcile recomputes affinity from `comp.name` (not a persisted field), so a previously-added `hooks-cursor` component is dropped from the *desired* merge set on the next `sync`. The existing prune path in `_reconcile_merges` (manifest-owned keys absent from desired → `remove_merge`) then deletes the stale `sessionStart` automatically. Verified live: re-running `agentry sync` on the affected repo removed both `sessionStart` and the duplicate codex `SessionStart`, keeping only the canonical entry.
 
-- **`agy add` add-time hygiene is separate from reconcile-time correctness.** `_add_from_catalog` now also drops harness-variant components whose harness isn't an active target, so a claude-only install never *records* `hooks-cursor`/`hooks-codex` in `.agentry.yml`. This is purely cosmetic — reconcile already makes them harmless — but keeps the config and interactive picker clean.
+- **`agentry add` add-time hygiene is separate from reconcile-time correctness.** `_add_from_catalog` now also drops harness-variant components whose harness isn't an active target, so a claude-only install never *records* `hooks-cursor`/`hooks-codex` in `.agentry.yml`. This is purely cosmetic — reconcile already makes them harmless — but keeps the config and interactive picker clean.
 
 ---
 
-## 2026-06-29 — Canonical GitHub org is `OpenTechIL`, not `opentech`
+## 2026-06-29: Canonical GitHub org is `OpenTechIL`, not `opentech`
 
 **Context:** The README's CI badge image and three other links 404'd.
 
@@ -186,7 +232,7 @@ became the flat top-level **`agy publish`** command. Hard rename — the old `re
 
 ---
 
-## 2026-06-29 — PyPI publish is blocked by a name collision; dropped in favor of binaries
+## 2026-06-29: PyPI publish is blocked by a name collision; dropped in favor of binaries
 
 **Context:** The `Release` workflow (`release.yml`) failed publishing to PyPI on the `v0.1.0-pre` tag. Investigated whether to fix it or distribute differently.
 
@@ -194,7 +240,7 @@ became the flat top-level **`agy publish`** command. Hard rename — the old `re
 
 - **The CI error (`invalid-publisher` on the OIDC token exchange) was the *symptom*, not the root problem.** It meant the PyPI Trusted Publisher was never registered on pypi.org. But fixing that is impossible because of the deeper blocker below — don't burn time on the trusted-publishing config first.
 - **The PyPI name `agentry` is already owned by an unrelated project** (`penlight-ai/agentry`, "A library for creating AI agents"). You cannot register a Trusted Publisher for, or publish to, a project name you don't own. `agentry-cli` is also taken (a near-identical tool). Always `curl -s -o /dev/null -w "%{http_code}" https://pypi.org/pypi/<name>/json` (200 = taken, 404 = free) **before** wiring up any PyPI release path.
-- **PyPI distribution name is independent of the import package and the CLI command.** `[project].name` (distribution) can differ from the import package (`agentry`) and the `[project.scripts]` entry (`agy`) — so a PyPI rename would have needed *zero* code changes, only metadata + README. We still chose not to, because the project already ships standalone PyInstaller binaries + `install.sh`/`install.ps1` as the primary channel, making PyPI redundant.
+- **PyPI distribution name is independent of the import package and the CLI command.** `[project].name` (distribution) can differ from the import package (`agentry`) and the `[project.scripts]` entry (`agentry`) — so a PyPI rename would have needed *zero* code changes, only metadata + README. We still chose not to, because the project already ships standalone PyInstaller binaries + `install.sh`/`install.ps1` as the primary channel, making PyPI redundant.
 - **When removing a release channel, sweep the install fallbacks too.** `install.sh`/`install.ps1` had `uv tool install agentry` fallback hints (unsupported-OS / arm64 paths) that could never resolve once the name is unavailable; replaced with the git-based `uv tool install git+https://github.com/OpenTechIL/agentry`. Also fixed a stale cross-reference comment in `release-binaries.yml` pointing at the now-deleted `release.yml`.
 
 ---

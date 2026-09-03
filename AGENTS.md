@@ -7,11 +7,11 @@ the conventions to follow when editing the code.
 
 ## What this project is
 
-`agentry` (CLI command `agy`) is a **dependency manager for AI coding agents**. It lets a
+`agentry` (CLI command `agentry`, aliases `agyx` and `agy`) is a **dependency manager for AI coding agents**. It lets a
 project declare skills, agents, commands, tools, hooks, and MCP servers in `.agentry.yml`,
 pin them in `.agentry.lock`, and install them into each tool's native layout (`.claude/`,
-`.cursor/`, `.gemini/`, `.opencode/`, … — seven agents ship built-in, and more can be added
-from config via `target_profiles`) with one `agy sync`. Write once, deploy to any agent.
+`.cursor/`, `.gemini/`, `.opencode/`, … — nine agents ship built-in, and more can be added
+from config via `target_profiles`) with one `agentry sync`. Write once, deploy to any agent.
 
 Python package, `src/` layout, built with `hatchling`, managed with [`uv`](https://docs.astral.sh/uv/).
 
@@ -20,7 +20,7 @@ Python package, `src/` layout, built with `hatchling`, managed with [`uv`](https
 - **Read [docs/architecture.md](docs/architecture.md) first.** It is the source of truth for
   the data model, reconcile flow, and safety invariants. Update it in the same change that
   alters behavior.
-- **Never weaken the safety invariants.** `agy sync` must (1) stay **idempotent** — running
+- **Never weaken the safety invariants.** `agentry sync` must (1) stay **idempotent** — running
   it twice changes nothing the second time — and (2) **never touch unmanaged files, symlinks,
   or hand-added config entries**. Tests guard both; do not edit those tests to make a change
   pass.
@@ -28,47 +28,38 @@ Python package, `src/` layout, built with `hatchling`, managed with [`uv`](https
   destinations are configuration (`agentry.yaml` descriptors, `target_profiles`), not
   hardcoded paths. Add capability through data/specs, not special-cases.
 - Don't add a dependency without a clear reason; runtime deps are deliberately minimal
-  (`typer`, `rich`, `pydantic`, `ruamel.yaml`).
+  (`typer`, `rich`, `pydantic`, `ruamel.yaml`, `tomlkit`).
 
 ## Environment & setup
 
 ```bash
 uv venv
 uv pip install -e ".[dev]"      # editable install + pytest
-uv run agy --help               # smoke-test the CLI
+uv run agentry --help               # smoke-test the CLI
 ```
 
-Requires Python ≥ 3.10. The CLI entry point is `agy = "agentry.cli:app"`.
+Requires Python ≥ 3.10. The CLI entry point is `agentry = "agentry.cli:app"`.
 
 ## How to develop
 
 Run any command in the project venv with `uv run`:
 
 ```bash
-uv run agy <command>            # exercise the CLI
+uv run agentry <command>            # exercise the CLI
 uv run python -c "import agentry"
 ```
 
-Module map (`src/agentry/`):
+**Module map:** see
+[docs/architecture.md §8](docs/architecture.md#8-module-map). It is the single maintained
+copy — this file deliberately does not keep its own, because the duplicates drifted.
 
-| Module | Responsibility |
-|---|---|
-| `cli.py` | Command surface (Typer). User-facing commands and output. |
-| `models.py` | Data models (pydantic): `Target`, `ComponentType`, `TargetSpec`, `LINK_TYPES`/`MERGE_TYPES`. |
-| `config.py` | `.agentry.yml` read/write (round-trip preserving). |
-| `lockfile.py` | `.agentry.lock` read/write. |
-| `targets.py` | `BUILTIN_TARGETS` — per-tool capability map. |
-| `discovery.py` | Scans a source repo for components (`LAYOUT` + descriptor). |
-| `resolver.py` | Downloads/checks out sources (git / local). |
-| `manifest.py` | Records installed state. |
-| `deps.py` | Dependency handling between components. |
-| `gitignore.py` | Manages `.agentry/` ignore entries. |
-| `installers/link.py` | Symlink installs (skills/agents/commands/tools). |
-| `installers/merge.py` | Reversible config merges (hooks/MCP). |
-| `reconcile.py` | The sync engine — drives config + lock → on-disk state. |
+Orientation, if you're reading the code for the first time: `cli.py` (command surface) →
+`models.py` (the data model everything else speaks) → `discovery.py` (what a source
+provides) → `targets.py` + `drivers/` (where each type installs) → `reconcile.py` (the
+engine that diffs desired vs actual) → `installers/` (the six strategies that touch disk).
 
 When adding capability, prefer the patterns already documented in
-[CONTRIBUTING.md](CONTRIBUTING.md#how-to-add-things): a new target tool, a new component
+[CONTRIBUTING.md](CONTRIBUTING.md#adding-a-driver-for-a-new-agent): a new target tool, a new component
 type, or a new source kind each have a defined sequence (touch `models.py` / `targets.py` /
 `discovery.py`, then docs + tests).
 
@@ -98,7 +89,7 @@ Testing rules:
 1. Branch off `main`; keep PRs small and focused — one behavior change per PR where possible.
 2. Make the change in `src/agentry/`, add/adjust tests, and **update
    [docs/architecture.md](docs/architecture.md)** if behavior changed.
-3. `uv run pytest` must pass; `uv run agy --help` must still work.
+3. `uv run pytest` must pass; `uv run agentry --help` must still work.
 4. Imperative commit subjects, lower-case, no trailing period:
    `add cursor mcp target`, `fix local symlink drift`.
 5. Open the PR with a short rationale and note any safety/idempotency considerations.

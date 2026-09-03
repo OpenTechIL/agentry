@@ -8,14 +8,22 @@ Thanks for helping build a dependency manager for AI agents! This project is
 agentry uses [`uv`](https://docs.astral.sh/uv/).
 
 ```bash
-git clone https://github.com/opentech/agentry
+git clone https://github.com/OpenTechIL/agentry
 cd agentry
 uv venv
 uv pip install -e ".[dev]"      # editable install + pytest + ruff + pre-commit
 uv run pre-commit install       # enable the git hooks (one-time)
-uv run agy --help               # smoke test the CLI
+uv run agentry --help               # smoke test the CLI
 uv run pytest                   # run the test suite
 ```
+
+Other extras, if you need them: `.[docs]` for `uv run mkdocs serve` (live preview of the
+docs site on <http://127.0.0.1:8000>), `.[build]` for `pyinstaller` (frozen binaries),
+`.[tui]` for the optional Textual UI, `.[lint]` for ruff alone.
+
+The CLI installs under three names — `agentry` (canonical), plus the short aliases `agy`
+and `agyx`. `agy` is also Google's Antigravity CLI command; use `agentry` in docs, tests
+and commit messages.
 
 The `pre-commit` hooks run `ruff format` and `ruff check --fix` (the same rules CI
 enforces) plus a few hygiene checks on each commit. Run them across the whole repo
@@ -23,25 +31,10 @@ anytime with `uv run pre-commit run --all-files`.
 
 ## Project layout
 
-See [docs/architecture.md](docs/architecture.md) for the full design and module map.
-The short version:
+[docs/architecture.md §8](docs/architecture.md#8-module-map) has the full design and the
+**single** module map. It used to be duplicated here and in `AGENTS.md`; both copies went
+stale, so they now link there instead.
 
-```
-src/agentry/
-  cli.py          command surface (Typer)
-  models.py       data models (pydantic)
-  config.py       .agentry.yml round-trip
-  lockfile.py     .agentry.lock
-  spec.py         capability-map dataclasses (TargetSpec / MergeDest / LinkMergeDest)
-  drivers/        one module per AI agent (the target side)
-  targets.py      effective capability map (drivers + target_profiles)
-  discovery.py    source scanning (the source side)
-  resolver.py     download/checkout sources
-  manifest.py     installed-state record
-  installers/     link.py (symlink) + merge.py (config inject)
-  reconcile.py    the sync engine
-tests/            pytest suite
-```
 
 agentry has **two sides**. The *source side* (`discovery.py`) is canonical — a component
 is authored once. The *target side* (`drivers/`) maps those components into each AI agent.
@@ -99,7 +92,7 @@ target; the suffix-less file applies to every other target that supports the typ
 
 - Add tests for any behavior change. The suite uses `tmp_path` fixtures and a tiny local
   git repo (`file://`) — no network required.
-- Keep `agy sync` **idempotent** and the **safety invariants** intact (never touch
+- Keep `agentry sync` **idempotent** and the **safety invariants** intact (never touch
   unmanaged files/links or hand-added config entries). There are tests guarding both;
   don't weaken them.
 - Before opening a PR, run `uv run pytest`, `uvx ruff check .`, and
@@ -107,9 +100,13 @@ target; the suffix-less file applies to every other target that supports the typ
 
 ## What CI does
 
-Every push and PR runs **CI** (ruff lint/format + the pytest matrix). On a `vX.Y.Z` tag,
-the **Release** workflow builds and publishes to PyPI, and pushes to `main` redeploy the
-**docs site** to GitHub Pages. You don't need to do anything beyond opening a green PR.
+Every push and PR runs **CI** (ruff lint/format + the pytest matrix). Pushes to `main`
+redeploy the **docs site** to GitHub Pages (`docs.yml`), and **Release Drafter**
+(`release-drafter.yml`) keeps a draft release note up to date from merged PR titles. You
+don't need to do anything beyond opening a green PR.
+
+There is **no PyPI channel** — the `agentry` name on PyPI belongs to an unrelated project.
+GitHub Releases (binaries + native installers) is the sole distribution route.
 
 **Releasing.** Bump the version and tag in one step:
 
@@ -118,7 +115,14 @@ python scripts/bump.py X.Y.Z   # edits pyproject + __init__ + CHANGELOG, commits
 git push --follow-tags
 ```
 
-Pushing the `vX.Y.Z` tag fires two workflows: **Release** (`release.yml`, publishes to PyPI) and **Release Binaries** (`release-binaries.yml`, builds standalone executables for Windows/macOS/Linux and attaches them — with `SHA256SUMS.txt` — to the GitHub Release).
+Pushing the `vX.Y.Z` tag fires **Release Binaries** (`release-binaries.yml`): it freezes the
+`agentry` binary for Windows/macOS/Linux, builds the native installers (`.pkg`, `.exe`,
+`.deb`, `.rpm`), signs every asset with cosign, attaches them plus `SHA256SUMS.txt` to the
+GitHub Release, and pushes a refreshed formula to `OpenTechIL/homebrew-tap`. See
+[packaging/README.md](packaging/README.md).
+
+Note `scripts/bump.py` edits `pyproject.toml`, `src/agentry/__init__.py` and `CHANGELOG.md`
+only — it does not touch the docs, so keep version references there generic.
 
 ## Commit & PR conventions
 

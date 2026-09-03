@@ -1,13 +1,13 @@
 ---
 name: use-agentry
-description: Use when the user asks to add or install an AI skill — "add skill <github url or owner/repo>", "install skill …" — or when they paste a skill-manager command like `npx skills add …`. Also use when they want a repo listed in agentry's starter catalog/registry ("add <repo> to the agentry registry", "publish this skill so others can `agy add` it by name") — it drives `gh` to file the issue or open the catalog PR. Routes skill installation through agentry (`agy`) so the skill is tracked in `.agentry.yml`/`.agentry.lock` instead of installed opaquely.
+description: Use when the user asks to add or install an AI skill — "add skill <github url or owner/repo>", "install skill …" — or when they paste a skill-manager command like `npx skills add …`. Also use when they want a repo listed in agentry's starter catalog/registry ("add <repo> to the agentry registry", "publish this skill so others can `agentry add` it by name") — it drives `gh` to file the issue or open the catalog PR. Routes skill installation through agentry so the skill is tracked in `.agentry.yml`/`.agentry.lock` instead of installed opaquely.
 ---
 
-# Use agentry (`agy`) to install skills
+# Use agentry to install skills
 
-This project manages AI-agent skills with **agentry** — CLI `agy`, a dependency manager that
+This project manages AI-agent skills with **agentry** — a dependency manager that
 records every skill in `.agentry.yml` + `.agentry.lock` and installs it into each AI tool's
-native layout (`.claude/skills/…`, `.agents/skills/…`, etc.). Prefer `agy` over ad-hoc
+native layout (`.claude/skills/…`, `.agents/skills/…`, etc.). Prefer `agentry` over ad-hoc
 installers (`npx skills add`, curl-to-shell, manual clones) so installs stay reproducible and
 reversible.
 
@@ -20,35 +20,35 @@ Trigger on any of:
 - **A pasted skill-manager command** — e.g. `npx skills add owner/repo`,
   `npx @something/skills install …`, or any other tool that installs an agent skill.
 - **A catalog-contribution request** — "add `<X>` to the agentry registry/catalog", "get this
-  skill listed so `agy add <name>` works", "open a PR/issue to register `<X>`". That path is
+  skill listed so `agentry add <name>` works", "open a PR/issue to register `<X>`". That path is
   [Contributing a repo to the starter catalog](#contributing-a-repo-to-the-starter-catalog),
   not an install.
 
 ## Behavior
 
 **Natural-language request → default to agentry.** Do not ask which tool to use. Translate the
-request into `agy` commands and run them (steps below).
+request into `agentry` commands and run them (steps below).
 
 **Pasted concrete command → offer the choice.** The user typed a specific command, so present
 two options and let them pick:
 
-1. **Use agentry (recommended)** — run the equivalent `agy` commands so the skill is tracked.
+1. **Use agentry (recommended)** — run the equivalent `agentry` commands so the skill is tracked.
 2. **Run it as-is** — execute exactly what they pasted, unchanged.
 
 Only run the agentry path if they choose it; otherwise run their command verbatim.
 
 ## Preflight
 
-Confirm `agy` is installed:
+Confirm agentry is installed:
 
 ```bash
-agy version
+agentry version
 ```
 
 If it is missing, do **not** silently fall back to `npx`. Tell the user to install agentry
 (the repo ships `install.sh` / `install.ps1`, and it's on Homebrew/Scoop) and stop.
 
-## Translating a request into `agy` commands
+## Translating a request into `agentry` commands
 
 Let `<X>` be a full GitHub URL or `owner/repo` shorthand.
 
@@ -58,28 +58,28 @@ Let `<X>` be a full GitHub URL or `owner/repo` shorthand.
 2. **If a configured catalog already lists it by name**, that's the one-liner:
 
    ```bash
-   agy add <name>                 # whole repo
-   agy add <name> --type skill    # only its skills
-   agy add <name>@one,two         # only the named components
+   agentry add <name>                 # whole repo
+   agentry add <name> --type skill    # only its skills
+   agentry add <name>@one,two         # only the named components
    ```
 
 3. **Otherwise register the repo as a source and add its skill, then sync.** Inspect what the
    repo provides before naming a component — never invent a component name:
 
    ```bash
-   agy source add <name> https://github.com/<owner>/<repo>
-   agy list                          # see the real skill/component names it provides
-   agy add <name>/skill/<skill>      # conventional layout: skills/<skill>/
-   agy sync
+   agentry source add <name> https://github.com/<owner>/<repo>
+   agentry list                          # see the real skill/component names it provides
+   agentry add <name>/skill/<skill>      # conventional layout: skills/<skill>/
+   agentry sync
    ```
 
    When the repo **root itself is the skill** (a `SKILL.md` at the repo root, no `skills/`
    dir), bypass discovery with `--path .`:
 
    ```bash
-   agy source add <name> https://github.com/<owner>/<repo>
-   agy add <name>/skill/<name> --path .
-   agy sync
+   agentry source add <name> https://github.com/<owner>/<repo>
+   agentry add <name>/skill/<name> --path .
+   agentry sync
    ```
 
 4. **Self-installing skills** (no skill file — they generate one via their own CLI, e.g. a
@@ -87,23 +87,23 @@ Let `<X>` be a full GitHub URL or `owner/repo` shorthand.
    opt-in with `--allow-run`:
 
    ```bash
-   agy add <name>/skill/<name> \
+   agentry add <name>/skill/<name> \
      --generate-setup "uv tool install <pkg>" \
      --generate-command "<pkg> install --project" \
      --produces ".claude/skills/<name>"
-   agy sync --allow-run
+   agentry sync --allow-run
    ```
 
 ## After installing
 
-- Run `agy sync` if you haven't already.
-- Confirm where it landed: `agy why <name>/skill/<skill>` or `agy status`.
+- Run `agentry sync` if you haven't already.
+- Confirm where it landed: `agentry why <name>/skill/<skill>` or `agentry status`.
 - Report the installed path(s) to the user.
 
 ## Contributing a repo to the starter catalog
 
 Installing is local; **contributing** gets a repo listed in agentry's starter catalog
-(`registry/repositories.json` in `OpenTechIL/agentry`) so anyone can `agy add <name>` by name.
+(`registry/repositories.json` in `OpenTechIL/agentry`) so anyone can `agentry add <name>` by name.
 Two routes — file an issue for a maintainer, or open the PR yourself.
 
 ### Preflight
@@ -151,7 +151,7 @@ https://github.com/<owner>/<repo> (ref: `main`, subdir: `<none>`)
 
 ### Components it provides
 
-<output of `agy list` for the source, or the repo's skills/ layout — real names only>
+<output of `agentry list` for the source, or the repo's skills/ layout — real names only>
 
 ### Notes
 
@@ -174,11 +174,11 @@ Report the issue URL back to the user.
    git switch -c catalog/add-<name>
    ```
 
-2. **Author the entry with `agy`, not by hand** — it writes the schema correctly and defaults
+2. **Author the entry with `agentry`, not by hand** — it writes the schema correctly and defaults
    to `registry/repositories.json` (run it from the clone root):
 
    ```bash
-   agy catalog add-repo https://github.com/<owner>/<repo> <name> \
+   agentry catalog add-repo https://github.com/<owner>/<repo> <name> \
      --summary "<one line>" \
      --discover                      # clone the repo and pre-fill `expose` with real names
    ```
@@ -207,11 +207,11 @@ Report the issue URL back to the user.
 ## What & why
 
 Adds `<name>` (https://github.com/<owner>/<repo>) to the starter catalog so it installs by
-name with `agy add <name>`. <One line on what the repo provides.>
+name with `agentry add <name>`. <One line on what the repo provides.>
 
 ## Checklist
 
-- [x] Catalog-only change — entry generated with `agy catalog add-repo --discover`
+- [x] Catalog-only change — entry generated with `agentry catalog add-repo --discover`
 - [x] `registry/repositories.json` parses and `uv run --extra dev pytest tests/test_registry.py` passes
 - [x] Repo is public, anonymously clonable, and pinned to ref `<ref>`
 - [x] No code/behavior change, so no new tests or docs updates
@@ -229,13 +229,13 @@ EOF
 
 ## Guardrails
 
-- Never guess a component name — use `agy list` to read the real names a source provides.
+- Never guess a component name — use `agentry list` to read the real names a source provides.
 - Catalog contributions go through a branch on a fork (or a topic branch) and a PR — never
   commit to `main` or push directly to `OpenTechIL/agentry`.
 - Don't edit `registry/repositories.json` inside the user's own project (their `.agentry/`
   store or a vendored copy); the catalog only counts in the `agentry` repo.
 - Show the user the issue/PR body before it goes out, and don't invent a summary for a repo
   you haven't looked at.
-- Surface `agy`'s own errors to the user rather than working around them.
-- Don't mix installers: if a skill is managed by `agy`, remove it with `agy remove …`, not by
+- Surface `agentry`'s own errors to the user rather than working around them.
+- Don't mix installers: if a skill is managed by `agentry`, remove it with `agentry remove …`, not by
   deleting files.

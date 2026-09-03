@@ -1,5 +1,5 @@
 # agentry — AI agent dependencies for this project.
-# Declare sources and components here; run `agy sync` to install.
+# Declare sources and components here; run `agentry sync` to install.
 version: 1
 targets:
   - claude

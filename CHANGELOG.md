@@ -10,14 +10,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `agy init` now registers agentry's curated catalog by default (name `agentry`, pointing at
+- **`agentry` is now the CLI's canonical command name**, alongside a new short alias
+  `agyx`. `agy` still works, but it is *also* the command for Google's Antigravity CLI —
+  when both are installed, PATH order silently decides which one runs. agentry now prints a
+  one-line notice on stderr if it is invoked as `agy` while PATH resolves `agy` elsewhere
+  (silence it with `AGENTRY_NO_COLLISION_WARN`), and `agentry doctor` reports the conflict
+  as a check. Every install channel ships all three names.
+- `--version` / `-V` on the root command. The bug-report template already asked for
+  `--version`, which errored — version was only available as a subcommand.
+- `agentry init` now registers agentry's curated catalog by default (name `agentry`, pointing at
   `https://raw.githubusercontent.com/OpenTechIL/agentry/refs/heads/main/registry/repositories.json`),
-  so `agy add arckit` and friends resolve on a fresh install with no `agy catalog add` step.
-  Opt out with `agy init --no-default-catalog`; drop it later with `agy catalog remove agentry`.
+  so `agentry add arckit` and friends resolve on a fresh install with no `agentry catalog add`
+  step. Opt out with `agentry init --no-default-catalog`; drop it later with
+  `agentry catalog remove agentry`.
+- New docs: `docs/config-reference.md` (every `.agentry.yml` key), `docs/authoring.md`
+  (component repos, descriptors, catalog entries) and `docs/troubleshooting.md`.
 
 ### Changed
+- Release assets are named `agentry-<version>-<target>`. A byte-identical copy is published
+  under the old `agy-` name for this release only, because `install.sh`/`install.ps1`
+  shipped before this version fetch that name when self-updating; both installers now try
+  the current name first and fall back.
+- Homebrew installs `Formula/agentry.rb`; `brew install OpenTechIL/tap/agy` keeps working
+  as a tap alias.
+- User-facing hints interpolate the command name you actually invoked, so an `agyx` user is
+  no longer told to run `agy`. Text agentry *writes to disk* keeps the canonical name, so
+  generated files stay byte-stable however the tool was invoked.
 - `.agentry.yml` writes no longer fold long scalars onto a continuation line (ruamel width),
   keeping catalog URLs on one line.
+- The module map is maintained in `docs/architecture.md` §8 only. `AGENTS.md` and
+  `CONTRIBUTING.md` link to it; their own copies had drifted and are gone.
+
+### Fixed
+- **Path confinement.** `target_profiles` / catalog-overlay `dest` and `file` values were
+  never validated, unlike `Component.path`. Since `Path(root) / "/abs"` discards `root`, a
+  catalog could write outside the project. They are now validated at parse time and
+  re-checked at the filesystem boundary by every installer. The relative-path check is also
+  cross-platform now (it previously missed `C:\…` and UNC paths).
+- **`git clone` URL allowlist.** A source URL from a catalog went straight to `git clone`,
+  and git's `ext::` transport executes a shell command at clone time.
+- **`agentry target add` asks before applying.** It previously fetched a remote driver
+  overlay, merged it into `.agentry.yml` and synced with no confirmation. It now prints the
+  destinations the overlay will write to and prompts (`--yes` for CI).
+- **Timeouts.** The catalog fetch and all three subprocess call sites (`git`, generator
+  commands, the transform agent CLI) were unbounded, so an unreachable host hung the CLI
+  with stdout captured and nothing on screen. Catalog responses are also size-capped, and
+  the scheme is re-checked after redirects.
+- Documentation accuracy: the contributor quickstart cloned a non-existent org
+  (`opentech/agentry`); CONTRIBUTING described a `release.yml` PyPI workflow that no longer
+  exists; `AGENTS.md` said seven built-in agents (there are nine) and omitted `tomlkit` from
+  the runtime deps; README claimed Windows "falls back to copies automatically" for symlinks
+  (it does not — see Troubleshooting), called Cursor "rules-only" (it supports MCP),
+  documented `source add NAME URL` without `--local`, promised a pipx route it never showed,
+  said "three ways" above four items, and omitted eight real commands including
+  `agentry remove`, which it cites twice as a headline guarantee. Dead cross-document
+  anchors are fixed, and the two em-dash headings that slugified differently on GitHub and
+  MkDocs no longer do.
 
 ## [0.1.3] — 2026-07-14
 

@@ -121,7 +121,7 @@
       ]
     },
     "use-agentry": {
-      "summary": "Teaches AI tools to route 'add skill <url>' and pasted 'npx skills add …' requests through agentry (agy), so skills stay tracked in .agentry.yml/.agentry.lock.",
+      "summary": "Teaches AI tools to route 'add skill <url>' and pasted 'npx skills add …' requests through agentry (agentry), so skills stay tracked in .agentry.yml/.agentry.lock.",
       "source": {
         "type": "git",
         "url": "https://github.com/OpenTechIL/agentry",
