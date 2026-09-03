@@ -63,6 +63,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   catalog could write outside the project. They are now validated at parse time and
   re-checked at the filesystem boundary by every installer. The relative-path check is also
   cross-platform now (it previously missed `C:\…` and UNC paths).
+- **`repo_basename` mishandled Windows paths.** It split only on `/`, so a local source
+  path like `C:\Users\me\hooksrc` came back whole — and a `link+merge` `dest` template of
+  `.claude/hooks/agentry/{repo}@{ref}/{name}` expanded to a destination outside the project.
+  The new path-confinement guard turned that into a loud refusal instead of a mangled
+  install path, and the new Windows CI job surfaced it. Also fixed the same class in
+  transitive dependency-source synthesis.
+- **Explicit UTF-8 for every file read and write.** `Path.read_text()` / `write_text()`
+  without an `encoding` use the platform locale, so content containing non-ASCII (the em
+  dashes in `CHANGELOG.md` and in `emit triggers` output) round-tripped incorrectly on
+  Windows. All ~190 call sites in the suite, plus `scripts/bump.py` and one in `cli.py`,
+  now pass `encoding="utf-8"`.
 - **`git clone` URL allowlist.** A source URL from a catalog went straight to `git clone`,
   and git's `ext::` transport executes a shell command at clone time.
 - **`agentry target add` asks before applying.** It previously fetched a remote driver

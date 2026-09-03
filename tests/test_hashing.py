@@ -54,17 +54,17 @@ def test_sync_reports_no_drift_after_line_ending_change(project: Path, local_sou
     store.add_component(Component(source="s", type=ComponentType.SKILL, name="code-reviewer"))
     store.save()
     sync(project)
-    locked = (project / ".agentry.lock").read_text()
+    locked = (project / ".agentry.lock").read_text(encoding="utf-8")
 
     # Rewrite a source file LF→CRLF (as a Windows checkout would): no real content change.
     skill = local_source / "skills" / "code-reviewer" / "SKILL.md"
-    skill.write_bytes(skill.read_text().replace("\n", "\r\n").encode("utf-8"))
+    skill.write_bytes(skill.read_text(encoding="utf-8").replace("\n", "\r\n").encode("utf-8"))
 
     rows, _ = status(project)
     assert all(r.state == "ok" for r in rows)
     # Re-resolving doesn't churn the lock hash either.
     sync(project)
-    assert (project / ".agentry.lock").read_text() == locked
+    assert (project / ".agentry.lock").read_text(encoding="utf-8") == locked
 
 
 def test_hashing_config_round_trips(project: Path):

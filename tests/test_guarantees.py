@@ -64,7 +64,7 @@ def test_remove_is_fully_reversible(tmp_path: Path, local_source: Path):
     )
     sync(proj)
     assert (proj / ".claude/skills/code-reviewer").is_symlink()
-    assert "github" in json.loads((proj / ".mcp.json").read_text())["mcpServers"]
+    assert "github" in json.loads((proj / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
 
     store.set_enabled("s/skill/code-reviewer", False)
     store.set_enabled("s/mcp/github", False)
@@ -74,7 +74,7 @@ def test_remove_is_fully_reversible(tmp_path: Path, local_source: Path):
     assert not (proj / ".claude/skills/code-reviewer").exists()
     # The MCP key is gone and the now-empty section/file is cleaned up, not left as a shell.
     assert not (proj / ".mcp.json").exists() or "github" not in json.loads(
-        (proj / ".mcp.json").read_text()
+        (proj / ".mcp.json").read_text(encoding="utf-8")
     ).get("mcpServers", {})
 
 
@@ -117,17 +117,19 @@ def test_merge_never_clobbers_hand_authored_keys(tmp_path: Path, local_source: P
     proj = tmp_path / "proj"
     store = _project(proj, local_source, Component(source="s", type=_C.MCP, name="github"))
     # A pre-existing, hand-authored MCP server the user wrote themselves.
-    (proj / ".mcp.json").write_text(json.dumps({"mcpServers": {"handmade": {"command": "mine"}}}))
+    (proj / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"handmade": {"command": "mine"}}}), encoding="utf-8"
+    )
 
     sync(proj)
-    servers = json.loads((proj / ".mcp.json").read_text())["mcpServers"]
+    servers = json.loads((proj / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert servers["handmade"] == {"command": "mine"}  # untouched
     assert "github" in servers  # ours added alongside
 
     store.set_enabled("s/mcp/github", False)
     store.save()
     sync(proj)
-    servers = json.loads((proj / ".mcp.json").read_text())["mcpServers"]
+    servers = json.loads((proj / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert servers == {"handmade": {"command": "mine"}}  # only ours removed
 
 
@@ -137,8 +139,12 @@ def test_distinct_mcp_servers_never_drop_each_other(tmp_path: Path):
     (scoped-name collision silently drops a server, last-write-wins)."""
     src = tmp_path / "src"
     (src / "mcp").mkdir(parents=True)
-    (src / "mcp" / "acme.json").write_text(json.dumps({"acme-mcp": {"command": "a"}}))
-    (src / "mcp" / "other.json").write_text(json.dumps({"other-mcp": {"command": "b"}}))
+    (src / "mcp" / "acme.json").write_text(
+        json.dumps({"acme-mcp": {"command": "a"}}), encoding="utf-8"
+    )
+    (src / "mcp" / "other.json").write_text(
+        json.dumps({"other-mcp": {"command": "b"}}), encoding="utf-8"
+    )
     proj = tmp_path / "proj"
     _project(
         proj,
@@ -147,7 +153,7 @@ def test_distinct_mcp_servers_never_drop_each_other(tmp_path: Path):
         Component(source="s", type=_C.MCP, name="other"),
     )
     sync(proj)
-    servers = json.loads((proj / ".mcp.json").read_text())["mcpServers"]
+    servers = json.loads((proj / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert {"acme-mcp", "other-mcp"} <= set(servers)
 
 

@@ -26,20 +26,23 @@ def _clear_catalog_cache():
 def make_source(root: Path) -> Path:
     """Create a source dir with one of every component type."""
     (root / "skills" / "code-reviewer").mkdir(parents=True)
-    (root / "skills" / "code-reviewer" / "SKILL.md").write_text("# code reviewer\n")
+    (root / "skills" / "code-reviewer" / "SKILL.md").write_text(
+        "# code reviewer\n", encoding="utf-8"
+    )
     (root / "agents").mkdir()
-    (root / "agents" / "planner.md").write_text("# planner\n")
+    (root / "agents" / "planner.md").write_text("# planner\n", encoding="utf-8")
     (root / "commands").mkdir()
-    (root / "commands" / "deploy.md").write_text("# deploy\n")
+    (root / "commands" / "deploy.md").write_text("# deploy\n", encoding="utf-8")
     (root / "tools" / "fmt").mkdir(parents=True)
-    (root / "tools" / "fmt" / "run.sh").write_text("echo fmt\n")
+    (root / "tools" / "fmt" / "run.sh").write_text("echo fmt\n", encoding="utf-8")
     (root / "hooks").mkdir()
     (root / "hooks" / "pre-commit-fmt.json").write_text(
-        json.dumps({"pre-commit-fmt": {"command": "fmt", "event": "PreToolUse"}})
+        json.dumps({"pre-commit-fmt": {"command": "fmt", "event": "PreToolUse"}}), encoding="utf-8"
     )
     (root / "mcp").mkdir()
     (root / "mcp" / "github.json").write_text(
-        json.dumps({"github": {"command": "npx", "args": ["-y", "server-github"]}})
+        json.dumps({"github": {"command": "npx", "args": ["-y", "server-github"]}}),
+        encoding="utf-8",
     )
     return root
 

@@ -37,7 +37,7 @@ def test_entry_imports_cli_app():
 
 
 def test_pyinstaller_spec_builds_the_canonical_binary():
-    text = Path("packaging/agentry.spec").read_text()
+    text = Path("packaging/agentry.spec").read_text(encoding="utf-8")
     assert f"name='{BIN}'" in text or f'name="{BIN}"' in text
 
 

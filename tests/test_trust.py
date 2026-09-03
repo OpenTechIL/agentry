@@ -55,7 +55,7 @@ def test_trusted_source_runs_without_allow_run(project: Path, local_source: Path
     save_lock(project, lock)
 
     res = sync(project)  # still no allow_run
-    assert (project / ".claude/skills/fake/SKILL.md").read_text() == "# fake\n"
+    assert (project / ".claude/skills/fake/SKILL.md").read_text(encoding="utf-8") == "# fake\n"
     assert any("generated g/skill/fake" in c for c in res.created)
 
 
@@ -84,7 +84,7 @@ def test_trust_dropped_when_source_sha_changes(project: Path, local_source: Path
     assert load_lock(project).entry("g").trusted is True
 
     # The source content changes → new hash → consent no longer applies.
-    (local_source / "NEWFILE.md").write_text("changed\n")
+    (local_source / "NEWFILE.md").write_text("changed\n", encoding="utf-8")
     shutil.rmtree(project / ".claude/skills/fake")  # force a re-run attempt
     res = sync(project)  # no callback this time
     assert load_lock(project).entry("g").trusted is False

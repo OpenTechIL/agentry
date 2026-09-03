@@ -231,7 +231,7 @@ def test_sync_into_gemini_driver(tmp_path: Path, local_source: Path):
 
     res = sync(proj)
     assert (proj / ".gemini/skills/code-reviewer").is_symlink()
-    settings = json.loads((proj / ".gemini/settings.json").read_text())
+    settings = json.loads((proj / ".gemini/settings.json").read_text(encoding="utf-8"))
     assert "github" in settings["mcpServers"]
 
     # Idempotent: a second sync changes nothing.

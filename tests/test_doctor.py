@@ -25,7 +25,7 @@ def _proj(tmp_path: Path, src: Path, *comps: Component) -> tuple[Path, ConfigSto
 
 def _mcp_source(root: Path, fragment: str) -> Path:
     (root / "mcp").mkdir(parents=True)
-    (root / "mcp" / "gh.json").write_text(fragment)
+    (root / "mcp" / "gh.json").write_text(fragment, encoding="utf-8")
     return root
 
 

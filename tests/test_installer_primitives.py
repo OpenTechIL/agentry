@@ -25,7 +25,7 @@ def store(tmp_path):
     """A project root with an agentry store holding one artifact."""
     artifact = tmp_path / STORE_DIR / "src" / "skills" / "hello"
     artifact.mkdir(parents=True)
-    (artifact / "SKILL.md").write_text("hi\n")
+    (artifact / "SKILL.md").write_text("hi\n", encoding="utf-8")
     return tmp_path, artifact
 
 
@@ -56,11 +56,11 @@ def test_install_link_refuses_to_clobber_an_unmanaged_file(store):
     root, artifact = store
     dest = root / ".claude/skills"
     dest.mkdir(parents=True)
-    (dest / "hello").write_text("hand-authored\n")
+    (dest / "hello").write_text("hand-authored\n", encoding="utf-8")
 
     with pytest.raises(FileExistsError, match="not managed by agentry"):
         link_inst.install_link(root, artifact, ".claude/skills/hello")
-    assert (dest / "hello").read_text() == "hand-authored\n"
+    assert (dest / "hello").read_text(encoding="utf-8") == "hand-authored\n"
 
 
 def test_install_link_refuses_to_clobber_a_foreign_symlink(store):
@@ -115,7 +115,7 @@ def test_install_copy_creates_a_real_dir_not_a_symlink(store):
     assert copy_inst.install_copy(root, artifact, ".x/hello", managed=False) == "created"
     dest = root / ".x/hello"
     assert dest.is_dir() and not dest.is_symlink()
-    assert (dest / "SKILL.md").read_text() == "hi\n"
+    assert (dest / "SKILL.md").read_text(encoding="utf-8") == "hi\n"
 
 
 def test_install_copy_is_idempotent_then_updates_on_change(store):
@@ -123,27 +123,27 @@ def test_install_copy_is_idempotent_then_updates_on_change(store):
     copy_inst.install_copy(root, artifact, ".x/hello", managed=False)
     assert copy_inst.install_copy(root, artifact, ".x/hello", managed=True) == "exists"
 
-    (artifact / "SKILL.md").write_text("changed\n")
+    (artifact / "SKILL.md").write_text("changed\n", encoding="utf-8")
     assert copy_inst.install_copy(root, artifact, ".x/hello", managed=True) == "updated"
-    assert (root / ".x/hello/SKILL.md").read_text() == "changed\n"
+    assert (root / ".x/hello/SKILL.md").read_text(encoding="utf-8") == "changed\n"
 
 
 def test_install_copy_of_a_single_file(store):
     root, _ = store
     f = root / STORE_DIR / "src" / "agents" / "planner.md"
     f.parent.mkdir(parents=True)
-    f.write_text("plan\n")
+    f.write_text("plan\n", encoding="utf-8")
     assert copy_inst.install_copy(root, f, ".x/planner.md", managed=False) == "created"
-    assert (root / ".x/planner.md").read_text() == "plan\n"
+    assert (root / ".x/planner.md").read_text(encoding="utf-8") == "plan\n"
 
 
 def test_install_copy_refuses_an_unmanaged_path(store):
     root, artifact = store
     (root / ".x").mkdir()
-    (root / ".x/hello").write_text("mine\n")
+    (root / ".x/hello").write_text("mine\n", encoding="utf-8")
     with pytest.raises(FileExistsError, match="not managed by agentry"):
         copy_inst.install_copy(root, artifact, ".x/hello", managed=False)
-    assert (root / ".x/hello").read_text() == "mine\n"
+    assert (root / ".x/hello").read_text(encoding="utf-8") == "mine\n"
 
 
 def test_remove_copy_and_state(store):
@@ -152,7 +152,7 @@ def test_remove_copy_and_state(store):
     copy_inst.install_copy(root, artifact, ".x/hello", managed=False)
     assert copy_inst.copy_state(root, artifact, ".x/hello") == "ok"
 
-    (root / ".x/hello/SKILL.md").write_text("edited\n")
+    (root / ".x/hello/SKILL.md").write_text("edited\n", encoding="utf-8")
     assert copy_inst.copy_state(root, artifact, ".x/hello") == "drift"
 
     assert copy_inst.remove_copy(root, ".x/hello") is True
@@ -173,7 +173,7 @@ def test_prune_empty_parents_stops_at_the_root(tmp_path):
 def test_prune_empty_parents_keeps_non_empty_dirs(tmp_path):
     deep = tmp_path / ".claude" / "skills" / "nested"
     deep.mkdir(parents=True)
-    (tmp_path / ".claude" / "settings.json").write_text("{}")
+    (tmp_path / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
     prune_empty_parents(tmp_path, deep)
     assert not (tmp_path / ".claude" / "skills").exists()
     assert (tmp_path / ".claude" / "settings.json").is_file()
@@ -232,5 +232,5 @@ def test_load_fragment_round_trips_json(tmp_path):
     from agentry.installers.merge import load_fragment
 
     p = tmp_path / "hooks.json"
-    p.write_text(json.dumps({"SessionStart": [{"hooks": []}]}))
+    p.write_text(json.dumps({"SessionStart": [{"hooks": []}]}), encoding="utf-8")
     assert load_fragment(p) == {"SessionStart": [{"hooks": []}]}

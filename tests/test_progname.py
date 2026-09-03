@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import tomllib
+import tomlkit
 from typer.testing import CliRunner
 
 from agentry import __version__, doctor
@@ -22,7 +22,8 @@ runner = CliRunner()
 
 
 def test_all_three_names_are_declared_as_console_scripts():
-    scripts = tomllib.loads(Path("pyproject.toml").read_text())["project"]["scripts"]
+    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
+    scripts = tomlkit.parse(pyproject)["project"]["scripts"]
     assert set(scripts) == {"agentry", "agy", "agyx"}
     assert set(scripts.values()) == {"agentry.cli:app"}
 
@@ -72,8 +73,8 @@ def test_doctor_flags_an_agy_from_a_different_install(monkeypatch, tmp_path):
     theirs = tmp_path / "theirs"
     for d in (ours, theirs):
         d.mkdir()
-    (ours / "agentry").write_text("#!/bin/sh\n")
-    (theirs / "agy").write_text("#!/bin/sh\n")
+    (ours / "agentry").write_text("#!/bin/sh\n", encoding="utf-8")
+    (theirs / "agy").write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setattr("sys.argv", [str(ours / "agentry")])
     monkeypatch.setattr(doctor.shutil, "which", lambda name: str(theirs / "agy"))
     check = doctor.command_name_check()
@@ -91,7 +92,7 @@ def test_doctor_is_quiet_when_agy_sits_beside_us(monkeypatch, tmp_path):
     bindir = tmp_path / "bin"
     bindir.mkdir()
     for name in ("agentry", "agy"):
-        (bindir / name).write_text("#!/bin/sh\n")
+        (bindir / name).write_text("#!/bin/sh\n", encoding="utf-8")
     monkeypatch.setattr("sys.argv", [str(bindir / "agentry")])
     monkeypatch.setattr(doctor.shutil, "which", lambda name: str(bindir / "agy"))
     assert doctor.command_name_check() is None

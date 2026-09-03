@@ -37,7 +37,7 @@ def test_link_install_and_idempotent(project: Path, local_source: Path):
     res = sync(project)
     link = project / ".claude/skills/code-reviewer"
     assert link.is_symlink()
-    assert (link / "SKILL.md").read_text() == "# code reviewer\n"
+    assert (link / "SKILL.md").read_text(encoding="utf-8") == "# code reviewer\n"
     assert any("link .claude/skills/code-reviewer" in c for c in res.created)
 
     res2 = sync(project)
@@ -70,7 +70,7 @@ def test_copy_install_real_file_and_idempotent(project: Path, local_source: Path
     res = sync(project)
     dest = project / ".claude/commands/deploy.md"
     assert dest.is_file() and not dest.is_symlink()
-    assert dest.read_text() == "# deploy\n"
+    assert dest.read_text(encoding="utf-8") == "# deploy\n"
     assert any("copy .claude/commands/deploy.md" in c for c in res.created)
 
     man = load_manifest(project)
@@ -85,7 +85,7 @@ def test_copy_install_real_directory(project: Path, local_source: Path):
     sync(project)
     dest = project / ".claude/skills/code-reviewer"
     assert dest.is_dir() and not dest.is_symlink()
-    assert (dest / "SKILL.md").read_text() == "# code reviewer\n"
+    assert (dest / "SKILL.md").read_text(encoding="utf-8") == "# code reviewer\n"
 
 
 def test_link_to_copy_switch_at_same_dest(project: Path, local_source: Path):
@@ -99,7 +99,7 @@ def test_link_to_copy_switch_at_same_dest(project: Path, local_source: Path):
     store.save()
     sync(project)
     assert dest.is_file() and not dest.is_symlink()
-    assert dest.read_text() == "# deploy\n"
+    assert dest.read_text(encoding="utf-8") == "# deploy\n"
     # The old symlink record is gone; the copy is tracked instead.
     man = load_manifest(project)
     assert not man.links
@@ -122,10 +122,10 @@ def test_copy_removal_deletes_and_prunes(project: Path, local_source: Path):
 def test_copy_refuses_unmanaged_file(project: Path, local_source: Path):
     own = project / ".claude/commands"
     own.mkdir(parents=True)
-    (own / "deploy.md").write_text("mine")
+    (own / "deploy.md").write_text("mine", encoding="utf-8")
     _wire_copy(project, local_source, (ComponentType.COMMAND, "deploy"))
     res = sync(project)
-    assert (own / "deploy.md").read_text() == "mine"  # never overwritten
+    assert (own / "deploy.md").read_text(encoding="utf-8") == "mine"  # never overwritten
     assert any("not managed by agentry" in w for w in res.warnings)
 
 
@@ -135,7 +135,7 @@ def test_copy_status_reports_drift(project: Path, local_source: Path):
     rows, _ = status(project)
     assert all(r.state == "ok" for r in rows)
 
-    (project / ".claude/commands/deploy.md").write_text("tampered\n")
+    (project / ".claude/commands/deploy.md").write_text("tampered\n", encoding="utf-8")
     rows, _ = status(project)
     assert any(r.state == "drift" for r in rows)
 
@@ -143,19 +143,19 @@ def test_copy_status_reports_drift(project: Path, local_source: Path):
 def test_merge_install_and_reversible(project: Path, local_source: Path):
     _wire(project, local_source, (ComponentType.MCP, "github"))
     sync(project)
-    mcp = json.loads((project / ".mcp.json").read_text())
+    mcp = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
     assert "github" in mcp["mcpServers"]
 
     # hand-add an entry that agentry must never touch
     mcp["mcpServers"]["hand-added"] = {"command": "x"}
-    (project / ".mcp.json").write_text(json.dumps(mcp))
+    (project / ".mcp.json").write_text(json.dumps(mcp), encoding="utf-8")
 
     store = ConfigStore.load(project)
     store.set_enabled("s/mcp/github", False)
     store.save()
     sync(project)
 
-    after = json.loads((project / ".mcp.json").read_text())
+    after = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
     assert "github" not in after["mcpServers"]
     assert "hand-added" in after["mcpServers"]
 
@@ -173,12 +173,13 @@ def test_root_mcp_json_merges_without_path(project: Path, tmp_path: Path):
                     "docs": {"type": "http", "url": "https://example.com/docs"},
                 }
             }
-        )
+        ),
+        encoding="utf-8",
     )
     _wire(project, src, (ComponentType.MCP, "mcp"))
     res = sync(project)
     assert not res.warnings
-    mcp = json.loads((project / ".mcp.json").read_text())
+    mcp = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
     assert mcp["mcpServers"].keys() == {"weather", "docs"}
 
     rows, _ = status(project)
@@ -189,7 +190,7 @@ def test_root_mcp_json_merges_without_path(project: Path, tmp_path: Path):
     store.set_enabled("s/mcp/mcp", False)
     store.save()
     sync(project)
-    after = json.loads((project / ".mcp.json").read_text())
+    after = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
     assert "mcpServers" not in after or not after["mcpServers"]
 
 
@@ -199,20 +200,21 @@ def test_sync_warns_on_unset_env_var_in_mcp(project: Path, tmp_path: Path):
     src = tmp_path / "envsrc"
     (src / "mcp").mkdir(parents=True)
     (src / "mcp" / "gh.json").write_text(
-        json.dumps({"gh": {"command": "x", "env": {"TOKEN": "${UNSET_SYNC_VAR}"}}})
+        json.dumps({"gh": {"command": "x", "env": {"TOKEN": "${UNSET_SYNC_VAR}"}}}),
+        encoding="utf-8",
     )
     _wire(project, src, (ComponentType.MCP, "gh"))
     res = sync(project)
     assert any("UNSET_SYNC_VAR" in w and "unset" in w for w in res.warnings), res.warnings
     # The server is still merged (the warning doesn't block install).
-    assert "gh" in json.loads((project / ".mcp.json").read_text())["mcpServers"]
+    assert "gh" in json.loads((project / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
 
 
 def test_sync_does_not_warn_on_env_var_with_default(project: Path, tmp_path: Path):
     src = tmp_path / "envsrc2"
     (src / "mcp").mkdir(parents=True)
     (src / "mcp" / "gh.json").write_text(
-        json.dumps({"gh": {"command": "x", "args": ["${HOST:-localhost}"]}})
+        json.dumps({"gh": {"command": "x", "args": ["${HOST:-localhost}"]}}), encoding="utf-8"
     )
     _wire(project, src, (ComponentType.MCP, "gh"))
     res = sync(project)
@@ -234,10 +236,10 @@ def test_safety_unmanaged_file_untouched(project: Path, local_source: Path):
     # A user-owned file sitting where a component would link.
     (project / ".claude/skills").mkdir(parents=True)
     own = project / ".claude/skills/mine"
-    own.write_text("mine")
+    own.write_text("mine", encoding="utf-8")
     _wire(project, local_source, (ComponentType.SKILL, "code-reviewer"))
     sync(project)
-    assert own.read_text() == "mine"  # never removed
+    assert own.read_text(encoding="utf-8") == "mine"  # never removed
     assert (project / ".claude/skills/code-reviewer").is_symlink()
 
 
@@ -249,7 +251,9 @@ def test_determinism_resync_from_lock(project: Path, local_source: Path):
     shutil.rmtree(project / ".agentry")
     sync(project)
     assert load_lock(project).entry("s").resolved == locked
-    assert (project / ".claude/skills/code-reviewer/SKILL.md").read_text() == "# code reviewer\n"
+    assert (project / ".claude/skills/code-reviewer/SKILL.md").read_text(
+        encoding="utf-8"
+    ) == "# code reviewer\n"
 
 
 def test_status_reports_drift(project: Path, local_source: Path):
@@ -274,7 +278,7 @@ def test_subdir_source_discovers_and_installs(project: Path, nested_source: Path
     res = sync(project)
     link = project / ".claude/skills/code-reviewer"
     assert link.is_symlink()
-    assert (link / "SKILL.md").read_text() == "# code reviewer\n"
+    assert (link / "SKILL.md").read_text(encoding="utf-8") == "# code reviewer\n"
     assert not res.warnings
     rows, _ = status(project)
     assert all(r.state == "ok" for r in rows)
@@ -334,7 +338,7 @@ def test_generate_runs_and_tracks_and_removes(project: Path, local_source: Path)
     _wire_generator(project, local_source, spec)
     res = sync(project, allow_run=True)
     produced = project / ".claude/skills/fake"
-    assert (produced / "SKILL.md").read_text() == "# fake skill\n"
+    assert (produced / "SKILL.md").read_text(encoding="utf-8") == "# fake skill\n"
     assert any("generated g/skill/fake" in c for c in res.created)
 
     # Manifest tracks the produced path.
@@ -423,12 +427,13 @@ def test_wrapped_hooks_fragment_installs_flat(project: Path, tmp_path: Path):
                     "Stop": [{"matcher": ".*", "hooks": [{"type": "command", "command": "node"}]}]
                 },
             }
-        )
+        ),
+        encoding="utf-8",
     )
     _wire(project, src, (ComponentType.HOOK, "hooks"))
     sync(project)
 
-    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     assert "Stop" in settings["hooks"]  # event entry merged directly
     assert "hooks" not in settings["hooks"]  # not double-nested
     assert "description" not in settings["hooks"]  # metadata dropped
@@ -441,7 +446,7 @@ def test_wrapped_hooks_fragment_installs_flat(project: Path, tmp_path: Path):
     store.set_enabled("s/hook/hooks", False)
     store.save()
     sync(project)
-    after = json.loads((project / ".claude/settings.json").read_text())
+    after = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     assert "hooks" not in after or "Stop" not in after.get("hooks", {})
 
 
@@ -452,13 +457,16 @@ def _multi_harness_hooks_source(tmp_path: Path) -> Path:
     (src / "hooks" / "hooks.json").write_text(
         json.dumps(
             {"hooks": {"SessionStart": [{"matcher": "startup", "hooks": [{"command": "claude"}]}]}}
-        )
+        ),
+        encoding="utf-8",
     )
     (src / "hooks" / "hooks-cursor.json").write_text(
-        json.dumps({"version": 1, "hooks": {"sessionStart": [{"command": "cursor"}]}})
+        json.dumps({"version": 1, "hooks": {"sessionStart": [{"command": "cursor"}]}}),
+        encoding="utf-8",
     )
     (src / "hooks" / "hooks-codex.json").write_text(
-        json.dumps({"hooks": {"SessionStart": [{"hooks": [{"command": "codex"}]}]}})
+        json.dumps({"hooks": {"SessionStart": [{"hooks": [{"command": "codex"}]}]}}),
+        encoding="utf-8",
     )
     return src
 
@@ -475,7 +483,7 @@ def test_foreign_harness_hook_variants_not_merged_into_claude(project: Path, tmp
     )
     sync(project)
 
-    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     assert "SessionStart" in settings["hooks"]  # canonical Claude event kept
     assert "sessionStart" not in settings["hooks"]  # Cursor's camelCase variant skipped
     # The Codex variant (valid key, wrong command) must not overwrite the Claude one.
@@ -496,7 +504,8 @@ def test_foreign_harness_key_is_self_healed_on_sync(project: Path, tmp_path: Pat
                     "sessionStart": [{"command": "cursor"}],
                 }
             }
-        )
+        ),
+        encoding="utf-8",
     )
     from agentry.manifest import save_manifest
     from agentry.models import InstalledMerge
@@ -523,7 +532,7 @@ def test_foreign_harness_key_is_self_healed_on_sync(project: Path, tmp_path: Pat
     _wire(project, src, (ComponentType.HOOK, "hooks"), (ComponentType.HOOK, "hooks-cursor"))
     sync(project)
 
-    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     assert "SessionStart" in settings["hooks"]
     assert "sessionStart" not in settings["hooks"]
 
@@ -535,12 +544,13 @@ def test_unknown_claude_hook_event_is_dropped_with_warning(project: Path, tmp_pa
     (src / "hooks" / "hooks.json").write_text(
         json.dumps(
             {"hooks": {"SessionStart": [{"command": "ok"}], "Frobnicate": [{"command": "no"}]}}
-        )
+        ),
+        encoding="utf-8",
     )
     _wire(project, src, (ComponentType.HOOK, "hooks"))
     res = sync(project)
 
-    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     assert "SessionStart" in settings["hooks"]
     assert "Frobnicate" not in settings["hooks"]
     assert any("Frobnicate" in w and "not a recognized" in w for w in res.warnings)
@@ -569,13 +579,14 @@ def test_plain_merge_warns_on_plugin_root_command(project: Path, tmp_path: Path)
                     ]
                 }
             }
-        )
+        ),
+        encoding="utf-8",
     )
     _wire(project, src, (ComponentType.HOOK, "hooks"))
     res = sync(project)
 
     # The entry is still merged (the guard only warns; it does not change behavior)...
-    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     assert "SessionStart" in settings["hooks"]
     # ...but a warning flags the unresolvable variable and recommends link+merge.
     assert any("PLUGIN_ROOT" in w and "link+merge" in w for w in res.warnings), res.warnings
@@ -585,7 +596,7 @@ def _hooks_source(tmp_path: Path) -> Path:
     """A plugin-style source: a hooks/ dir of scripts + a plugin-shaped hooks.json."""
     src = tmp_path / "hooksrc"
     (src / "hooks").mkdir(parents=True)
-    (src / "hooks" / "graph.mjs").write_text("export default () => {}\n")
+    (src / "hooks" / "graph.mjs").write_text("export default () => {}\n", encoding="utf-8")
     (src / "hooks" / "hooks.json").write_text(
         json.dumps(
             {
@@ -604,7 +615,8 @@ def _hooks_source(tmp_path: Path) -> Path:
                     ]
                 },
             }
-        )
+        ),
+        encoding="utf-8",
     )
     return src
 
@@ -637,10 +649,10 @@ def test_link_merge_installs_dir_and_rewrites_commands(project: Path, tmp_path: 
     # The script dir is symlinked in and resolves.
     link = project / ".claude/hooks/hooks"
     assert link.is_symlink()
-    assert (link / "graph.mjs").read_text() == "export default () => {}\n"
+    assert (link / "graph.mjs").read_text(encoding="utf-8") == "export default () => {}\n"
 
     # The hooks merged flat under "hooks", with the command path rewritten.
-    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert cmd == "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/hooks/graph.mjs"
     assert "${CLAUDE_PLUGIN_ROOT}" not in cmd
@@ -661,9 +673,9 @@ def test_link_merge_reversible(project: Path, tmp_path: Path):
     sync(project)
 
     # Hand-add an entry agentry must not touch.
-    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     settings["hooks"]["Stop"] = [{"matcher": "x"}]
-    (project / ".claude/settings.json").write_text(json.dumps(settings))
+    (project / ".claude/settings.json").write_text(json.dumps(settings), encoding="utf-8")
 
     store = ConfigStore.load(project)
     store.set_enabled("s/hook/hooks", False)
@@ -671,7 +683,7 @@ def test_link_merge_reversible(project: Path, tmp_path: Path):
     sync(project)
 
     assert not (project / ".claude/hooks/hooks").exists()  # symlink gone
-    after = json.loads((project / ".claude/settings.json").read_text())
+    after = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     assert "PreToolUse" not in after.get("hooks", {})  # our key removed
     assert after["hooks"]["Stop"] == [{"matcher": "x"}]  # hand-added kept
 
@@ -702,9 +714,9 @@ def test_link_merge_namespaces_dest_by_repo_and_ref(project: Path, tmp_path: Pat
 
     link = project / ".claude/hooks/agentry/hooksrc@main/hooks"
     assert link.is_symlink()
-    assert (link / "graph.mjs").read_text() == "export default () => {}\n"
+    assert (link / "graph.mjs").read_text(encoding="utf-8") == "export default () => {}\n"
 
-    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert cmd == "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/hooksrc@main/hooks/graph.mjs"
 
@@ -756,7 +768,8 @@ def test_link_merge_warns_on_unrewritable_command(project: Path, tmp_path: Path)
                     ]
                 }
             }
-        )
+        ),
+        encoding="utf-8",
     )
     _wire_link_merge_hooks(project, src)
     res = sync(project)
@@ -794,7 +807,7 @@ def test_link_merge_file_component_no_plugin_root_unset_warning(project: Path, t
         res.warnings
     )
 
-    settings = json.loads((project / ".claude/settings.json").read_text())
+    settings = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
     cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert "${CLAUDE_PLUGIN_ROOT}" not in cmd
     assert cmd == "node ${CLAUDE_PROJECT_DIR}/.claude/hooks/agentry/hooksrc@main/hooks/graph.mjs"
@@ -804,7 +817,7 @@ def test_explicit_path_root_is_skill(project: Path, tmp_path: Path):
     # A repo whose *root* is the skill (no skills/<name>/ wrapper, no descriptor).
     skill_repo = tmp_path / "cool-skill"
     skill_repo.mkdir()
-    (skill_repo / "SKILL.md").write_text("# cool\n")
+    (skill_repo / "SKILL.md").write_text("# cool\n", encoding="utf-8")
     store = ConfigStore.load(project)
     store.add_source(Source(name="cs", type=SourceType.LOCAL, path=str(skill_repo)))
     store.add_component(
@@ -815,7 +828,7 @@ def test_explicit_path_root_is_skill(project: Path, tmp_path: Path):
     res = sync(project)
     link = project / ".claude/skills/cool-skill"
     assert link.is_symlink()
-    assert (link / "SKILL.md").read_text() == "# cool\n"
+    assert (link / "SKILL.md").read_text(encoding="utf-8") == "# cool\n"
     assert not res.warnings
 
     # Idempotent.
@@ -837,7 +850,7 @@ def test_explicit_path_subdir_artifact(project: Path, tmp_path: Path):
     # Skill at an arbitrary subpath, not under skills/.
     repo = tmp_path / "repo"
     (repo / "packages" / "my-skill").mkdir(parents=True)
-    (repo / "packages" / "my-skill" / "SKILL.md").write_text("# mine\n")
+    (repo / "packages" / "my-skill" / "SKILL.md").write_text("# mine\n", encoding="utf-8")
     store = ConfigStore.load(project)
     store.add_source(Source(name="r", type=SourceType.LOCAL, path=str(repo)))
     store.add_component(
@@ -847,7 +860,7 @@ def test_explicit_path_subdir_artifact(project: Path, tmp_path: Path):
     res = sync(project)
     link = project / ".claude/skills/my-skill"
     assert link.is_symlink()
-    assert (link / "SKILL.md").read_text() == "# mine\n"
+    assert (link / "SKILL.md").read_text(encoding="utf-8") == "# mine\n"
     assert not res.warnings
 
 

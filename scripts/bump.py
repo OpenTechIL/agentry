@@ -83,9 +83,16 @@ def main(argv: list[str]) -> int:
 
     today = datetime.date.today().isoformat()
     try:
-        PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), version))
-        INIT.write_text(bump_init(INIT.read_text(), version))
-        CHANGELOG.write_text(bump_changelog(CHANGELOG.read_text(), version, today))
+        # CHANGELOG.md carries em dashes, so the encoding must be explicit: on Windows the
+        # locale default would mangle them on the round-trip.
+        PYPROJECT.write_text(
+            bump_pyproject(PYPROJECT.read_text(encoding="utf-8"), version), encoding="utf-8"
+        )
+        INIT.write_text(bump_init(INIT.read_text(encoding="utf-8"), version), encoding="utf-8")
+        CHANGELOG.write_text(
+            bump_changelog(CHANGELOG.read_text(encoding="utf-8"), version, today),
+            encoding="utf-8",
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

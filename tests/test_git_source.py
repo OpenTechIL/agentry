@@ -23,7 +23,7 @@ def test_git_resolve_and_update(project: Path, git_source: Path):
     assert link.is_symlink() and (link / "SKILL.md").exists()
 
     # Advance the source by a commit.
-    (git_source / "skills" / "code-reviewer" / "SKILL.md").write_text("# v2\n")
+    (git_source / "skills" / "code-reviewer" / "SKILL.md").write_text("# v2\n", encoding="utf-8")
     env = {
         **os.environ,
         "GIT_AUTHOR_NAME": "t",
@@ -41,4 +41,4 @@ def test_git_resolve_and_update(project: Path, git_source: Path):
     sync(project, update=True)
     sha2 = load_lock(project).entry("g").resolved
     assert sha2 != sha1
-    assert (link / "SKILL.md").read_text() == "# v2\n"
+    assert (link / "SKILL.md").read_text(encoding="utf-8") == "# v2\n"

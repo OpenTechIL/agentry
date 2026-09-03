@@ -15,15 +15,15 @@ def test_create_and_parse(project: Path):
 
 def test_roundtrip_preserves_comments(project: Path):
     path = ConfigStore.path_for(project)
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     text = text.replace("targets:", "# my comment\ntargets:")
-    path.write_text(text)
+    path.write_text(text, encoding="utf-8")
 
     store = ConfigStore.load(project)
     store.add_source(Source(name="s", type=SourceType.LOCAL, path="../x"))
     store.save()
 
-    assert "# my comment" in path.read_text()
+    assert "# my comment" in path.read_text(encoding="utf-8")
 
 
 def test_mutators(project: Path):

@@ -68,4 +68,4 @@ def test_successful_fetch_is_cached_in_the_store(tmp_path, monkeypatch):
     with _fake_urlopen(monkeypatch, body=b'{"repositories": {}}'):
         raw = reg._load_raw(tmp_path, _registry())
     assert raw == '{"repositories": {}}'
-    assert reg._cache_path(tmp_path, _registry()).read_text() == raw
+    assert reg._cache_path(tmp_path, _registry()).read_text(encoding="utf-8") == raw

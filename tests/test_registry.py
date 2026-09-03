@@ -29,7 +29,7 @@ def _skill_repo(tmp_path: Path) -> Path:
     """A repo whose skill lives at a non-conventional path (needs an `expose` entry)."""
     repo = tmp_path / "cool"
     (repo / ".claude" / "skills" / "cool").mkdir(parents=True)
-    (repo / ".claude" / "skills" / "cool" / "SKILL.md").write_text("# cool\n")
+    (repo / ".claude" / "skills" / "cool" / "SKILL.md").write_text("# cool\n", encoding="utf-8")
     return repo
 
 
@@ -67,7 +67,7 @@ def _write_catalog(tmp_path: Path, skill_repo: Path) -> Path:
         },
     }
     path = tmp_path / "repositories.json"
-    path.write_text(json.dumps(catalog))
+    path.write_text(json.dumps(catalog), encoding="utf-8")
     return path
 
 
@@ -186,7 +186,8 @@ def _overlay_catalog(tmp_path: Path) -> Path:
                     }
                 },
             }
-        )
+        ),
+        encoding="utf-8",
     )
     return path
 
@@ -213,7 +214,7 @@ def test_find_and_list_target_overlays(tmp_path: Path):
 def test_catalog_without_targets_section_is_valid(tmp_path: Path):
     # A catalog that predates the `targets` field still loads (additive, default empty).
     path = tmp_path / "repos.json"
-    path.write_text(json.dumps({"version": 1, "repositories": {}}))
+    path.write_text(json.dumps({"version": 1, "repositories": {}}), encoding="utf-8")
     config = Config(repositories=[Registry(name="r", location=str(path))])
     assert reg.load_catalog(tmp_path, config.repositories[0]).targets == {}
     assert reg.list_targets(tmp_path, config) == []
@@ -221,7 +222,7 @@ def test_catalog_without_targets_section_is_valid(tmp_path: Path):
 
 def test_invalid_catalog_errors(tmp_path: Path):
     bad = tmp_path / "bad.json"
-    bad.write_text("{ not json")
+    bad.write_text("{ not json", encoding="utf-8")
     config = Config(repositories=[Registry(name="r", location=str(bad))])
     with pytest.raises(reg.RegistryError, match="invalid index"):
         reg.load_catalog(tmp_path, config.repositories[0])
@@ -240,7 +241,7 @@ def test_add_exposed_link_skill(tmp_path, monkeypatch):
 
     link = project / ".claude/skills/cool"
     assert link.is_symlink()
-    assert (link / "SKILL.md").read_text() == "# cool\n"
+    assert (link / "SKILL.md").read_text(encoding="utf-8") == "# cool\n"
     # Resolved into a real source + component in config.
     cfg = ConfigStore.load(project).parsed()
     assert cfg.source("cool") is not None
@@ -264,7 +265,7 @@ def test_add_exposed_generate_skill_gated(tmp_path, monkeypatch):
     # With --allow-run on a later sync: executes.
     res2 = runner.invoke(app, ["sync", "--allow-run"])
     assert res2.exit_code == 0, res2.output
-    assert (project / ".claude/skills/fake/SKILL.md").read_text() == "# fake\n"
+    assert (project / ".claude/skills/fake/SKILL.md").read_text(encoding="utf-8") == "# fake\n"
 
 
 def test_add_unknown_repo_errors(tmp_path, monkeypatch):
@@ -295,7 +296,7 @@ def test_shipped_catalog_is_valid():
     from agentry.models import RepositoryIndex
 
     path = Path(__file__).resolve().parent.parent / "registry" / "repositories.json"
-    idx = RepositoryIndex.model_validate(json.loads(path.read_text()))
+    idx = RepositoryIndex.model_validate(json.loads(path.read_text(encoding="utf-8")))
     assert {"arckit", "ui-ux-pro-max", "graphify"} <= set(idx.repositories)
 
     ui = idx.repositories["ui-ux-pro-max"].expose[0]
@@ -310,7 +311,7 @@ def test_shipped_catalog_exposes_use_agentry_skill():
     from agentry.models import RepositoryIndex
 
     path = Path(__file__).resolve().parent.parent / "registry" / "repositories.json"
-    idx = RepositoryIndex.model_validate(json.loads(path.read_text()))
+    idx = RepositoryIndex.model_validate(json.loads(path.read_text(encoding="utf-8")))
     entry = idx.repositories["use-agentry"]
     assert entry.source.url == "https://github.com/OpenTechIL/agentry"
     exposed = entry.expose[0]
@@ -325,7 +326,7 @@ def test_shipped_repositories_catalog_has_arckit_hook_profile():
     from agentry.models import RepositoryIndex, Strategy
 
     path = Path(__file__).resolve().parent.parent / "registry" / "repositories.json"
-    idx = RepositoryIndex.model_validate(json.loads(path.read_text()))
+    idx = RepositoryIndex.model_validate(json.loads(path.read_text(encoding="utf-8")))
     arckit = idx.repositories["arckit"]
     rule = arckit.target_profiles["claude"][ComponentType.HOOK]
     assert rule.strategy is Strategy.LINK_MERGE
@@ -341,11 +342,11 @@ def _multi_repo(tmp_path: Path) -> Path:
     """A conventional-layout repo with one skill, one command, one agent (all discoverable)."""
     repo = tmp_path / "plugin"
     (repo / "skills" / "alpha").mkdir(parents=True)
-    (repo / "skills" / "alpha" / "SKILL.md").write_text("# alpha\n")
+    (repo / "skills" / "alpha" / "SKILL.md").write_text("# alpha\n", encoding="utf-8")
     (repo / "commands").mkdir(parents=True)
-    (repo / "commands" / "beta.md").write_text("# beta\n")
+    (repo / "commands" / "beta.md").write_text("# beta\n", encoding="utf-8")
     (repo / "agents").mkdir(parents=True)
-    (repo / "agents" / "gamma.md").write_text("# gamma\n")
+    (repo / "agents" / "gamma.md").write_text("# gamma\n", encoding="utf-8")
     return repo
 
 
@@ -355,7 +356,7 @@ def _write_multi_catalog(tmp_path: Path, source: Path) -> Path:
         "repositories": {"demo": {"source": {"type": "local", "path": str(source)}}},
     }
     path = tmp_path / "repositories.json"
-    path.write_text(json.dumps(catalog))
+    path.write_text(json.dumps(catalog), encoding="utf-8")
     return path
 
 
@@ -423,7 +424,7 @@ def _plugin_repo(tmp_path: Path) -> Path:
     """A minimal local source with one discoverable component (so `agy add` succeeds)."""
     repo = tmp_path / "plugin"
     (repo / "skills" / "demo").mkdir(parents=True)
-    (repo / "skills" / "demo" / "SKILL.md").write_text("# demo\n")
+    (repo / "skills" / "demo" / "SKILL.md").write_text("# demo\n", encoding="utf-8")
     return repo
 
 
@@ -449,7 +450,7 @@ def _write_hook_catalog(tmp_path: Path, source: Path) -> Path:
         },
     }
     path = tmp_path / "repositories.json"
-    path.write_text(json.dumps(catalog))
+    path.write_text(json.dumps(catalog), encoding="utf-8")
     return path
 
 
@@ -581,7 +582,7 @@ def test_catalog_add_repo_minimal(tmp_path):
         app, ["catalog", "add-repo", "https://github.com/o/r", "cool", "--file", str(catalog)]
     )
     assert result.exit_code == 0, result.output
-    doc = json.loads(catalog.read_text())
+    doc = json.loads(catalog.read_text(encoding="utf-8"))
     entry = doc["repositories"]["cool"]
     assert entry["source"] == {"type": "git", "url": "https://github.com/o/r", "ref": "main"}
     assert "expose" not in entry
@@ -602,7 +603,7 @@ def test_add_entry_keeps_non_default_flags(tmp_path):
             source=RegistrySource(url="https://github.com/o/r"), copy=True, namespaced=False
         ),
     )
-    entry = json.loads(catalog.read_text())["repositories"]["cool"]
+    entry = json.loads(catalog.read_text(encoding="utf-8"))["repositories"]["cool"]
     assert entry["copy"] is True
     assert entry["namespaced"] is False
 
@@ -620,7 +621,7 @@ def test_catalog_add_repo_derives_name_and_infers_ref_subdir(tmp_path):
         ],
     )
     assert result.exit_code == 0, result.output
-    entry = json.loads(catalog.read_text())["repositories"]["widget"]
+    entry = json.loads(catalog.read_text(encoding="utf-8"))["repositories"]["widget"]
     assert entry["source"] == {
         "type": "git",
         "url": "https://github.com/acme/widget",
@@ -644,7 +645,9 @@ def test_catalog_add_repo_summary_and_duplicate(tmp_path):
             str(catalog),
         ],
     )
-    assert json.loads(catalog.read_text())["repositories"]["cool"]["summary"] == "hi"
+    assert (
+        json.loads(catalog.read_text(encoding="utf-8"))["repositories"]["cool"]["summary"] == "hi"
+    )
 
     dup = runner.invoke(
         app, ["catalog", "add-repo", "https://github.com/o/r2", "cool", "--file", str(catalog)]
@@ -652,7 +655,7 @@ def test_catalog_add_repo_summary_and_duplicate(tmp_path):
     assert dup.exit_code == 1
     # The original entry is untouched (no partial overwrite).
     assert (
-        json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"]
+        json.loads(catalog.read_text(encoding="utf-8"))["repositories"]["cool"]["source"]["url"]
         == "https://github.com/o/r"
     )
 
@@ -670,7 +673,7 @@ def test_catalog_add_repo_summary_and_duplicate(tmp_path):
     )
     assert forced.exit_code == 0
     assert (
-        json.loads(catalog.read_text())["repositories"]["cool"]["source"]["url"]
+        json.loads(catalog.read_text(encoding="utf-8"))["repositories"]["cool"]["source"]["url"]
         == "https://github.com/o/r2"
     )
 
@@ -706,7 +709,7 @@ def test_catalog_add_repo_discover(tmp_path, monkeypatch, git_source):
         ],
     )
     assert result.exit_code == 0, result.output
-    expose = json.loads(catalog.read_text())["repositories"]["demo"]["expose"]
+    expose = json.loads(catalog.read_text(encoding="utf-8"))["repositories"]["demo"]["expose"]
     pairs = {(e["type"], e["name"]) for e in expose}
     assert ("skill", "code-reviewer") in pairs
     assert ("agent", "planner") in pairs

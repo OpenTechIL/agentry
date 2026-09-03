@@ -30,7 +30,7 @@ def _mcp_source(root: Path, **servers: dict) -> Path:
         # The component name is the file stem; the *key* is the fragment's top-level key,
         # which is what lands in the merged config. Use the entry's own declared key.
         key = entry.pop("__key__", name)
-        (src / "mcp" / f"{name}.json").write_text(json.dumps({key: entry}))
+        (src / "mcp" / f"{name}.json").write_text(json.dumps({key: entry}), encoding="utf-8")
     return src
 
 
@@ -57,12 +57,12 @@ def test_copilot_merge_preserves_hand_authored_vscode_mcp_json(project: Path, lo
         "servers": {"my-server": {"command": "mine", "args": ["--keep"]}},
         "inputs": [{"id": "token", "type": "promptString"}],
     }
-    (vscode / "mcp.json").write_text(json.dumps(hand))
+    (vscode / "mcp.json").write_text(json.dumps(hand), encoding="utf-8")
 
     res = sync(project)
     assert not res.warnings, res.warnings
 
-    after = json.loads((vscode / "mcp.json").read_text())
+    after = json.loads((vscode / "mcp.json").read_text(encoding="utf-8"))
     assert after["servers"]["github"]  # managed server merged in
     assert after["servers"]["my-server"] == {"command": "mine", "args": ["--keep"]}  # untouched
     assert after["inputs"] == hand["inputs"]  # non-server sibling untouched
@@ -73,7 +73,7 @@ def test_copilot_merge_preserves_hand_authored_vscode_mcp_json(project: Path, lo
     store.save()
     sync(project)
 
-    final = json.loads((vscode / "mcp.json").read_text())
+    final = json.loads((vscode / "mcp.json").read_text(encoding="utf-8"))
     assert "github" not in final["servers"]
     assert final["servers"]["my-server"] == {"command": "mine", "args": ["--keep"]}
     assert final["inputs"] == hand["inputs"]
@@ -98,7 +98,7 @@ def test_scoped_mcp_names_do_not_collide(project: Path, tmp_path: Path):
     res = sync(project)
     assert not res.warnings, res.warnings
 
-    servers = json.loads((project / ".mcp.json").read_text())["mcpServers"]
+    servers = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert servers["@acme/mcp"] == {"command": "acme"}
     assert servers["@other/mcp"] == {"command": "other"}
     assert "mcp" not in servers  # the scoped names were NOT truncated to a shared "mcp" key
@@ -112,6 +112,6 @@ def test_scoped_mcp_names_do_not_collide(project: Path, tmp_path: Path):
     store.set_enabled("s/mcp/acme", False)
     store.save()
     sync(project)
-    after = json.loads((project / ".mcp.json").read_text())["mcpServers"]
+    after = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"]
     assert "@acme/mcp" not in after
     assert after["@other/mcp"] == {"command": "other"}

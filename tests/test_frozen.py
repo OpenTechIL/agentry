@@ -47,6 +47,8 @@ def test_frozen_rejects_drifted_source(tmp_path: Path, local_source: Path):
     _project_with_source(proj, local_source)
     sync(proj)  # pin the current content hash
     # Mutate the local source so its content hash no longer matches the lock.
-    (local_source / "skills" / "code-reviewer" / "SKILL.md").write_text("# changed\n")
+    (local_source / "skills" / "code-reviewer" / "SKILL.md").write_text(
+        "# changed\n", encoding="utf-8"
+    )
     with pytest.raises(ResolveError, match="drifted"):
         sync(proj, frozen=True)
