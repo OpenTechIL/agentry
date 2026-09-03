@@ -23,6 +23,11 @@ from .discovery import index as discovery_index
 from .models import ComponentType, Config
 from .resolver import effective_root
 
+#: Seconds to allow an agent CLI to rewrite one component. Generous, because a model call
+#: is slow — but bounded, because stdout is captured and a command that waits on stdin
+#: would otherwise hang the CLI with no output at all.
+AGENT_TIMEOUT = 600.0
+
 
 class TransformError(RuntimeError):
     """The configured agent command failed or produced no output."""
@@ -222,10 +227,19 @@ def run_agent(command: list[str], prompt: str) -> str:
         )
     try:
         proc = subprocess.run(  # noqa: S603 — argv list from user config, no shell
-            command, input=prompt, capture_output=True, text=True, check=True
+            command,
+            input=prompt,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=AGENT_TIMEOUT,
         )
     except FileNotFoundError as exc:
         raise TransformError(f"transform command not found: {command[0]}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise TransformError(
+            f"transform command timed out after {AGENT_TIMEOUT:.0f}s: {' '.join(command)}"
+        ) from exc
     except subprocess.CalledProcessError as exc:
         raise TransformError(
             f"transform command failed ({' '.join(command)}): {exc.stderr.strip() or exc}"

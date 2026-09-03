@@ -29,13 +29,22 @@ from .models import (
     Strategy,
 )
 
+#: Seconds to wait for a catalog fetch. urllib's default is the *global socket* timeout,
+#: i.e. none — without this a hung catalog host blocks ``add``/``list``/``sync`` forever,
+#: and ``init`` now registers a remote catalog by default.
+FETCH_TIMEOUT = 15.0
+
+#: Hard cap on a catalog response. A catalog is a small JSON index; anything larger is a
+#: misconfigured URL or a hostile host, and the body gets written to the store cache.
+MAX_CATALOG_BYTES = 8 * 1024 * 1024
+
 
 class RegistryError(RuntimeError):
     pass
 
 
 def _is_url(location: str) -> bool:
-    return location.startswith("http://") or location.startswith("https://")
+    return location.startswith(("http://", "https://"))
 
 
 def _normalize_url(location: str) -> str:
@@ -93,8 +102,22 @@ def _load_raw(root: Path, registry: Registry) -> str:
             url, headers={"User-Agent": "agentry", "Accept": "application/json"}
         )
         try:
-            with urllib.request.urlopen(req) as resp:  # noqa: S310 (http(s) only, gated above)
-                raw = resp.read().decode("utf-8")
+            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:  # noqa: S310
+                # Re-check after redirects: the pre-flight check only covered the URL we
+                # asked for, and a 3xx can hand us back any scheme urllib is willing to open.
+                final = getattr(resp, "url", url) or url
+                if not _is_url(final):
+                    raise RegistryError(
+                        f"catalog '{registry.name}': refused redirect to non-http(s) {final!r}"
+                    )
+                # read one byte past the cap so an over-size body is detected, not truncated.
+                body = resp.read(MAX_CATALOG_BYTES + 1)
+                if len(body) > MAX_CATALOG_BYTES:
+                    raise RegistryError(
+                        f"catalog '{registry.name}': response exceeds "
+                        f"{MAX_CATALOG_BYTES // (1024 * 1024)} MiB — refusing to cache it"
+                    )
+                raw = body.decode("utf-8")
         except OSError as exc:
             raise RegistryError(f"catalog '{registry.name}': fetch failed: {exc}") from exc
         cache = _cache_path(root, registry)

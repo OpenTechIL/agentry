@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 from ..resolver import store_dir
-from ._paths import prune_empty_parents
+from ._paths import prune_empty_parents, require_confined
 
 
 def _link_target(artifact: Path, dest: Path) -> str:
@@ -42,7 +42,7 @@ def install_link(root: Path, artifact: Path, dest_rel: str) -> str:
     Returns one of ``"created"``, ``"updated"``, ``"exists"``.
     Refuses to overwrite a path that isn't already a managed link.
     """
-    dest = root / dest_rel
+    dest = require_confined(root, dest_rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
     rel_target = _link_target(artifact, dest)
 
@@ -63,7 +63,7 @@ def install_link(root: Path, artifact: Path, dest_rel: str) -> str:
 
 def remove_link(root: Path, dest_rel: str) -> bool:
     """Remove a managed symlink. No-op (returns False) if it isn't ours."""
-    dest = root / dest_rel
+    dest = require_confined(root, dest_rel)
     if is_managed_link(root, dest):
         dest.unlink()
         prune_empty_parents(root, dest.parent)
@@ -73,7 +73,7 @@ def remove_link(root: Path, dest_rel: str) -> bool:
 
 def link_state(root: Path, artifact: Path, dest_rel: str) -> str:
     """Drift check: ``"ok"``, ``"missing"`` or ``"drift"``."""
-    dest = root / dest_rel
+    dest = require_confined(root, dest_rel)
     if not dest.is_symlink():
         return "missing"
     if not is_managed_link(root, dest):

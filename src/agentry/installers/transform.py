@@ -12,6 +12,7 @@ import shutil
 from pathlib import Path
 
 from ..emit import _strip_frontmatter, run_agent
+from ._paths import require_confined
 
 STRIP_FRONTMATTER = "strip-frontmatter"
 AGENT = "agent"
@@ -38,7 +39,7 @@ def install_transform(root: Path, content: str, dest_rel: str, *, managed: bool)
 
     Refuses to overwrite a path agentry doesn't already manage (the never-clobber invariant).
     """
-    dest = root / dest_rel
+    dest = require_confined(root, dest_rel)
     if dest.is_symlink() or dest.exists():
         if not managed:
             raise FileExistsError(
@@ -60,5 +61,5 @@ def install_transform(root: Path, content: str, dest_rel: str, *, managed: bool)
 
 def transform_state(root: Path, dest_rel: str) -> str:
     """Drift check: ``"ok"`` if the transformed file is present, else ``"missing"``."""
-    dest = root / dest_rel
+    dest = require_confined(root, dest_rel)
     return "ok" if dest.is_file() and not dest.is_symlink() else "missing"

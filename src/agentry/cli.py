@@ -15,7 +15,15 @@ from . import __version__, deps, discovery
 from .config import DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL, LOCK_NAME, ConfigStore
 from .deps import DependencyError
 from .lockfile import load_lock, save_lock
-from .models import Component, ComponentType, GeneratorSpec, Source, SourceType, Target
+from .models import (
+    Component,
+    ComponentType,
+    GeneratorSpec,
+    ProfileRule,
+    Source,
+    SourceType,
+    Target,
+)
 from .reconcile import SyncResult, status, sync
 from .resolver import ResolveError, effective_root, resolve
 from .targets import BUILTIN_TARGETS, is_builtin
@@ -1027,10 +1035,22 @@ def catalog_add_repo(
 # -- target sub-commands -------------------------------------------------
 
 
+def _describe_overlay(profile: dict[str, ProfileRule]) -> list[str]:
+    """One human-readable line per component type in a driver overlay, for the prompt."""
+    lines: list[str] = []
+    for ctype, rule in sorted(profile.items(), key=lambda kv: str(kv[0])):
+        where = " -> ".join(x for x in (rule.dest, rule.file) if x)
+        lines.append(f"  {str(ctype):9} {rule.strategy.value:11} {where}")
+    return lines
+
+
 @target_app.command("add")
 def target_add(
     name: str = typer.Argument(..., help="Driver-overlay name published by a catalog."),
     catalog: str = typer.Option(None, "--catalog", "-c", help="Restrict to this catalog."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt (auto-apply; for CI)."
+    ),
 ) -> None:
     """Install a shared driver overlay into `.agentry.yml` `target_profiles`, then sync.
 
@@ -1060,6 +1080,25 @@ def target_add(
         )
         raise typer.Exit(1)
     registry, profile = match
+    # A driver overlay dictates *where in the project* every component type gets written,
+    # and it arrives over the network from a third-party catalog. Show the destinations and
+    # get consent before merging it in and syncing — the same posture as the generator gate.
+    console.print(
+        f"Driver overlay [cyan]{name}[/cyan] [dim](from catalog '{registry.name}')[/dim] "
+        "will install components to:"
+    )
+    for line in _describe_overlay(profile):
+        console.print(f"[dim]{line}[/dim]")
+    if not yes:
+        if not sys.stdin.isatty():
+            err.print(
+                f"[red]Refusing to add overlay '{name}' without confirmation.[/red] "
+                "Re-run with `--yes` to accept these destinations non-interactively."
+            )
+            raise typer.Exit(1)
+        if not typer.confirm(f"Add driver overlay '{name}' and sync?", default=False):
+            console.print("[dim]Aborted — nothing was written.[/dim]")
+            raise typer.Exit(1)
     if store.merge_target_profiles({name: profile}):
         store.save()
         console.print(

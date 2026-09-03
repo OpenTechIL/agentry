@@ -132,7 +132,7 @@ def test_target_add_installs_overlay_and_resolves_target(tmp_path, monkeypatch):
     # Before the overlay, the unresolved target warns and nothing lands under .myide.
     assert not (project / ".myide/skills/code-reviewer").exists()
 
-    out = runner.invoke(app, ["target", "add", "myide"]).output
+    out = runner.invoke(app, ["target", "add", "myide", "--yes"]).output
     assert "myide" in out
     # The overlay is now in config and the skill installs to the overlay's destination.
     assert "myide" in ConfigStore.load(project).parsed().target_profiles

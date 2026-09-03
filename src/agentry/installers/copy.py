@@ -13,7 +13,7 @@ import filecmp
 import shutil
 from pathlib import Path
 
-from ._paths import prune_empty_parents
+from ._paths import prune_empty_parents, require_confined
 
 
 def _files_equal(a: Path, b: Path) -> bool:
@@ -58,7 +58,7 @@ def install_copy(root: Path, artifact: Path, dest_rel: str, *, managed: bool) ->
     ``managed`` says whether agentry already owns the path (per the manifest). An existing
     path that agentry does not own is never overwritten — it raises ``FileExistsError``.
     """
-    dest = root / dest_rel
+    dest = require_confined(root, dest_rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     if dest.exists() or dest.is_symlink():
@@ -78,7 +78,7 @@ def install_copy(root: Path, artifact: Path, dest_rel: str, *, managed: bool) ->
 
 def remove_copy(root: Path, dest_rel: str) -> bool:
     """Remove a managed copy (file or dir). Called only for manifest-tracked paths."""
-    dest = root / dest_rel
+    dest = require_confined(root, dest_rel)
     if dest.is_symlink() or dest.is_file():
         dest.unlink()
     elif dest.is_dir():
@@ -91,7 +91,7 @@ def remove_copy(root: Path, dest_rel: str) -> bool:
 
 def copy_state(root: Path, artifact: Path, dest_rel: str) -> str:
     """Drift check: ``"ok"``, ``"missing"`` or ``"drift"``."""
-    dest = root / dest_rel
+    dest = require_confined(root, dest_rel)
     if not (dest.exists() or dest.is_symlink()):
         return "missing"
     return "ok" if _same(artifact, dest) else "drift"

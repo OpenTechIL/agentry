@@ -14,7 +14,7 @@ in config (``target_profiles``). The three built-ins are exposed as constants.
 from __future__ import annotations
 
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -142,14 +142,53 @@ class Source(BaseModel):
             raise ValueError(f"git source '{self.name}' requires a url")
         if self.type is SourceType.LOCAL and not self.path:
             raise ValueError(f"local source '{self.name}' requires a path")
-        if self.subdir and (self.subdir.startswith("/") or ".." in Path(self.subdir).parts):
-            raise ValueError(f"source '{self.name}' subdir must be a relative path inside the repo")
+        if self.type is SourceType.GIT and self.url:
+            _check_git_url(f"source '{self.name}' url", self.url)
+        if self.subdir:
+            _check_rel(f"source '{self.name}' subdir", self.subdir, "repo")
         return self
 
 
-def _check_rel(label: str, p: str) -> None:
-    if p.startswith("/") or ".." in Path(p).parts:
-        raise ValueError(f"{label} must be a relative path inside the project")
+#: URL schemes accepted for a git source. Everything else is refused: git's ``ext::``
+#: transport runs an arbitrary shell command at clone time, and source URLs can arrive
+#: from a remote catalog, so the set of transports has to be closed rather than open.
+_GIT_URL_SCHEMES: tuple[str, ...] = ("https://", "http://", "ssh://", "git://", "file://")
+
+
+def _is_abs(p: str) -> bool:
+    """True for an absolute path on *either* platform (``/x``, ``C:\\x``, ``\\\\host\\share``).
+
+    ``Path.is_absolute()`` is platform-dependent, so a POSIX-only check would let
+    ``C:/x`` through on Linux — and ``root / "C:/x"`` on Windows discards ``root``.
+    """
+    return PurePosixPath(p).is_absolute() or PureWindowsPath(p).is_absolute()
+
+
+def _check_rel(label: str, p: str, container: str = "project") -> None:
+    """Reject absolute paths and ``..`` traversal in a project-relative path template.
+
+    Load-bearing for security, not just hygiene: these strings are joined onto the project
+    root by the installers, and ``Path(root) / "/etc/passwd"`` *discards* ``root``. Values
+    can originate from a remote catalog (``target_profiles``, catalog ``targets`` overlays).
+    """
+    if _is_abs(p) or ".." in PurePosixPath(p).parts or ".." in PureWindowsPath(p).parts:
+        raise ValueError(f"{label} must be a relative path inside the {container}")
+
+
+def _check_git_url(label: str, url: str) -> None:
+    """Allow only known-safe git transports (plus scp-style ``user@host:path``)."""
+    if url.startswith(_GIT_URL_SCHEMES):
+        return
+    # scp-style shorthand: user@host:path — no scheme, but a valid git remote.
+    if "://" not in url and "@" in url and ":" in url.split("@", 1)[1]:
+        return
+    # A bare local path is a legitimate git remote too (used heavily in tests).
+    if _is_abs(url) or url.startswith((".", "~")):
+        return
+    raise ValueError(
+        f"{label} has an unsupported URL scheme: {url!r} "
+        f"(allowed: {', '.join(_GIT_URL_SCHEMES)}, user@host:path, or a local path)"
+    )
 
 
 class GeneratorSpec(BaseModel):
@@ -269,6 +308,12 @@ class ProfileRule(BaseModel):
             raise ValueError("link+merge profile rule requires 'dest', 'file' and 'pointer'")
         if (self.rewrite_from is None) != (self.rewrite_to is None):
             raise ValueError("'rewrite_from' and 'rewrite_to' must be set together")
+        # These two are joined onto the project root by the installers, and they can come
+        # from a remote catalog overlay — so they get the same treatment as Component.path.
+        if self.dest:
+            _check_rel("profile rule 'dest'", self.dest)
+        if self.file:
+            _check_rel("profile rule 'file'", self.file)
         return self
 
 

@@ -39,13 +39,22 @@ def effective_root(root: Path, source: Source) -> Path:
     return base / source.subdir if source.subdir else base
 
 
+#: Seconds to allow a single git invocation. Clone/fetch reach the network, and stdout is
+#: captured — without a cap an unreachable host hangs the CLI silently, with no output.
+GIT_TIMEOUT = 300.0
+
+
 def _git(args: list[str], cwd: Path | None = None) -> str:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=str(cwd) if cwd else None,
-        capture_output=True,
-        text=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(cwd) if cwd else None,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ResolveError(f"git {' '.join(args)} timed out after {GIT_TIMEOUT:.0f}s") from exc
     if proc.returncode != 0:
         raise ResolveError(f"git {' '.join(args)} failed:\n{proc.stderr.strip()}")
     return proc.stdout.strip()
