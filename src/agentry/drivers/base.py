@@ -23,8 +23,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from ..models import ComponentType
-from ..spec import TargetSpec
+from ..models import ComponentType, Strategy
+from ..spec import LinkMergeDest, MergeDest, TargetSpec
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ class Driver:
     def supports(self, ctype: ComponentType) -> bool:
         return self.spec.supports(ctype)
 
-    def strategy(self, ctype: ComponentType):
+    def strategy(self, ctype: ComponentType) -> Strategy | None:
         return self.spec.strategy(ctype)
 
     def link_dest(self, ctype: ComponentType, name: str) -> str:
@@ -91,10 +91,10 @@ class Driver:
     def copy_dest(self, ctype: ComponentType, name: str) -> str:
         return self.spec.copy_dest(ctype, name)
 
-    def merge_dest(self, ctype: ComponentType):
+    def merge_dest(self, ctype: ComponentType) -> MergeDest:
         return self.spec.merge_dest(ctype)
 
-    def link_merge_dest(self, ctype: ComponentType):
+    def link_merge_dest(self, ctype: ComponentType) -> LinkMergeDest:
         return self.spec.link_merge_dest(ctype)
 
     # -- policy pass-throughs ----------------------------------------------

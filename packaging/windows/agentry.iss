@@ -1,22 +1,27 @@
-; packaging/windows/agy.iss — Inno Setup script for the `agy` CLI installer.
+; packaging/windows/agentry.iss — Inno Setup script for the `agentry` CLI installer.
 ;
 ; Consumed by release-binaries.yml. The PyInstaller binary must exist at
-; ..\..\dist\agy.exe first. Version is passed on the command line:
+; ..\..\dist\agentry.exe first. Version is passed on the command line:
 ;
-;   iscc /DMyAppVersion=1.2.3 packaging\windows\agy.iss
+;   iscc /DMyAppVersion=1.2.3 packaging\windows\agentry.iss
 ;
-; Produces: dist\agy-<version>-windows-x86_64-setup.exe
+; Produces: dist\agentry-<version>-windows-x86_64-setup.exe
 ;
-; This is a per-user install (no admin required): it drops agy.exe under
+; This is a per-user install (no admin required): it drops agentry.exe under
 ; %LOCALAPPDATA%\Programs\agentry and adds that directory to the user PATH,
 ; matching the behaviour of install.ps1.
+;
+; The short aliases agy.cmd and agyx.cmd are generated next to it: Windows offers no
+; reliable symlink for an unprivileged install, so a one-line .cmd shim is the portable
+; equivalent. `agy` is kept for back-compat but is also Google's Antigravity CLI command;
+; `agyx` is the short name that cannot collide.
 
 #ifndef MyAppVersion
   #define MyAppVersion "0.0.0"
 #endif
 
 #define MyAppName "agentry"
-#define MyAppExe "agy.exe"
+#define MyAppExe "agentry.exe"
 #define MyAppPublisher "OpenTech"
 #define MyAppURL "https://github.com/OpenTechIL/agentry"
 
@@ -34,7 +39,7 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ChangesEnvironment=yes
 OutputDir=..\..\dist
-OutputBaseFilename=agy-{#MyAppVersion}-windows-x86_64-setup
+OutputBaseFilename=agentry-{#MyAppVersion}-windows-x86_64-setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -48,12 +53,29 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "..\..\dist\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
 
+
 [Registry]
 ; Prepend the install dir to the user PATH if it is not already present.
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; \
     ValueData: "{app};{olddata}"; Check: NeedsAddPath(ExpandConstant('{app}'))
 
 [Code]
+{ Alias shims: written after install so they always point at the real exe name. }
+procedure WriteAliasShim(const Name: string);
+begin
+  SaveStringToFile(ExpandConstant('{app}\') + Name + '.cmd',
+    '@echo off' + #13#10 + '"%~dp0{#MyAppExe}" %*' + #13#10, False);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    WriteAliasShim('agy');
+    WriteAliasShim('agyx');
+  end;
+end;
+
 function NeedsAddPath(Param: string): Boolean;
 var
   OrigPath: string;

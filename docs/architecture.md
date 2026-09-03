@@ -32,7 +32,7 @@ between machines, and no safe way to uninstall. This is **dependency hell** for 
 | `.agentry/` | **Store** — downloaded git clones / local symlinks | ❌ gitignored |
 | `.agentry/.manifest.json` | **Reality** — what is actually installed on disk | ❌ gitignored |
 
-The three-way relationship is the heart of the design — `reconcile()` (run by `agy sync`)
+The three-way relationship is the heart of the design — `reconcile()` (run by `agentry sync`)
 makes the disk match the declared, pinned intent:
 
 ```mermaid
@@ -60,11 +60,11 @@ Strategy:      link (file-based) | merge (config-based) | generate (self-install
 
 **Generate strategy.** A component may carry a `generate` spec (`setup`/`command`/`produces`)
 instead of an artifact — for tools like graphify that ship no skill file and generate one at
-install time. Running third-party commands is **opt-in** (`agy sync --allow-run`) and the
+install time. Running third-party commands is **opt-in** (`agentry sync --allow-run`) and the
 commands are printed before execution; `produces` lists the project-relative paths agentry
 tracks so removal deletes exactly those and nothing else. See `installers/generate.py`.
 
-## 4. Source-repo layout — convention or descriptor
+## 4. Source-repo layout: convention or descriptor
 
 A source (git repo or local dir) provides components in one of three ways, in precedence
 order: an explicit `agentry.yaml` **descriptor**, an **`.apm/` package tree** (consumed
@@ -106,7 +106,7 @@ each primitive to its agentry type — skills → `skill`, agents → `agent`, *
 (no agentry equivalent). The discovered artifact keeps its real `.apm/` path, so it installs
 under agentry's own naming (e.g. `.apm/agents/x.agent.md` → a symlink at
 `.claude/agents/x.md`). So such a package repo is consumable as an agentry source with no
-republishing — the package-tree counterpart to `agy import apm`, which translates the matching
+republishing — the package-tree counterpart to `agentry import apm`, which translates the matching
 `apm.yml` manifest.
 
 **Consumer-side overrides (third way).** When a source follows neither layout — a common
@@ -126,18 +126,18 @@ component can resolve it directly, bypassing discovery:
 
 **Catalogs (`registry.py`).** A `repositories:` list in `.agentry.yml` points at JSON
 catalogs (a local file or an http(s) URL) that map a bare repo name to its source + optional
-curated components. `agy add <repo>` consults them in order and synthesizes the same Sources +
+curated components. `agentry add <repo>` consults them in order and synthesizes the same Sources +
 Components a user would hand-write, installing all of them, a `@name`-selected subset, or a
 `--type`-filtered subset — so catalogs add resolution only, no new install mechanics. The
 catalog is the JSON contract a hosted "artifactory" server would serve, so file and server are
-interchangeable. URL catalogs are cached under `.agentry/repositories/`. `agy init` seeds this
+interchangeable. URL catalogs are cached under `.agentry/repositories/`. `agentry init` seeds this
 list with agentry's own curated catalog (`agentry` → `registry/repositories.json` on
 `raw.githubusercontent.com`, see `DEFAULT_CATALOG_URL` in `config.py`) so name-based installs
 work on a fresh project; `--no-default-catalog` starts empty.
 
 A conventional-layout repo needs only a `source`; `expose` declares curated components (and
 carries the `path`/`generate` for artifacts discovery can't infer). Two optional per-repo flags
-shape the install layout at `agy add` time:
+shape the install layout at `agentry add` time:
 
 - `"copy": true` — install this repo's file/dir components by **copying** instead of symlinking
   (real files, committable; default `false`).
@@ -180,17 +180,17 @@ shape the install layout at `agy add` time:
 }
 ```
 
-**Driver overlays (`agy target add` / `agy target list`).** Beyond `repositories`, a catalog may
+**Driver overlays (`agentry target add` / `agentry target list`).** Beyond `repositories`, a catalog may
 publish `targets` — shareable *driver overlays*, each a named definition of how some agent
 installs every component type (the same shape as a `target_profiles[<target>]` block).
-`agy target add <name>` looks the overlay up across configured catalogs and merges it into the
+`agentry target add <name>` looks the overlay up across configured catalogs and merges it into the
 project's `target_profiles` (never clobbering an existing rule), making an otherwise-undefined
-target resolvable — community-supplied universality you don't have to author. `agy target list`
+target resolvable — community-supplied universality you don't have to author. `agentry target list`
 shows the targets in use, whether each resolves (built-in / profile) or is unresolved, and which
-overlays are installable; an unresolved target during `agy sync` points here. This decentralizes
+overlays are installable; an unresolved target during `agentry sync` points here. This decentralizes
 the cost of supporting a new agent: a driver is *data* anyone can publish, not a code change.
 
-**Authoring a catalog (`agy catalog add-repo`).** Add an entry from a git/GitHub URL — a browser
+**Authoring a catalog (`agentry catalog add-repo`).** Add an entry from a git/GitHub URL — a browser
 `…/tree/<ref>/<subdir>` URL infers the `ref` and `subdir`; the name defaults to the repo
 basename. `--discover` clones the repo and pre-fills `expose` from the components it finds. The
 default catalog file is `registry/repositories.json` (override with `--file`).
@@ -240,7 +240,7 @@ a Cursor or Codex fragment never lands in Claude's `settings.json`. The canonica
 file applies to every target that supports the type. As a final guard, a hook event Claude Code
 doesn't recognize is dropped from `.claude/settings.json` with a warning rather than written out.
 
-**Importing an apm-format project (`agy import apm`, `apm_import.py`).** It's the same category
+**Importing an apm-format project (`agentry import apm`, `apm_import.py`).** It's the same category
 built on the same open standards, so an `apm.yml` is largely consumable. The importer is a
 one-shot, offline translator: a `dependencies.apm` git shorthand `[host/]owner/repo/<typedir>/<name>`
 becomes an agentry **git source** plus a **component** `(<type>, <name>)` — agentry resolves a
@@ -248,10 +248,10 @@ becomes an agentry **git source** plus a **component** `(<type>, <name>)` — ag
 clone; local-path deps become **local sources**; inline `dependencies.mcp` servers become MCP
 **fragments** in agentry's merge shape (above), written to a committed local source. apm `targets`
 pass through (open strings). Anything not inferable offline — whole-repo deps, `plugins/*`
-bundles, marketplace/bundle specs — is reported as a warning pointing at `agy add` / `agy list`,
+bundles, marketplace/bundle specs — is reported as a warning pointing at `agentry add` / `agentry list`,
 never silently guessed. `translate_apm` is pure; the CLI layer writes files and the config.
 
-## 5. Drivers — the target side (`drivers/`, `spec.py`, `targets.py`)
+## 5. Drivers: the target side (`drivers/`, `spec.py`, `targets.py`)
 
 agentry's model has **two sides**. The **source side** (§4) is *canonical*: a repo author
 writes a component once, in one place. The **target side** is a set of **drivers** — one
@@ -265,7 +265,7 @@ dataclass that *composes* two things:
    destination (path template) or a **merge** destination (config file + JSON pointer). A
    type absent from the map is unsupported for that agent → skipped with a warning. The spec
    also carries a **`memory_file`** — the tool's always-loaded instruction file
-   (`.claude/CLAUDE.md`, `AGENTS.md`, …) that `agy emit triggers` registers skill triggers
+   (`.claude/CLAUDE.md`, `AGENTS.md`, …) that `agentry emit triggers` registers skill triggers
    into (`None` = the tool has no such concept). It survives a `target_profiles` override.
 2. Optional **per-agent policies** for behavior that isn't pure path placement:
    - `HookEventPolicy` — validate hook-event keys (Claude Code rejects a `settings.json`
@@ -322,7 +322,7 @@ flowchart LR
 | memory (`emit triggers`) | `.claude/CLAUDE.md` | `AGENTS.md` | `.cursor/rules/agentry-triggers.mdc` | `GEMINI.md` | `.windsurf/rules/agentry-triggers.md` | `AGENTS.md` | `AGENTS.md` | `.github/copilot-instructions.md` | `.kiro/steering/agentry-triggers.md` | `AGENTS.md` |
 
 A `—` means the agent either has no such concept or expects a format agentry can't yet
-write. The **memory** row is the always-loaded instruction file `agy emit triggers` writes a
+write. The **memory** row is the always-loaded instruction file `agentry emit triggers` writes a
 marker-delimited skill-trigger block into (a markdown merge — like the JSON config merges, it
 writes only the block it owns and leaves the rest of the file untouched). The newest drivers map what installs cleanly: skills everywhere, and MCP/hooks
 merged wherever the destination is JSON **or TOML**. The merge installer chooses the codec
@@ -333,7 +333,7 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
 `link` only when authored in that format), and **array-of-tables hooks** (Codex
 `[[hooks.Event]]`, Kimi `[[hooks]]`) which don't fit the named-entry merge contract.
 
-## 6. The reconcile flow (`agy sync`)
+## 6. The reconcile flow (`agentry sync`)
 
 ```
 1. Resolve sources + dependency closure   deps.resolve_graph(config, lock, update=…)
@@ -386,18 +386,18 @@ file that may be committed.
 
 The one case that contract can't self-protect against is a reference that is **unset
 *and* has no default** (`${VAR}`, not `${VAR:-x}`): it ships as a dead placeholder.
-Both `agy sync` and `agy doctor` scan for exactly that and emit a warning (shared
-`envscan.unset_env_refs`); `agy doctor --strict` turns the warning into a non-zero exit,
+Both `agentry sync` and `agentry doctor` scan for exactly that and emit a warning (shared
+`envscan.unset_env_refs`); `agentry doctor --strict` turns the warning into a non-zero exit,
 which is the CI guardrail. The merge still proceeds — the warning is loud, not blocking —
 so a value the user *will* set at runtime isn't spuriously rejected.
 
 ### Per-source consent for install-time code execution
 
-A component with a `generate` spec runs a command during `agy sync`. Beyond the one-shot
+A component with a `generate` spec runs a command during `agentry sync`. Beyond the one-shot
 `--allow-run` blanket, agentry records **per-source trust** in the lock (`LockEntry.trusted`),
 pinned to the source's resolved SHA. A trusted source's generators run without `--allow-run`;
-an untrusted one is skipped with a warning unless consent is granted — via `agy trust <source>`
-or the interactive prompt in `agy sync` (a `TrustCallback` the CLI supplies; non-TTY callers
+an untrusted one is skipped with a warning unless consent is granted — via `agentry trust <source>`
+or the interactive prompt in `agentry sync` (a `TrustCallback` the CLI supplies; non-TTY callers
 decline silently, so CI stays deterministic). Because trust is pinned to the SHA, a source that
 moves to a new revision drops its consent and must be re-confirmed (`deps.ensure_resolved`
 carries trust forward only while the hash is unchanged). Trust gates **generators only** — the
@@ -414,6 +414,40 @@ byte-for-byte hashing when line-ending fidelity matters.
 
 ## 8. Module map
 
+This is the **single** module map for the project. `AGENTS.md` and `CONTRIBUTING.md` link
+here rather than keeping their own copies, which had drifted out of date independently.
+
+```
+progname.py     the invoked command name (agentry / agy / agyx) for user-facing hints
+cli.py          Typer app — command wiring + Rich output
+models.py       pydantic: Config, Source, Component, Lock, Manifest, enums; path/URL validation
+config.py       .agentry.yml round-trip (ruamel, comment-preserving) + mutators
+lockfile.py     .agentry.lock read/write
+spec.py         capability-map dataclasses (TargetSpec / MergeDest / LinkMergeDest)
+drivers/        one module per AI agent (claude, opencode, cursor, codex, gemini, windsurf, kimi, copilot, kiro)
+                 plus `agents` — the tool-neutral .agents/skills universal target
+  base.py       Driver = capability map + optional policies (hook-event, namespace, transform)
+  __init__.py   BUILTIN_DRIVERS registry + resolve_drivers()
+targets.py      effective capability map: BUILTIN_TARGETS (from drivers) + target_profiles merge
+discovery.py    scan a source for available components + their `requires` (LAYOUT)
+resolver.py     download/checkout into the store; resolve refs → SHA/hash
+deps.py         transitive dependency closure (recursive, version-aware) → augmented graph
+registry.py     resolve a bare repo name via external catalogs (file/URL) → Sources + Components
+apm_import.py   translate an apm-format manifest (apm.yml) → agentry sources/components/MCP
+manifest.py     .agentry/.manifest.json read/write
+emit.py         compose AGENTS.md; splice the skill-trigger block into each memory file
+envscan.py      scan merge fragments for dead ${VAR} placeholders
+doctor.py       aggregate preflight checks (targets, components, env vars, drift, command name)
+installers/
+  _paths.py     shared helpers: parent pruning + the confined() / require_confined() guard
+  link.py       symlink create/remove/state (lexical, store-scoped)
+  copy.py       copy a file/dir as a committable real artifact (manifest-tracked ownership)
+  merge.py      JSON/TOML inject/remove/state (key-scoped, reversible; codec by file ext)
+  link_merge.py symlink + config merge together, rewriting plugin-root command paths
+  generate.py   run a component's own installer (gated); track produced files for safe removal
+  transform.py  copy-with-rewrite: materialize a component through a content provider
+reconcile.py    sync engine + status (drift report)
+gitignore.py    ensure .agentry/ is ignored
 ```
 cli.py          Typer app — command wiring + Rich output
 models.py       pydantic: Config, Source, Component, Lock, Manifest, enums
@@ -453,9 +487,9 @@ gitignore.py    ensure .agentry/ is ignored
 
 ## 10. Deferred (future phases)
 
-- **Hosted catalog server** — the catalog format and name-based `agy add`/`agy search`
+- **Hosted catalog server** — the catalog format and name-based `agentry add`/`agentry search`
   ship today against file/URL catalogs (`registry.py`); a hosted catalog server + upload flow
-  (serving the same JSON contract that `agy catalog add-repo` authors locally) is the remaining
+  (serving the same JSON contract that `agentry catalog add-repo` authors locally) is the remaining
   piece.
 - **TOML array-of-tables hooks** — Codex (`[[hooks.Event]]`) and Kimi (`[[hooks]]`) keep hooks
   as an array of tables rather than named keys under a pointer, so they don't fit the current
@@ -463,10 +497,10 @@ gitignore.py    ensure .agentry/ is ignored
   already ships; see §5.)
 - **Semantic translation** — the `transform` seam on a driver (§5) would let a component
   authored for one agent be reshaped for another (format/field translation), turning today's
-  placement-mapping into true write-once-run-anywhere. *First step shipped:* `agy emit
+  placement-mapping into true write-once-run-anywhere. *First step shipped:* `agentry emit
   agents-md` (`emit.py`) composes a portable `AGENTS.md` from a project's skills/agents/commands
   — deterministic and CI-verifiable (`--check`), produced at author time and committed. It's the
-  no-LLM half of the transform design (`docs/superpowers/specs/2026-06-30-transform-seam-design.md`);
+  no-LLM half of the transform design (kept in the maintainers' local, unpublished design notes);
   the `--agent` provider that *synthesizes* (vs concatenates) by shelling out to the user's own
   agent CLI (`transform.command` in `.agentry.yml`; prompt on stdin) is now shipped — gated by
   `--allow-transform`, with a diff preview + confirmation (`--yes` to auto-apply in CI), and

@@ -34,6 +34,7 @@ from pathlib import Path
 import tomlkit
 
 from ..spec import MergeDest
+from ._paths import require_confined
 
 
 def load_fragment(artifact: Path) -> dict:
@@ -99,7 +100,7 @@ def _write_doc(path: Path, doc: MutableMapping) -> None:
 
 def install_merge(root: Path, dest: MergeDest, fragment: dict) -> list[str]:
     """Merge ``fragment`` into the target config; return the owned keys."""
-    path = root / dest.file
+    path = require_confined(root, dest.file)
     doc = _read_doc(path)
     section = doc.get(dest.pointer)
     if not isinstance(section, MutableMapping):
@@ -115,7 +116,7 @@ def install_merge(root: Path, dest: MergeDest, fragment: dict) -> list[str]:
 
 def remove_merge(root: Path, dest: MergeDest, keys: list[str]) -> bool:
     """Remove agentry-owned ``keys`` from the target config. Leaves the rest intact."""
-    path = root / dest.file
+    path = require_confined(root, dest.file)
     if not path.is_file():
         return False
     doc = _read_doc(path)
@@ -135,7 +136,7 @@ def remove_merge(root: Path, dest: MergeDest, keys: list[str]) -> bool:
 
 def merge_state(root: Path, dest: MergeDest, keys: list[str]) -> str:
     """Drift check: ``"ok"`` if every owned key is present, else ``"missing"``."""
-    path = root / dest.file
+    path = require_confined(root, dest.file)
     if not path.is_file():
         return "missing"
     section = _read_doc(path).get(dest.pointer)

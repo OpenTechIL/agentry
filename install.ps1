@@ -1,4 +1,7 @@
-# install.ps1 — download and install the `agy` binary from GitHub Releases.
+# install.ps1 — download and install the `agentry` binary from GitHub Releases.
+#
+# Installs `agentry.exe` plus the short aliases `agy.cmd` and `agyx.cmd`. `agy` is also the
+# command for Google's Antigravity CLI; `agyx` is the short name that cannot collide.
 #
 #   irm https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.ps1 | iex
 #
@@ -23,32 +26,50 @@ if ($version -eq 'latest') {
 } else {
   $tag = "v$($version.TrimStart('v'))"
 }
-$asset = "agy-$($tag.TrimStart('v'))-$target.exe"
+$version_no_v = $tag.TrimStart('v')
 $base  = "https://github.com/$Repo/releases/download/$tag"
 
 $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
 New-Item -ItemType Directory -Path $tmp | Out-Null
 try {
-  Write-Host "Downloading $asset ($tag)…"
-  Invoke-WebRequest "$base/$asset" -OutFile "$tmp\agy.exe"
   Invoke-WebRequest "$base/SHA256SUMS.txt" -OutFile "$tmp\SHA256SUMS.txt"
+  $sums = Get-Content "$tmp\SHA256SUMS.txt"
+
+  # Release assets were named agy-<version>-<target>.exe before 0.1.4. Prefer the current
+  # name and fall back, so old and new copies of this script both keep working.
+  $asset = $null
+  foreach ($candidate in @("agentry-$version_no_v-$target.exe", "agy-$version_no_v-$target.exe")) {
+    if ($sums -match "  $([regex]::Escape($candidate))$") { $asset = $candidate; break }
+  }
+  if (-not $asset) { throw "no asset for $target in release $tag" }
+
+  Write-Host "Downloading $asset ($tag)…"
+  Invoke-WebRequest "$base/$asset" -OutFile "$tmp\agentry.exe"
 
   $line = Select-String -Path "$tmp\SHA256SUMS.txt" -Pattern "  $([regex]::Escape($asset))$" | Select-Object -First 1
   if (-not $line) { throw "no checksum entry for $asset" }
   $expected = ($line.Line -split '\s+')[0].ToLower()
-  $actual = (Get-FileHash "$tmp\agy.exe" -Algorithm SHA256).Hash.ToLower()
+  $actual = (Get-FileHash "$tmp\agentry.exe" -Algorithm SHA256).Hash.ToLower()
   if ($expected -ne $actual) { throw "checksum mismatch (expected $expected, got $actual)" }
 
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-  Move-Item -Force "$tmp\agy.exe" "$InstallDir\agy.exe"
-  Write-Host "Installed agy to $InstallDir\agy.exe"
+  Move-Item -Force "$tmp\agentry.exe" "$InstallDir\agentry.exe"
+  # Alias shims. Windows offers no reliable symlink for an unprivileged install, so a
+  # one-line .cmd wrapper is the portable equivalent. An older install left a real
+  # agy.exe here; remove it so the alias wins rather than a stale binary.
+  Remove-Item -Force -ErrorAction SilentlyContinue "$InstallDir\agy.exe"
+  foreach ($aliasName in @('agy', 'agyx')) {
+    Set-Content -Path "$InstallDir\$aliasName.cmd" -Encoding ASCII `
+      -Value "@echo off`r`n`"%~dp0agentry.exe`" %*"
+  }
+  Write-Host "Installed agentry to $InstallDir\agentry.exe (aliases: agy, agyx)"
 
   $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
   if (($userPath -split ';') -notcontains $InstallDir) {
     [Environment]::SetEnvironmentVariable('Path', "$userPath;$InstallDir", 'User')
     Write-Host "Added $InstallDir to your user PATH — restart your shell to pick it up."
   }
-  & "$InstallDir\agy.exe" version
+  & "$InstallDir\agentry.exe" version
 } finally {
   Remove-Item -Recurse -Force $tmp
 }

@@ -16,6 +16,12 @@ import subprocess
 from pathlib import Path
 
 from ..models import GeneratorSpec
+from ._paths import confined
+
+#: Seconds to allow one generator command. These are third-party installers that may
+#: download dependencies, so the cap is loose — but stdout is captured, so an unbounded
+#: run would hang the CLI with nothing on screen.
+GENERATE_TIMEOUT = 600.0
 
 
 class GenerateError(RuntimeError):
@@ -35,26 +41,27 @@ def describe(spec: GeneratorSpec) -> list[str]:
 def run_generator(root: Path, spec: GeneratorSpec) -> None:
     """Run ``setup`` commands then ``command`` from the project root (no shell)."""
     for cmd in (*spec.setup, spec.command):
-        proc = subprocess.run(cmd, cwd=str(root), capture_output=True, text=True)
+        try:
+            # S603: argv is catalog/config-supplied by design — this *is* the generate
+            # strategy. It is never a shell string, and the caller gates it on explicit
+            # consent (`sync --allow-run` or a SHA-pinned `agentry trust`).
+            proc = subprocess.run(  # noqa: S603
+                cmd, cwd=str(root), capture_output=True, text=True, timeout=GENERATE_TIMEOUT
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise GenerateError(
+                f"`{' '.join(cmd)}` timed out after {GENERATE_TIMEOUT:.0f}s"
+            ) from exc
         if proc.returncode != 0:
             detail = (proc.stderr or proc.stdout).strip()
             raise GenerateError(f"`{' '.join(cmd)}` failed (exit {proc.returncode}):\n{detail}")
-
-
-def _confined(root: Path, rel: str) -> Path | None:
-    """Resolve ``rel`` under ``root``, refusing the root itself or anything outside it."""
-    root = root.resolve()
-    target = (root / rel).resolve()
-    if target == root or root not in target.parents:
-        return None
-    return target
 
 
 def remove_generated(root: Path, paths: list[str]) -> list[str]:
     """Delete the recorded produced paths (files or dirs). Returns the ones actually removed."""
     removed: list[str] = []
     for rel in paths:
-        target = _confined(root, rel)
+        target = confined(root, rel)
         if target is None or not (target.exists() or target.is_symlink()):
             continue
         if target.is_dir() and not target.is_symlink():

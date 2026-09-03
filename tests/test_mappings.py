@@ -26,11 +26,13 @@ from agentry.targets import resolve_targets, unresolved_targets
 def _descriptor_source(root: Path) -> Path:
     """A source with a NON-standard layout described by agentry.yaml."""
     (root / "packages" / "code-reviewer").mkdir(parents=True)
-    (root / "packages" / "code-reviewer" / "SKILL.md").write_text("# cr\n")
+    (root / "packages" / "code-reviewer" / "SKILL.md").write_text("# cr\n", encoding="utf-8")
     (root / "ai" / "agents").mkdir(parents=True)
-    (root / "ai" / "agents" / "planner.md").write_text("# planner\n")
+    (root / "ai" / "agents" / "planner.md").write_text("# planner\n", encoding="utf-8")
     (root / "servers").mkdir()
-    (root / "servers" / "github.json").write_text(json.dumps({"github": {"command": "npx"}}))
+    (root / "servers" / "github.json").write_text(
+        json.dumps({"github": {"command": "npx"}}), encoding="utf-8"
+    )
     (root / "agentry.yaml").write_text(
         "version: 1\n"
         "provides:\n"
@@ -39,7 +41,8 @@ def _descriptor_source(root: Path) -> Path:
         "  agent:\n"
         '    - { glob: "ai/agents/*.md" }\n'
         "  mcp:\n"
-        '    - { glob: "servers/*.json" }\n'
+        '    - { glob: "servers/*.json" }\n',
+        encoding="utf-8",
     )
     return root
 
@@ -74,7 +77,7 @@ def test_descriptor_explicit_path_honored_on_install(tmp_path: Path):
     link = proj / ".claude/skills/code-reviewer"
     assert link.is_symlink()
     # Resolves to the descriptor's explicit (non-standard) path.
-    assert (link / "SKILL.md").read_text() == "# cr\n"
+    assert (link / "SKILL.md").read_text(encoding="utf-8") == "# cr\n"
 
 
 # -- target profiles -----------------------------------------------------
@@ -120,7 +123,7 @@ def test_custom_tool_defined_in_config(tmp_path: Path, local_source: Path):
 
     sync(proj)
     assert (proj / ".mycli/skills/code-reviewer").is_symlink()
-    cfg = json.loads((proj / ".mycli/cfg.json").read_text())
+    cfg = json.loads((proj / ".mycli/cfg.json").read_text(encoding="utf-8"))
     assert "github" in cfg["mcpServers"]
 
 

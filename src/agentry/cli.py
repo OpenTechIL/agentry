@@ -1,7 +1,13 @@
-"""``agy`` — the agentry command-line interface."""
+"""The agentry command-line interface.
+
+Installed as ``agentry`` (canonical) plus the short aliases ``agy`` and ``agyx``.
+See :mod:`agentry.progname` for why user-facing hints interpolate the invoked name.
+"""
 
 from __future__ import annotations
 
+import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -15,7 +21,17 @@ from . import __version__, deps, discovery
 from .config import DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL, LOCK_NAME, ConfigStore
 from .deps import DependencyError
 from .lockfile import load_lock, save_lock
-from .models import Component, ComponentType, GeneratorSpec, Source, SourceType, Target
+from .models import (
+    Component,
+    ComponentType,
+    Config,
+    GeneratorSpec,
+    ProfileRule,
+    Source,
+    SourceType,
+    Target,
+)
+from .progname import CANONICAL, prog
 from .reconcile import SyncResult, status, sync
 from .resolver import ResolveError, effective_root, resolve
 from .targets import BUILTIN_TARGETS, is_builtin
@@ -23,7 +39,7 @@ from .targets import BUILTIN_TARGETS, is_builtin
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="agentry (agy) — a dependency manager for AI coding agents.",
+    help="agentry — a dependency manager for AI coding agents.",
 )
 source_app = typer.Typer(
     no_args_is_help=True, help="Manage component sources (git repos / local dirs)."
@@ -48,6 +64,71 @@ app.add_typer(emit_app, name="emit")
 
 console = Console()
 err = Console(stderr=True)
+
+
+# -- program name / alias collision --------------------------------------
+
+#: Set to any value to silence the shadowed-`agy` notice (CI, scripted use, dotfiles).
+NO_COLLISION_WARN_ENV = "AGENTRY_NO_COLLISION_WARN"
+
+
+def _shadowed_agy() -> str | None:
+    """Path of the `agy` that PATH resolves to, when it is *not* this agentry.
+
+    ``agy`` is also the command for Google's Antigravity CLI, so on many machines both
+    tools claim the name and whichever comes first on PATH silently wins. Returns the
+    conflicting path, or ``None`` when there is no ambiguity to report.
+    """
+    if Path(sys.argv[0]).stem != "agy":
+        return None  # invoked as `agentry`/`agyx` — no ambiguity to warn about
+    found = shutil.which("agy")
+    if not found:
+        return None
+    try:
+        # Compare directories, not files: our three names are separate wrapper scripts
+        # sitting in the same bin dir, so file identity would flag every normal install.
+        if Path(found).resolve().parent == Path(sys.argv[0]).resolve().parent:
+            return None
+    except OSError:
+        return None
+    return found
+
+
+def _warn_if_shadowed() -> None:
+    """Print a one-line notice when `agy` on PATH is some other tool. Never fails."""
+    if os.environ.get(NO_COLLISION_WARN_ENV):
+        return
+    try:
+        other = _shadowed_agy()
+    except Exception:  # noqa: BLE001 — a cosmetic notice must never break a command
+        return
+    if other is None or not err.is_terminal:
+        return
+    err.print(
+        f"[yellow]note:[/yellow] `agy` on your PATH is [dim]{other}[/dim], not this one. "
+        f"Use [cyan]{CANONICAL}[/cyan] or [cyan]agyx[/cyan] to be unambiguous."
+    )
+
+
+def _version_callback(value: bool) -> None:
+    if value:
+        console.print(f"agentry {__version__}")
+        raise typer.Exit()
+
+
+@app.callback()
+def main(
+    _version: bool = typer.Option(
+        False,
+        "--version",
+        "-V",
+        help="Print the agentry version and exit.",
+        callback=_version_callback,
+        is_eager=True,
+    ),
+) -> None:
+    """agentry — a dependency manager for AI coding agents."""
+    _warn_if_shadowed()
 
 
 # -- helpers -------------------------------------------------------------
@@ -175,7 +256,7 @@ def _add_from_catalog(
     if match is None:
         err.print(
             f"[red]No catalog lists '{repo}'.[/red]\n"
-            "Add one with `agy catalog add <name> <file-or-url>`, or use the full "
+            f"Add one with `{prog()} catalog add <name> <file-or-url>`, or use the full "
             "<source>/<type>/<name> form."
         )
         raise typer.Exit(1)
@@ -366,13 +447,13 @@ def init(
         None,
         "--target",
         "-t",
-        help="Target AI tool(s): claude, opencode, cursor, codex, gemini, windsurf, kimi "
-        "(or a custom tool defined under target_profiles). Repeatable.",
+        help="Target AI tool(s): claude, opencode, cursor, codex, gemini, windsurf, kimi, "
+        "copilot, kiro, agents (or a custom tool defined under target_profiles). Repeatable.",
     ),
     default_catalog: bool = typer.Option(
         True,
         "--default-catalog/--no-default-catalog",
-        help="Register agentry's curated catalog so `agy add <name>` works out of the box.",
+        help="Register agentry's curated catalog so `agentry add <name>` works out of the box.",
     ),
 ) -> None:
     """Create .agentry.yml and add .agentry/ to .gitignore."""
@@ -434,7 +515,7 @@ def list_components() -> None:
         console.print(table)
 
     if not any_rows:
-        console.print("[dim]No components found. Add a source with `agy source add`.[/dim]")
+        console.print(f"[dim]No components found. Add a source with `{prog()} source add`.[/dim]")
 
 
 @app.command(name="search")
@@ -470,7 +551,7 @@ def search_components(
                 scope = f"{len(entry.expose)} curated" if entry.expose else "whole repo"
                 table.add_row(rname, cname, scope, entry.summary or "")
             console.print(table)
-            console.print("  [dim]install with `agy add <repo>`[/dim]")
+            console.print(f"  [dim]install with `{prog()} add <repo>`[/dim]")
     if not query:
         # No filter: also fall back to the local component listing.
         list_components()
@@ -516,8 +597,8 @@ def add(
 ) -> None:
     """Enable a component and install it.
 
-    REF is one of: a catalog repo name (``agy add arckit`` — whole repo), a catalog repo with
-    selected components (``agy add arckit@code-review,lint``), or a full component ref
+    REF is one of: a catalog repo name (``agentry add arckit`` — whole repo), a catalog repo with
+    selected components (``agentry add arckit@code-review,lint``), or a full component ref
     ``<source>/<type>/<name>``. ``--type`` filters a catalog install by component type.
     """
     import shlex
@@ -537,7 +618,7 @@ def add(
     source, ctype, name = _parse_ref(ref)
     store = _load()
     if store.parsed().source(source) is None:
-        err.print(f"[red]Unknown source '{source}'. Add it first with `agy source add`.[/red]")
+        err.print(f"[red]Unknown source '{source}'. Add it first with `{prog()} source add`.[/red]")
         raise typer.Exit(1)
 
     try:
@@ -734,7 +815,7 @@ def _source_provenance(store: ConfigStore, source_name: str) -> str:
     entry = lock.entry(source_name)
     src = next((s for s in store.parsed().sources if s.name == source_name), None)
     if entry is None:
-        return f"{source_name} [dim](unresolved — run `agy sync`)[/dim]"
+        return f"{source_name} [dim](unresolved — run `{prog()} sync`)[/dim]"
     resolved = entry.resolved
     short = (
         resolved[len("sha256:") : len("sha256:") + 12]
@@ -798,7 +879,7 @@ def trust_cmd(
     entry = lock.entry(source)
     if entry is None:
         err.print(
-            f"[red]No resolved source '{source}' in {LOCK_NAME} — run `agy sync` first.[/red]"
+            f"[red]No resolved source '{source}' in {LOCK_NAME} — run `{prog()} sync` first.[/red]"
         )
         raise typer.Exit(1)
     if entry.trusted:
@@ -845,7 +926,7 @@ def source_add(
     console.print(f"[green]Added source[/green] {name}")
     _do_sync()
     # Provenance at first install: show exactly what was pinned (URL/path + resolved SHA),
-    # so a new source's origin is visible up front rather than only via a later `agy why`.
+    # so a new source's origin is visible up front rather than only via a later `agentry why`.
     console.print(f"  [dim]provenance:[/dim] {_source_provenance(_load(), name)}")
 
 
@@ -899,7 +980,7 @@ def catalog_add(
         ..., help="Catalog file path or http(s) URL (a github.com blob URL works directly)."
     ),
 ) -> None:
-    """Register a catalog so `agy add <repo-name>` can resolve a whole repo."""
+    """Register a catalog so `agentry add <repo-name>` can resolve a whole repo."""
     from .models import Registry
 
     store = _load()
@@ -931,7 +1012,7 @@ def catalog_list() -> None:
     store = _load()
     config = store.parsed()
     if not config.repositories:
-        console.print("[dim]No catalogs configured. Add one with `agy catalog add`.[/dim]")
+        console.print(f"[dim]No catalogs configured. Add one with `{prog()} catalog add`.[/dim]")
         return
     table = Table(title="Catalogs")
     table.add_column("catalog", style="cyan")
@@ -993,13 +1074,19 @@ def catalog_add_repo(
     from .resolver import ResolveError, effective_root, resolve
 
     clean_url, url_ref, url_subdir, default_name = reg.parse_repo_url(git_url)
-    name = name or default_name
-    ref = ref or url_ref or "main"
-    subdir = subdir or url_subdir
+    entry_name = name or default_name
+    entry_ref = ref or url_ref or "main"
+    entry_subdir = subdir or url_subdir
 
     expose: list[ExposeEntry] | None = None
     if discover:
-        source = Source(name=name, type=SourceType.GIT, url=clean_url, ref=ref, subdir=subdir)
+        source = Source(
+            name=entry_name,
+            type=SourceType.GIT,
+            url=clean_url,
+            ref=entry_ref,
+            subdir=entry_subdir,
+        )
         try:
             resolve(_root(), source, pinned=None)
             found = discovery.discover(effective_root(_root(), source))
@@ -1012,25 +1099,39 @@ def catalog_add_repo(
     try:
         entry = RepositoryEntry(
             summary=summary,
-            source=RegistrySource(type=SourceType.GIT, url=clean_url, ref=ref, subdir=subdir),
+            source=RegistrySource(
+                type=SourceType.GIT, url=clean_url, ref=entry_ref, subdir=entry_subdir
+            ),
             expose=expose,
         )
-        reg.add_entry(file, name, entry, force=force)
+        reg.add_entry(file, entry_name, entry, force=force)
     except (reg.RegistryError, ValueError) as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
 
     scope = f"{len(expose)} curated" if expose else "whole repo"
-    console.print(f"[green]Added[/green] {name} → [dim]{file}[/dim] ([cyan]{scope}[/cyan])")
+    console.print(f"[green]Added[/green] {entry_name} → [dim]{file}[/dim] ([cyan]{scope}[/cyan])")
 
 
 # -- target sub-commands -------------------------------------------------
+
+
+def _describe_overlay(profile: dict[ComponentType, ProfileRule]) -> list[str]:
+    """One human-readable line per component type in a driver overlay, for the prompt."""
+    lines: list[str] = []
+    for ctype, rule in sorted(profile.items(), key=lambda kv: kv[0].value):
+        where = " -> ".join(x for x in (rule.dest, rule.file) if x)
+        lines.append(f"  {ctype.value:9} {rule.strategy.value:11} {where}")
+    return lines
 
 
 @target_app.command("add")
 def target_add(
     name: str = typer.Argument(..., help="Driver-overlay name published by a catalog."),
     catalog: str = typer.Option(None, "--catalog", "-c", help="Restrict to this catalog."),
+    yes: bool = typer.Option(
+        False, "--yes", "-y", help="Skip the confirmation prompt (auto-apply; for CI)."
+    ),
 ) -> None:
     """Install a shared driver overlay into `.agentry.yml` `target_profiles`, then sync.
 
@@ -1044,7 +1145,8 @@ def target_add(
     config = store.parsed()
     if not config.repositories:
         err.print(
-            "[red]No catalogs configured.[/red] Add one with `agy catalog add <name> <file-or-url>`."
+            f"[red]No catalogs configured.[/red] "
+            f"Add one with `{prog()} catalog add <name> <file-or-url>`."
         )
         raise typer.Exit(1)
     try:
@@ -1056,10 +1158,29 @@ def target_add(
         where = f" in catalog '{catalog}'" if catalog else ""
         err.print(
             f"[red]No driver overlay named '{name}'{where}.[/red] "
-            "Run `agy target list` to see what's available."
+            f"Run `{prog()} target list` to see what's available."
         )
         raise typer.Exit(1)
     registry, profile = match
+    # A driver overlay dictates *where in the project* every component type gets written,
+    # and it arrives over the network from a third-party catalog. Show the destinations and
+    # get consent before merging it in and syncing — the same posture as the generator gate.
+    console.print(
+        f"Driver overlay [cyan]{name}[/cyan] [dim](from catalog '{registry.name}')[/dim] "
+        "will install components to:"
+    )
+    for line in _describe_overlay(profile):
+        console.print(f"[dim]{line}[/dim]")
+    if not yes:
+        if not sys.stdin.isatty():
+            err.print(
+                f"[red]Refusing to add overlay '{name}' without confirmation.[/red] "
+                "Re-run with `--yes` to accept these destinations non-interactively."
+            )
+            raise typer.Exit(1)
+        if not typer.confirm(f"Add driver overlay '{name}' and sync?", default=False):
+            console.print("[dim]Aborted — nothing was written.[/dim]")
+            raise typer.Exit(1)
     if store.merge_target_profiles({name: profile}):
         store.save()
         console.print(
@@ -1100,7 +1221,7 @@ def target_list() -> None:
             table.add_row(
                 t,
                 "[yellow]overlay available[/yellow]",
-                f"`agy target add {t}` (from {available[t]})",
+                f"`{prog()} target add {t}` (from {available[t]})",
             )
         else:
             table.add_row(t, "[red]unresolved[/red]", "no built-in, profile, or overlay")
@@ -1129,8 +1250,8 @@ def import_apm(
     """Translate a Microsoft apm project (`apm.yml`) into `.agentry.yml`.
 
     Maps apm dependencies to agentry sources + components, inline MCP servers to MCP fragments,
-    and apm targets to agentry targets. Run `agy sync` afterwards to install. Anything that
-    can't be inferred offline is reported as a warning pointing at `agy add` / `agy list`.
+    and apm targets to agentry targets. Run `agentry sync` afterwards to install. Anything that
+    can't be inferred offline is reported as a warning pointing at `agentry add` / `agentry list`.
     """
     import json as _json
 
@@ -1202,7 +1323,7 @@ def import_apm(
     console.print(
         f"[green]Imported[/green] {len(result.sources)} source(s), "
         f"{len(result.components)} component(s) into .agentry.yml. "
-        "Review it, then run [bold]agy sync[/bold]."
+        f"Review it, then run [bold]{prog()} sync[/bold]."
     )
 
 
@@ -1290,7 +1411,7 @@ def emit_agents_md(
             current = target.read_text(encoding="utf-8") if target.is_file() else ""
             if current != content:
                 err.print(
-                    f"[red]{output} is out of date.[/red] Run `agy emit agents-md` to refresh."
+                    f"[red]{output} is out of date.[/red] Run `{prog()} emit agents-md` to refresh."
                 )
                 raise typer.Exit(1)
             console.print(f"[green]{output} is up to date[/green] ({len(items)} component(s)).")
@@ -1301,7 +1422,7 @@ def emit_agents_md(
     console.print(f"[green]Wrote[/green] {output} [dim]from {len(items)} component(s)[/dim].")
 
 
-def _trigger_memory_files(config, root: Path) -> list[Path]:
+def _trigger_memory_files(config: Config, root: Path) -> list[Path]:
     """Resolved memory-file paths (deduped, sorted) for every active target that declares one."""
     from .drivers import resolve_drivers
 
@@ -1381,7 +1502,7 @@ def emit_triggers(
     if check:
         if stale:
             listed = ", ".join(str(p) for p in stale)
-            err.print(f"[red]Out of date:[/red] {listed}. Run `agy emit triggers` to refresh.")
+            err.print(f"[red]Out of date:[/red] {listed}. Run `{prog()} emit triggers` to refresh.")
             raise typer.Exit(1)
         console.print(f"[green]Triggers up to date[/green] ({len(items)} skill(s)).")
 

@@ -16,7 +16,9 @@ def _agent_project(
 ) -> Path:
     src = tmp_path / "src"
     (src / "agents").mkdir(parents=True)
-    (src / "agents" / "a.md").write_text("---\nname: a\nmodel: x\n---\nBe helpful.\n")
+    (src / "agents" / "a.md").write_text(
+        "---\nname: a\nmodel: x\n---\nBe helpful.\n", encoding="utf-8"
+    )
     proj = tmp_path / "proj"
     proj.mkdir()
     ConfigStore.create(proj, [Target.CLAUDE]).save()
@@ -37,7 +39,7 @@ def test_strip_frontmatter_installs_a_real_rewritten_file(tmp_path: Path):
     sync(proj)
     dest = proj / ".claude/agents/a.md"
     assert dest.is_file() and not dest.is_symlink()  # a committed copy, not a live symlink
-    assert dest.read_text() == "Be helpful.\n"  # frontmatter dropped
+    assert dest.read_text(encoding="utf-8") == "Be helpful.\n"  # frontmatter dropped
     res = sync(proj)  # deterministic → idempotent
     assert res.created == [] and res.updated == []
 
@@ -57,9 +59,11 @@ def test_transform_output_is_reversible(tmp_path: Path):
 def test_transform_never_clobbers_a_hand_authored_file(tmp_path: Path):
     proj = _agent_project(tmp_path, provider="strip-frontmatter")
     (proj / ".claude/agents").mkdir(parents=True)
-    (proj / ".claude/agents/a.md").write_text("HAND-WRITTEN\n")
+    (proj / ".claude/agents/a.md").write_text("HAND-WRITTEN\n", encoding="utf-8")
     res = sync(proj)
-    assert (proj / ".claude/agents/a.md").read_text() == "HAND-WRITTEN\n"  # untouched
+    assert (proj / ".claude/agents/a.md").read_text(
+        encoding="utf-8"
+    ) == "HAND-WRITTEN\n"  # untouched
     assert any("isn't managed" in w for w in res.warnings)
 
 
@@ -82,7 +86,7 @@ def test_agent_transform_synthesizes_and_is_write_once(tmp_path: Path, monkeypat
     proj = _agent_project(tmp_path, provider="agent", prompt="Make it portable.", command=["x"])
     sync(proj, allow_transform=True)
     dest = proj / ".claude/agents/a.md"
-    assert dest.read_text() == "SYNTHESIZED\n" and not dest.is_symlink()
+    assert dest.read_text(encoding="utf-8") == "SYNTHESIZED\n" and not dest.is_symlink()
     assert len(calls) == 1 and "Make it portable." in calls[0]
     # Write-once: a second sync does NOT re-invoke the (non-reproducible) agent.
     sync(proj, allow_transform=True)
@@ -92,7 +96,7 @@ def test_agent_transform_synthesizes_and_is_write_once(tmp_path: Path, monkeypat
 def test_transform_unsupported_for_dir_type_installs_normally(tmp_path: Path):
     src = tmp_path / "src"
     (src / "skills" / "sk").mkdir(parents=True)
-    (src / "skills" / "sk" / "SKILL.md").write_text("# sk\n")
+    (src / "skills" / "sk" / "SKILL.md").write_text("# sk\n", encoding="utf-8")
     proj = tmp_path / "proj"
     proj.mkdir()
     ConfigStore.create(proj, [Target.CLAUDE]).save()

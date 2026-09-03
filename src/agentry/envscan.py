@@ -4,7 +4,7 @@ agentry's deliberate contract (see ``docs/architecture.md`` §7): a merge fragme
 ``${VAR}`` references are shipped **verbatim** — the runtime agent resolves them, not
 agentry. The one failure that contract can't catch by itself is a reference that is
 *unset and has no default*: it ships a placeholder that resolves to nothing. Both
-``agy doctor`` and ``agy sync`` scan for exactly that case and warn loudly rather than
+``agentry doctor`` and ``agentry sync`` scan for exactly that case and warn loudly rather than
 silently installing a dead placeholder. A reference *with* a default
 (``${VAR:-x}`` / ``${VAR:=x}`` / ``${VAR:x}``) can never be dead, so it is not flagged.
 

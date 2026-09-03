@@ -53,12 +53,13 @@ def bump_changelog(text: str, version: str, date: str) -> str:
 
 
 def _run(*args: str) -> None:
-    subprocess.run(args, cwd=ROOT, check=True)
+    # S603: a maintainer-run release helper; every call site below passes literal argv.
+    subprocess.run(args, cwd=ROOT, check=True)  # noqa: S603
 
 
 def _is_dirty() -> bool:
     out = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain"],  # noqa: S607
         cwd=ROOT,
         check=True,
         capture_output=True,
@@ -82,9 +83,16 @@ def main(argv: list[str]) -> int:
 
     today = datetime.date.today().isoformat()
     try:
-        PYPROJECT.write_text(bump_pyproject(PYPROJECT.read_text(), version))
-        INIT.write_text(bump_init(INIT.read_text(), version))
-        CHANGELOG.write_text(bump_changelog(CHANGELOG.read_text(), version, today))
+        # CHANGELOG.md carries em dashes, so the encoding must be explicit: on Windows the
+        # locale default would mangle them on the round-trip.
+        PYPROJECT.write_text(
+            bump_pyproject(PYPROJECT.read_text(encoding="utf-8"), version), encoding="utf-8"
+        )
+        INIT.write_text(bump_init(INIT.read_text(encoding="utf-8"), version), encoding="utf-8")
+        CHANGELOG.write_text(
+            bump_changelog(CHANGELOG.read_text(encoding="utf-8"), version, today),
+            encoding="utf-8",
+        )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

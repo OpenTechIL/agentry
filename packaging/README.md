@@ -6,37 +6,37 @@ binary build produces (`release-binaries.yml`): a bare binary per target, native
 `SHA256SUMS.txt`, and a `.cosign.bundle` Sigstore signature per asset.
 
 ```
-agy-<version>-linux-x86_64                 raw binary
-agy-<version>-macos-x86_64                 raw binary
-agy-<version>-macos-arm64                  raw binary
-agy-<version>-macos-x86_64.pkg             macOS installer (per-user)
-agy-<version>-macos-arm64.pkg              macOS installer (per-user)
-agy-<version>-windows-x86_64.exe           raw binary
-agy-<version>-windows-x86_64-setup.exe     Inno Setup installer
-agy_<version>_amd64.deb                    Debian/Ubuntu package
-agy-<version>.x86_64.rpm                   Fedora/RHEL package
-agy-<version>-linux-x86_64.tar.gz          tarball
+agentry-<version>-linux-x86_64                 raw binary
+agentry-<version>-macos-x86_64                 raw binary
+agentry-<version>-macos-arm64                  raw binary
+agentry-<version>-macos-x86_64.pkg             macOS installer (per-user)
+agentry-<version>-macos-arm64.pkg              macOS installer (per-user)
+agentry-<version>-windows-x86_64.exe           raw binary
+agentry-<version>-windows-x86_64-setup.exe     Inno Setup installer
+agentry_<version>_amd64.deb                    Debian/Ubuntu package
+agentry-<version>.x86_64.rpm                   Fedora/RHEL package
+agentry-<version>-linux-x86_64.tar.gz          tarball
 SHA256SUMS.txt                             checksums for all of the above
 <asset>.cosign.bundle                      keyless Sigstore signature per asset
 ```
 
-## Windows installer — `windows/agy.iss`
+## Windows installer — `windows/agentry.iss`
 
 An [Inno Setup](https://jrsoftware.org/isinfo.php) script compiled by `ISCC.exe` in CI
-(`iscc /DMyAppVersion=<version> packaging\windows\agy.iss`). It produces a per-user installer
-(`agy-<version>-windows-x86_64-setup.exe`, no admin required) that drops `agy.exe` under
+(`iscc /DMyAppVersion=<version> packaging\windows\agentry.iss`). It produces a per-user installer
+(`agentry-<version>-windows-x86_64-setup.exe`, no admin required) that drops `agentry.exe` under
 `%LOCALAPPDATA%\Programs\agentry`, adds it to the user PATH, and registers an uninstaller —
 same install location as `install.ps1`.
 
 ## Linux packages — `nfpm.yaml`
 
 An [nfpm](https://nfpm.goreleaser.com/) config that packages the frozen binary into a `.deb`
-and `.rpm` installing `/usr/bin/agy`. The version is injected via the `VERSION` env var at
+and `.rpm` installing `/usr/bin/agentry`. The version is injected via the `VERSION` env var at
 build time (`VERSION=<version> nfpm package -f packaging/nfpm.yaml -p deb -t .`).
 
 ```sh
-sudo apt install ./agy_<version>_amd64.deb      # Debian/Ubuntu
-sudo dnf install ./agy-<version>.x86_64.rpm      # Fedora/RHEL
+sudo apt install ./agentry_<version>_amd64.deb      # Debian/Ubuntu
+sudo dnf install ./agentry-<version>.x86_64.rpm      # Fedora/RHEL
 ```
 
 ## macOS installer — `macos/distribution.xml`
@@ -44,48 +44,49 @@ sudo dnf install ./agy-<version>.x86_64.rpm      # Fedora/RHEL
 A [`productbuild`](https://developer.apple.com/library/archive/documentation/DeveloperTools/Reference/DistributionDefinitionRef/Introduction/Introduction.html)
 distribution compiled in CI. The workflow wraps the frozen binary in a component pkg with
 `pkgbuild`, then runs `productbuild` against this distribution to produce a per-user
-installer (`agy-<version>-macos-{x86_64,arm64}.pkg`, no admin required). `enable_currentUserHome`
-lays the payload down relative to the user's home, so `agy` installs to `~/.local/bin/agy` —
+installer (`agentry-<version>-macos-{x86_64,arm64}.pkg`, no admin required). `enable_currentUserHome`
+lays the payload down relative to the user's home, so the binary installs to
+`~/.local/bin/agentry` (with `agy`/`agyx` symlinks beside it) —
 same location as `install.sh`. The `macos/scripts/postinstall` script adds `~/.local/bin` to
 PATH in `~/.zprofile` / `~/.bash_profile` (idempotently), since a GUI installer can't print a
 terminal note. The version is injected via a `${VERSION}` placeholder at build time.
 
 ```sh
-installer -pkg agy-<version>-macos-arm64.pkg -target CurrentUserHomeDirectory   # or double-click
+installer -pkg agentry-<version>-macos-arm64.pkg -target CurrentUserHomeDirectory   # or double-click
 ```
 
 Like the other assets it is **not** OS code-signed or notarized (see the signing note below),
 so the macOS Gatekeeper first-run prompt still applies.
 
-## Homebrew — `homebrew/agy.rb`
+## Homebrew — `homebrew/agentry.rb`
 
-A formula for a tap (`OpenTechIL/homebrew-tap`): then `brew install OpenTechIL/tap/agy`.
+A formula for a tap (`OpenTechIL/homebrew-tap`): then `brew install OpenTechIL/tap/agentry`.
 It selects the macOS/Linux binary by arch and verifies its `sha256`. **`version` and the
-`sha256` values are release-specific**; the in-repo `agy.rb` keeps 64-zero placeholders so the
+`sha256` values are release-specific**; the in-repo `agentry.rb` keeps 64-zero placeholders so the
 structure stays reviewable, and they're filled per release from `SHA256SUMS.txt` (the lines are
-`<sha256>  agy-<version>-<target>`).
+`<sha256>  agentry-<version>-<target>`).
 
 This is **automated**: the `homebrew` job in `release-binaries.yml` runs on every `v*` tag,
-renders the formula with `scripts/render_homebrew.py <version> SHA256SUMS.txt homebrew/agy.rb`
-(the render keys each sha off the `agy-<version>-<target>` asset named in the url line above it),
-and pushes the result to `Formula/agy.rb` in the tap repo. Two one-time prerequisites:
+renders the formula with `scripts/render_homebrew.py <version> SHA256SUMS.txt homebrew/agentry.rb`
+(the render keys each sha off the `agentry-<version>-<target>` asset named in the url line above it),
+and pushes the result to `Formula/agentry.rb` in the tap repo. Two one-time prerequisites:
 
 1. Create the tap repo **`OpenTechIL/homebrew-tap`** (formulas live in `Formula/`).
 2. Add a repo secret **`HOMEBREW_TAP_TOKEN`** to `OpenTechIL/agentry` — a fine-grained PAT (or
    deploy key) with `contents: write` on `homebrew-tap`. The default `GITHUB_TOKEN` can't push
    to a different repo. Until the secret exists the job logs a skip and the release still succeeds.
 
-## Scoop — `scoop/agy.json`
+## Scoop — `scoop/agentry.json`
 
-A Windows manifest: `scoop install agy` (from a bucket that includes this manifest). The static
+A Windows manifest: `scoop install agentry` (from a bucket that includes this manifest). The static
 `hash` for the pinned `version` is a placeholder to fill on release, but the `checkver` +
 `autoupdate` blocks let `scoop update` self-bump from future releases automatically (the hash is
-pulled from `SHA256SUMS.txt`). `#/agy.exe` renames the downloaded asset to `agy.exe`.
+pulled from `SHA256SUMS.txt`). `#/agentry.exe` renames the downloaded asset to `agentry.exe`.
 
 ## Devcontainer Feature — `devcontainer/src/agentry/`
 
-A [devcontainer Feature](https://containers.dev/implementors/features/) that installs `agy`
-system-wide at image build, then — via `postCreateCommand` — runs `agy sync --frozen` once the
+A [devcontainer Feature](https://containers.dev/implementors/features/) that installs `agentry`
+system-wide at image build, then — via `postCreateCommand` — runs `agentry sync --frozen` once the
 workspace is mounted **iff** it has a committed `.agentry.lock`. Zero-friction agent setup in
 Codespaces/devcontainers. Reference it once published:
 
@@ -105,10 +106,10 @@ Fulcio certificate + Rekor transparency-log entry) attached to the release. Veri
 
 ```sh
 cosign verify-blob \
-  --bundle agy-<version>-linux-x86_64.cosign.bundle \
+  --bundle agentry-<version>-linux-x86_64.cosign.bundle \
   --certificate-identity-regexp '^https://github.com/OpenTechIL/agentry/\.github/workflows/release-binaries\.yml@.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  agy-<version>-linux-x86_64
+  agentry-<version>-linux-x86_64
 ```
 
 The same works against `SHA256SUMS.txt.cosign.bundle`, or against any installer/package

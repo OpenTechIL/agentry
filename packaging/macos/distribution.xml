@@ -1,16 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- packaging/macos/distribution.xml : productbuild distribution for the agy .pkg.
-     Consumed by release-binaries.yml. The PyInstaller binary must exist at ./dist/agy
-     first; the workflow wraps it in a component pkg (agy-component.pkg) then runs
+<!-- packaging/macos/distribution.xml : productbuild distribution for the agentry .pkg.
+     Consumed by release-binaries.yml. The PyInstaller binary must exist at ./dist/agentry
+     first; the workflow wraps it in a component pkg (agentry-component.pkg) then runs
      productbuild against this file. ${VERSION} is substituted at build time (like
      nfpm.yaml) before productbuild reads it; see packaging/README.md for the exact
      commands (XML comments cannot contain a double hyphen, so they are omitted here).
 
      enable_currentUserHome makes this a per-user install (no admin): the component's
-     payload is laid down relative to the user's home, so local/bin/agy becomes
-     ~/.local/bin/agy, matching install.sh's default AGENTRY_INSTALL_DIR. -->
+     payload is laid down relative to the user's home, so local/bin/agentry becomes
+     ~/.local/bin/agentry, matching install.sh's default AGENTRY_INSTALL_DIR. The postinstall
+     script adds the agy and agyx symlinks alongside it. -->
 <installer-gui-script minSpecVersion="2">
-    <title>agentry (agy)</title>
+    <title>agentry</title>
     <!-- per-user only: no admin, installs into the user's home -->
     <domains enable_currentUserHome="true" enable_anywhere="false" enable_localSystem="false"/>
     <options customize="never" require-scripts="true"/>
@@ -20,5 +21,5 @@
     <choice id="default" title="agentry">
         <pkg-ref id="com.opentech.agentry"/>
     </choice>
-    <pkg-ref id="com.opentech.agentry" version="${VERSION}">agy-component.pkg</pkg-ref>
+    <pkg-ref id="com.opentech.agentry" version="${VERSION}">agentry-component.pkg</pkg-ref>
 </installer-gui-script>

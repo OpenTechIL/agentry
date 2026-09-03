@@ -23,11 +23,13 @@ _ENV = {
 def _skill(repo: Path, name: str, body: str = "skill\n") -> None:
     d = repo / "skills" / name
     d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(f"# {name}\n{body}")
+    (d / "SKILL.md").write_text(f"# {name}\n{body}", encoding="utf-8")
 
 
 def _descriptor(repo: Path, provides: dict) -> None:
-    (repo / "agentry.yaml").write_text(json.dumps({"version": 1, "provides": provides}))
+    (repo / "agentry.yaml").write_text(
+        json.dumps({"version": 1, "provides": provides}), encoding="utf-8"
+    )
 
 
 def _git_init(repo: Path, ref: str = "main") -> str:
@@ -65,13 +67,13 @@ def test_same_source_dependency(tmp_path: Path):
     assert (proj / ".claude/skills/a/SKILL.md").exists()
     assert (proj / ".claude/skills/b/SKILL.md").exists()  # transitive sibling installed
     # b was NOT written into .agentry.yml — it's a dependency.
-    assert "name: b" not in (proj / ".agentry.yml").read_text()
+    assert "name: b" not in (proj / ".agentry.yml").read_text(encoding="utf-8")
 
 
 def _skill_at(repo: Path, subdir: str, name: str) -> None:
     d = repo / subdir / "skills" / name
     d.mkdir(parents=True, exist_ok=True)
-    (d / "SKILL.md").write_text(f"# {name}\n")
+    (d / "SKILL.md").write_text(f"# {name}\n", encoding="utf-8")
 
 
 def test_sibling_path_dependency_local_monorepo(tmp_path: Path):
@@ -104,7 +106,9 @@ def test_sibling_path_dependency_local_monorepo(tmp_path: Path):
     assert not res.warnings, res.warnings
     assert (proj / ".claude/skills/a/SKILL.md").exists()
     assert (proj / ".claude/skills/b/SKILL.md").exists()  # sibling at packages/lib pulled in
-    assert "packages/lib" not in (proj / ".agentry.yml").read_text()  # lock-only, not config
+    assert "packages/lib" not in (proj / ".agentry.yml").read_text(
+        encoding="utf-8"
+    )  # lock-only, not config
     # The sibling is recorded as a synthesized source in the lock.
     assert any(e.name == "g+packages-lib" for e in load_lock(proj).sources)
 
@@ -183,7 +187,7 @@ def test_cross_repo_transitive_lock_only(tmp_path: Path):
     synth = [e for e in lock.sources if e.synthesized]
     assert len(synth) == 1 and len(synth[0].resolved) == 40
     # The transitive source is in the lock but not in the committed config.
-    cfg = (proj / ".agentry.yml").read_text()
+    cfg = (proj / ".agentry.yml").read_text(encoding="utf-8")
     assert url_b not in cfg
 
 

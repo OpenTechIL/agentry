@@ -18,9 +18,10 @@ def _repo_with_skill_and_mcp(tmp_path: Path) -> Path:
     """A source repo holding a skill AND a (root) MCP server — both via discovery."""
     repo = tmp_path / "toolkit"
     (repo / "skills" / "reviewer").mkdir(parents=True)
-    (repo / "skills" / "reviewer" / "SKILL.md").write_text("# reviewer\n")
+    (repo / "skills" / "reviewer" / "SKILL.md").write_text("# reviewer\n", encoding="utf-8")
     (repo / ".mcp.json").write_text(
-        json.dumps({"mcpServers": {"weather": {"type": "http", "url": "https://example.com/mcp"}}})
+        json.dumps({"mcpServers": {"weather": {"type": "http", "url": "https://example.com/mcp"}}}),
+        encoding="utf-8",
     )
     return repo
 
@@ -30,7 +31,9 @@ def _catalog(tmp_path: Path, repo: Path, *, expose=None) -> Path:
     if expose is not None:
         entry["expose"] = expose
     path = tmp_path / "repositories.json"
-    path.write_text(json.dumps({"version": 1, "repositories": {"toolkit": entry}}))
+    path.write_text(
+        json.dumps({"version": 1, "repositories": {"toolkit": entry}}), encoding="utf-8"
+    )
     return path
 
 
@@ -64,7 +67,7 @@ def test_add_whole_repo_installs_skill_and_mcp(tmp_path, monkeypatch):
     # Skill symlinked in...
     assert (project / ".claude/skills/reviewer").is_symlink()
     # ...and the MCP server merged — proving a catalog can carry MCP (merge ban lifted).
-    mcp = json.loads((project / ".mcp.json").read_text())
+    mcp = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
     assert "weather" in mcp["mcpServers"]
 
     cfg = ConfigStore.load(project).parsed()
@@ -88,7 +91,9 @@ def test_add_repo_with_expose_mcp_only(tmp_path, monkeypatch):
     assert res.exit_code == 0, res.output
 
     # Only the exposed MCP installed; the skill was not.
-    assert json.loads((project / ".mcp.json").read_text())["mcpServers"].keys() == {"weather"}
+    assert json.loads((project / ".mcp.json").read_text(encoding="utf-8"))["mcpServers"].keys() == {
+        "weather"
+    }
     assert not (project / ".claude/skills/reviewer").exists()
     cfg = ConfigStore.load(project).parsed()
     assert cfg.find_component("toolkit/mcp/mcp") is not None
@@ -97,7 +102,7 @@ def test_add_repo_with_expose_mcp_only(tmp_path, monkeypatch):
 
 def test_invalid_catalog_errors(tmp_path: Path):
     bad = tmp_path / "bad.json"
-    bad.write_text("{ not json")
+    bad.write_text("{ not json", encoding="utf-8")
     config = Config(repositories=[Registry(name="c", location=str(bad))])
     with pytest.raises(reg.RegistryError, match="invalid index"):
         reg.load_catalog(tmp_path, config.repositories[0])
@@ -121,7 +126,7 @@ def test_shipped_repositories_catalog_is_valid():
     from agentry.models import RepositoryIndex
 
     path = Path(__file__).resolve().parent.parent / "registry" / "repositories.json"
-    idx = RepositoryIndex.model_validate(json.loads(path.read_text()))
+    idx = RepositoryIndex.model_validate(json.loads(path.read_text(encoding="utf-8")))
     assert "arckit" in idx.repositories
     ark = idx.repositories["arckit"]
     assert ark.source.url == "https://github.com/tractorjuice/arc-kit"

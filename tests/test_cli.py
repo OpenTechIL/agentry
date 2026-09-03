@@ -113,7 +113,8 @@ def _write_overlay_catalog(path):
                     "myide": {"skill": {"strategy": "link", "dest": ".myide/skills/{name}"}}
                 },
             }
-        )
+        ),
+        encoding="utf-8",
     )
 
 
@@ -132,7 +133,7 @@ def test_target_add_installs_overlay_and_resolves_target(tmp_path, monkeypatch):
     # Before the overlay, the unresolved target warns and nothing lands under .myide.
     assert not (project / ".myide/skills/code-reviewer").exists()
 
-    out = runner.invoke(app, ["target", "add", "myide"]).output
+    out = runner.invoke(app, ["target", "add", "myide", "--yes"]).output
     assert "myide" in out
     # The overlay is now in config and the skill installs to the overlay's destination.
     assert "myide" in ConfigStore.load(project).parsed().target_profiles
@@ -182,7 +183,8 @@ def test_import_apm_creates_config_and_mcp_fragments(tmp_path, monkeypatch):
         "    - name: github\n"
         "      transport: stdio\n"
         "      command: npx\n"
-        "      args: ['-y', '@modelcontextprotocol/server-github']\n"
+        "      args: ['-y', '@modelcontextprotocol/server-github']\n",
+        encoding="utf-8",
     )
     monkeypatch.chdir(project)
 
@@ -200,7 +202,7 @@ def test_import_apm_creates_config_and_mcp_fragments(tmp_path, monkeypatch):
     # The MCP fragment was written in agentry's merge shape.
     import json
 
-    frag = json.loads((project / "apm-import" / "mcp" / "github.json").read_text())
+    frag = json.loads((project / "apm-import" / "mcp" / "github.json").read_text(encoding="utf-8"))
     assert frag == {
         "github": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-github"]}
     }
@@ -211,7 +213,8 @@ def test_import_apm_dry_run_writes_nothing(tmp_path, monkeypatch):
     project.mkdir()
     (project / "apm.yml").write_text(
         "name: demo\nversion: 1.0.0\ndependencies:\n"
-        "  apm: ['github/acme/repo/skills/x']\n  mcp: []\n"
+        "  apm: ['github/acme/repo/skills/x']\n  mcp: []\n",
+        encoding="utf-8",
     )
     monkeypatch.chdir(project)
     out = runner.invoke(app, ["import", "apm", "--dry-run"]).output
@@ -240,7 +243,7 @@ def test_emit_agents_md_writes_and_checks(tmp_path, monkeypatch):
 
     out = runner.invoke(app, ["emit", "agents-md"]).output
     assert "Wrote" in out
-    agents_md = (project / "AGENTS.md").read_text()
+    agents_md = (project / "AGENTS.md").read_text(encoding="utf-8")
     assert "# AGENTS.md" in agents_md
     assert "## code-reviewer (skill)" in agents_md and "# code reviewer" in agents_md
     assert "## planner (agent)" in agents_md
@@ -249,7 +252,9 @@ def test_emit_agents_md_writes_and_checks(tmp_path, monkeypatch):
     assert runner.invoke(app, ["emit", "agents-md", "--check"]).exit_code == 0
 
     # A source change makes the committed file stale → --check fails (the CI verify path).
-    (tmp_path / "team" / "skills" / "code-reviewer" / "SKILL.md").write_text("# changed\n")
+    (tmp_path / "team" / "skills" / "code-reviewer" / "SKILL.md").write_text(
+        "# changed\n", encoding="utf-8"
+    )
     result = runner.invoke(app, ["emit", "agents-md", "--check"])
     assert result.exit_code == 1
     assert "out of date" in result.output
@@ -268,7 +273,9 @@ def test_emit_agents_md_no_components(tmp_path, monkeypatch):
 def _described_skill_source(root, name="greeter", desc="Use when the user says hello."):
     d = root / "skills" / name
     d.mkdir(parents=True)
-    (d / "SKILL.md").write_text(f"---\nname: {name}\ndescription: {desc}\n---\n# body\n")
+    (d / "SKILL.md").write_text(
+        f"---\nname: {name}\ndescription: {desc}\n---\n# body\n", encoding="utf-8"
+    )
     return root
 
 
@@ -285,7 +292,7 @@ def test_emit_triggers_fans_out_to_target_memory_files(tmp_path, monkeypatch):
     assert res.exit_code == 0
     # claude -> .claude/CLAUDE.md, opencode -> AGENTS.md
     for path in (project / ".claude" / "CLAUDE.md", project / "AGENTS.md"):
-        doc = path.read_text()
+        doc = path.read_text(encoding="utf-8")
         assert "## Agentry-managed skills" in doc
         assert "- **greeter** — Use when the user says hello." in doc
 
@@ -294,7 +301,8 @@ def test_emit_triggers_fans_out_to_target_memory_files(tmp_path, monkeypatch):
 
     # A description change makes memory files stale → --check fails (the CI verify path).
     (tmp_path / "team" / "skills" / "greeter" / "SKILL.md").write_text(
-        "---\nname: greeter\ndescription: Use when the user waves goodbye.\n---\n# body\n"
+        "---\nname: greeter\ndescription: Use when the user waves goodbye.\n---\n# body\n",
+        encoding="utf-8",
     )
     stale = runner.invoke(app, ["emit", "triggers", "--check"])
     assert stale.exit_code == 1
@@ -312,7 +320,9 @@ def test_emit_triggers_output_override_single_file(tmp_path, monkeypatch):
 
     res = runner.invoke(app, ["emit", "triggers", "-o", "NOTES.md"])
     assert res.exit_code == 0
-    assert "- **greeter** — Use when the user says hello." in (project / "NOTES.md").read_text()
+    assert "- **greeter** — Use when the user says hello." in (project / "NOTES.md").read_text(
+        encoding="utf-8"
+    )
     # Fan-out target was NOT written when -o is given.
     assert not (project / ".claude" / "CLAUDE.md").exists()
 
@@ -328,17 +338,17 @@ def test_emit_triggers_preserves_hand_authored_prose(tmp_path, monkeypatch):
 
     mem = project / ".claude" / "CLAUDE.md"
     mem.parent.mkdir(parents=True, exist_ok=True)
-    mem.write_text("# Project rules\n\nAlways run tests.\n")
+    mem.write_text("# Project rules\n\nAlways run tests.\n", encoding="utf-8")
 
     runner.invoke(app, ["emit", "triggers"])
-    doc = mem.read_text()
+    doc = mem.read_text(encoding="utf-8")
     assert "# Project rules" in doc and "Always run tests." in doc  # hand prose survives
     assert "## Agentry-managed skills" in doc
 
     # A second run is byte-identical (idempotent, no churn).
-    before = mem.read_text()
+    before = mem.read_text(encoding="utf-8")
     runner.invoke(app, ["emit", "triggers"])
-    assert mem.read_text() == before
+    assert mem.read_text(encoding="utf-8") == before
 
 
 def test_emit_triggers_no_skills(tmp_path, monkeypatch):
@@ -391,7 +401,7 @@ def test_emit_agent_synthesizes_and_writes(tmp_path, monkeypatch):
     # --yes skips the confirmation prompt (the CI auto-apply path).
     out = runner.invoke(app, ["emit", "agents-md", "--agent", "--allow-transform", "--yes"]).output
     assert "Wrote" in out
-    assert (project / "AGENTS.md").read_text() == "# AGENTS.md\n\nSynthesized.\n"
+    assert (project / "AGENTS.md").read_text(encoding="utf-8") == "# AGENTS.md\n\nSynthesized.\n"
 
 
 def test_emit_agent_rejects_check(tmp_path, monkeypatch):
@@ -440,7 +450,7 @@ def test_doctor_strict_fails_on_warnings(tmp_path, monkeypatch):
     (src / "mcp").mkdir(parents=True)
     # An MCP server referencing an unset env var → a doctor warning (not an error).
     (src / "mcp" / "gh.json").write_text(
-        json.dumps({"gh": {"command": "x", "env": {"T": "${UNSET_STRICT_VAR}"}}})
+        json.dumps({"gh": {"command": "x", "env": {"T": "${UNSET_STRICT_VAR}"}}}), encoding="utf-8"
     )
     monkeypatch.chdir(project)
     runner.invoke(app, ["source", "add", "team", str(src), "--local"])

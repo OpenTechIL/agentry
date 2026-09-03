@@ -7,15 +7,15 @@ edit_uri: edit/main/docs/
 
 docs_dir: docs
 
-# Internal design/strategy artifacts (superpowers specs/plans, competitive analysis).
-# They cross-reference source files via paths that escape docs_dir, so keep them out of
-# the published, strict-validated site.
-exclude_docs: |
-  superpowers/
-  cm-an-apm-2026-06-30/
+# Internal design/strategy artifacts (superpowers specs/plans, competitive analysis) live
+# under docs/.local.docs/. MkDocs already skips dot-prefixed directories, so no explicit
+# exclude_docs entry is needed — the previous patterns pointed at pre-move paths and
+# silently matched nothing.
 
-# Promote link/anchor problems to warnings so `mkdocs build --strict` fails on
-# dead internal links and missing heading anchors (not just missing files).
+# `--strict` turns warnings into failures, so `warn` here already fails CI on a dead
+# internal link or a missing heading anchor. Note this validates the *MkDocs* slugs only —
+# GitHub renders README.md with a different slugifier, so avoid em dashes in headings you
+# link to (see docs/architecture.md §4/§5).
 validation:
   links:
     not_found: warn
@@ -45,8 +45,11 @@ theme:
 
 nav:
   - Home: index.md
-  - Architecture: architecture.md
   - Commands: commands.md
+  - Configuration: config-reference.md
+  - Authoring: authoring.md
+  - Troubleshooting: troubleshooting.md
+  - Architecture: architecture.md
   - Knowledge base: knowledge-base.md
   - Branding: branding-kit.md
   - Contributing: https://github.com/OpenTechIL/agentry/blob/main/CONTRIBUTING.md

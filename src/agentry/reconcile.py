@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import deps, discovery, envscan
 from .config import ConfigStore
-from .drivers import resolve_drivers
+from .drivers import Driver, resolve_drivers
 from .gitignore import ensure_gitignore
 from .installers import copy as copy_inst
 from .installers import generate as gen_inst
@@ -33,6 +33,7 @@ from .manifest import load_manifest, save_manifest
 from .models import (
     MERGE_TYPES,
     TYPE_IS_DIR,
+    Component,
     ComponentType,
     Config,
     GeneratorSpec,
@@ -42,10 +43,14 @@ from .models import (
     InstalledLinkMerge,
     InstalledMerge,
     InstalledTransform,
+    Lock,
     Manifest,
+    Source,
     SourceType,
     Strategy,
 )
+from .naming import repo_basename
+from .progname import prog
 from .resolver import effective_root
 from .spec import LinkMergeDest, MergeDest
 from .targets import unresolved_targets
@@ -117,36 +122,45 @@ class SyncResult:
 # -- desired-state computation -------------------------------------------
 
 
-def compute_desired(
-    root: Path, config: Config, warnings: list[str]
-) -> tuple[
-    list[DesiredLink],
-    list[DesiredCopy],
-    list[DesiredMerge],
-    list[DesiredGenerate],
-    list[DesiredLinkMerge],
-    list[DesiredTransform],
-]:
+@dataclass
+class DesiredPlan:
+    """What *should* be installed, grouped by strategy.
+
+    One field per installer. Named rather than a 6-tuple so callers (``sync``, ``status``)
+    can't transpose two same-typed lists, and so adding a seventh strategy doesn't rewrite
+    every unpack site.
+    """
+
+    links: list[DesiredLink] = field(default_factory=list)
+    copies: list[DesiredCopy] = field(default_factory=list)
+    merges: list[DesiredMerge] = field(default_factory=list)
+    generates: list[DesiredGenerate] = field(default_factory=list)
+    link_merges: list[DesiredLinkMerge] = field(default_factory=list)
+    transforms: list[DesiredTransform] = field(default_factory=list)
+
+
+def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredPlan:
+    """Resolve config + on-disk sources into the full desired install plan.
+
+    Per component: resolve its artifact (explicit ``path``, discovery index, or the
+    self-installing ``generate`` case), warn about dead ``${VAR}`` placeholders, then hand
+    each of its targets to :func:`_desired_for_target` for strategy dispatch.
+    """
     drivers = resolve_drivers(config)
     for missing in unresolved_targets(config):
         warnings.append(
             f"target '{missing}' is undefined — define it under target_profiles in .agentry.yml, "
-            "or install a shared driver overlay (`agy target list`)"
+            f"or install a shared driver overlay (`{prog()} target list`)"
         )
 
     # Build a (type, name) -> path index per source.
     indexes: dict[str, dict[tuple[ComponentType, str], Path]] = {}
-    for src in config.sources:
-        sp = effective_root(root, src)
+    for indexed in config.sources:
+        sp = effective_root(root, indexed)
         if sp.exists():
-            indexes[src.name] = discovery.index(sp)
+            indexes[indexed.name] = discovery.index(sp)
 
-    links: list[DesiredLink] = []
-    copies: list[DesiredCopy] = []
-    merges: list[DesiredMerge] = []
-    generates: list[DesiredGenerate] = []
-    link_merges: list[DesiredLinkMerge] = []
-    transforms: list[DesiredTransform] = []
+    plan = DesiredPlan()
 
     for comp in config.components:
         if not comp.enabled:
@@ -158,7 +172,7 @@ def compute_desired(
         if comp.generate is not None:
             # Self-installing component (GENERATE strategy) — artifact resolution does not apply.
             label = ", ".join(comp.applies_to(config.targets))
-            generates.append(DesiredGenerate(comp.ref, label, comp.generate))
+            plan.generates.append(DesiredGenerate(comp.ref, label, comp.generate))
             continue
         if comp.path is not None:
             # Explicit artifact path: resolve directly under the source root, skipping discovery.
@@ -169,14 +183,15 @@ def compute_desired(
                 )
                 continue
         else:
-            artifact = indexes.get(comp.source, {}).get((comp.type, comp.name))
-            if artifact is None or not artifact.exists():
+            found = indexes.get(comp.source, {}).get((comp.type, comp.name))
+            if found is None or not found.exists():
                 warnings.append(f"{comp.ref}: not provided by source '{comp.source}'")
                 continue
+            artifact = found
 
         # agentry ships ${VAR} placeholders verbatim (the runtime resolves them), but a
         # reference that is unset *and* has no default would ship dead. Warn once per
-        # component rather than silently install it — mirrors `agy doctor`.
+        # component rather than silently install it — mirrors `agentry doctor`.
         if comp.type in MERGE_TYPES and artifact.is_file():
             for var in envscan.unset_env_refs(artifact.read_text(encoding="utf-8")):
                 warnings.append(
@@ -188,89 +203,108 @@ def compute_desired(
             driver = drivers.get(tname)
             if driver is None:
                 continue  # already warned via unresolved_targets
-            # Per-harness merge fragments (e.g. hooks-cursor.json) install only into the
-            # matching target; skip foreign harnesses so a Cursor/Codex variant never
-            # lands in another tool's config (e.g. Claude's settings.json).
-            if comp.type in MERGE_TYPES:
-                h = discovery.harness_suffix(comp.name)
-                if h is not None and h != tname:
-                    continue
-            strat = driver.strategy(comp.type)
-            if strat is None:
-                warnings.append(
-                    f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped"
-                )
-                continue
-            if comp.transform is not None:
-                # Copy-with-rewrite: a transformed file replaces the live symlink. Only
-                # single-file link types qualify; anything else installs normally with a note.
-                if strat is Strategy.LINK and not TYPE_IS_DIR[comp.type]:
-                    transforms.append(
-                        DesiredTransform(
-                            comp.ref,
-                            tname,
-                            driver.link_dest(comp.type, comp.name),
-                            artifact,
-                            comp.transform.provider,
-                            comp.transform.prompt,
-                        )
-                    )
-                    continue
-                warnings.append(
-                    f"{comp.ref}: transform is only supported for file components (agent/command) "
-                    f"on link targets — installed without transform on '{tname}'"
-                )
-            if strat is Strategy.LINK:
-                links.append(
-                    DesiredLink(comp.ref, tname, driver.link_dest(comp.type, comp.name), artifact)
-                )
-            elif strat is Strategy.COPY:
-                copies.append(
-                    DesiredCopy(comp.ref, tname, driver.copy_dest(comp.type, comp.name), artifact)
-                )
-            elif strat is Strategy.LINK_MERGE:
-                lm = _compute_link_merge(
-                    comp, src, tname, driver.link_merge_dest(comp.type), artifact, warnings
-                )
-                if lm is not None:
-                    link_merges.append(lm)
-            else:
-                dest = driver.merge_dest(comp.type)
-                try:
-                    entries = merge_inst.select_entries(merge_inst.load_fragment(artifact), dest)
-                except (ValueError, OSError) as exc:
-                    warnings.append(f"{comp.ref}: {exc}")
-                    continue
-                # Defense-in-depth: drop hook events the target doesn't recognize (e.g. Claude
-                # Code rejects a settings.json carrying unknown events). No-op for agents
-                # without a hook-event policy.
-                if comp.type is ComponentType.HOOK:
-                    entries, dropped = driver.filter_hook_events(entries)
-                    for bad in dropped:
-                        warnings.append(
-                            f"{comp.ref}: hook event '{bad}' is not a recognized {tname} event — skipped"
-                        )
-                    if not entries:
-                        continue
-                    # A plugin-style hook ships ${...PLUGIN_ROOT} paths that only resolve inside
-                    # a real installed plugin. Merged verbatim into a config file they fail at
-                    # startup; the fix is a link+merge profile (which rewrites them). Warn rather
-                    # than silently install a dead hook.
-                    for cmd in link_merge_inst.plugin_root_refs(entries):
-                        warnings.append(
-                            f"{comp.ref}: hook command references a plugin-root variable "
-                            f"({cmd!r}), which only resolves inside an installed plugin — merged "
-                            f"into {dest.file} it will fail at startup. Configure a 'link+merge' "
-                            f"hook profile under target_profiles for this repo (see the "
-                            f"superpowers/arckit catalog entries)."
-                        )
-                # Seam: a driver.transform (currently always None) would reshape `entries`
-                # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
-                merges.append(DesiredMerge(comp.ref, tname, dest, entries, list(entries)))
-    return links, copies, merges, generates, link_merges, transforms
+            _desired_for_target(comp, src, tname, driver, artifact, plan, warnings)
+
+    return plan
 
 
-def _link_merge_vars(comp, src) -> dict[str, str]:
+def _desired_for_target(
+    comp: Component,
+    src: Source,
+    tname: str,
+    driver: Driver,
+    artifact: Path,
+    plan: DesiredPlan,
+    warnings: list[str],
+) -> None:
+    """Dispatch one (component, target) pair to the right strategy, appending to ``plan``.
+
+    Split out of :func:`compute_desired` so the strategy dispatch reads on its own, without
+    the surrounding artifact-resolution loop. Appends nothing when the pair doesn't install
+    (unsupported type, a foreign per-harness variant, an unreadable fragment).
+    """
+    # Per-harness merge fragments (e.g. hooks-cursor.json) install only into the
+    # matching target; skip foreign harnesses so a Cursor/Codex variant never
+    # lands in another tool's config (e.g. Claude's settings.json).
+    if comp.type in MERGE_TYPES:
+        h = discovery.harness_suffix(comp.name)
+        if h is not None and h != tname:
+            return
+    strat = driver.strategy(comp.type)
+    if strat is None:
+        warnings.append(
+            f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped"
+        )
+        return
+    if comp.transform is not None:
+        # Copy-with-rewrite: a transformed file replaces the live symlink. Only
+        # single-file link types qualify; anything else installs normally with a note.
+        if strat is Strategy.LINK and not TYPE_IS_DIR[comp.type]:
+            plan.transforms.append(
+                DesiredTransform(
+                    comp.ref,
+                    tname,
+                    driver.link_dest(comp.type, comp.name),
+                    artifact,
+                    comp.transform.provider,
+                    comp.transform.prompt,
+                )
+            )
+            return
+        warnings.append(
+            f"{comp.ref}: transform is only supported for file components (agent/command) "
+            f"on link targets — installed without transform on '{tname}'"
+        )
+    if strat is Strategy.LINK:
+        plan.links.append(
+            DesiredLink(comp.ref, tname, driver.link_dest(comp.type, comp.name), artifact)
+        )
+    elif strat is Strategy.COPY:
+        plan.copies.append(
+            DesiredCopy(comp.ref, tname, driver.copy_dest(comp.type, comp.name), artifact)
+        )
+    elif strat is Strategy.LINK_MERGE:
+        lm = _compute_link_merge(
+            comp, src, tname, driver.link_merge_dest(comp.type), artifact, warnings
+        )
+        if lm is not None:
+            plan.link_merges.append(lm)
+    else:
+        dest = driver.merge_dest(comp.type)
+        try:
+            entries = merge_inst.select_entries(merge_inst.load_fragment(artifact), dest)
+        except (ValueError, OSError) as exc:
+            warnings.append(f"{comp.ref}: {exc}")
+            return
+        # Defense-in-depth: drop hook events the target doesn't recognize (e.g. Claude
+        # Code rejects a settings.json carrying unknown events). No-op for agents
+        # without a hook-event policy.
+        if comp.type is ComponentType.HOOK:
+            entries, dropped = driver.filter_hook_events(entries)
+            for bad in dropped:
+                warnings.append(
+                    f"{comp.ref}: hook event '{bad}' is not a recognized {tname} event — skipped"
+                )
+            if not entries:
+                return
+            # A plugin-style hook ships ${...PLUGIN_ROOT} paths that only resolve inside
+            # a real installed plugin. Merged verbatim into a config file they fail at
+            # startup; the fix is a link+merge profile (which rewrites them). Warn rather
+            # than silently install a dead hook.
+            for cmd in link_merge_inst.plugin_root_refs(entries):
+                warnings.append(
+                    f"{comp.ref}: hook command references a plugin-root variable "
+                    f"({cmd!r}), which only resolves inside an installed plugin — merged "
+                    f"into {dest.file} it will fail at startup. Configure a 'link+merge' "
+                    f"hook profile under target_profiles for this repo (see the "
+                    f"superpowers/arckit catalog entries)."
+                )
+        # Seam: a driver.transform (currently always None) would reshape `entries`
+        # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
+        plan.merges.append(DesiredMerge(comp.ref, tname, dest, entries, list(entries)))
+
+
+def _link_merge_vars(comp: Component, src: Source) -> dict[str, str]:
     """Path-template substitutions for a link+merge destination.
 
     ``{name}``   component name (e.g. ``hooks``)
@@ -281,11 +315,7 @@ def _link_merge_vars(comp, src) -> dict[str, str]:
     ``.claude/hooks/agentry/{repo}@{ref}/{name}`` — instead of colliding on ``{name}``.
     """
     locator = src.url if src.type is SourceType.GIT else src.path
-    repo = comp.source
-    if locator:
-        repo = locator.rstrip("/").rsplit("/", 1)[-1]
-        if repo.endswith(".git"):
-            repo = repo[:-4]
+    repo = repo_basename(locator, fallback=comp.source) if locator else comp.source
     ref = (src.ref or "main").replace("/", "-")
     return {"name": comp.name, "source": comp.source, "repo": repo, "ref": ref}
 
@@ -302,8 +332,13 @@ def _expand(template: str, variables: dict[str, str]) -> str:
 
 
 def _compute_link_merge(
-    comp, src, tname: str, lmdest: LinkMergeDest, artifact: Path, warnings: list[str]
-):
+    comp: Component,
+    src: Source,
+    tname: str,
+    lmdest: LinkMergeDest,
+    artifact: Path,
+    warnings: list[str],
+) -> DesiredLinkMerge | None:
     """Resolve a link+merge component: the script dir to link + the rewritten fragment.
 
     ``artifact`` is the script directory (``--path hooks``) or, if a file was resolved,
@@ -367,9 +402,9 @@ def sync(
     # 2. Desired vs. installed. The augmented config carries synthesized sources and
     #    transitive components so reconcile treats them like any declared dependency.
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    links, copies, merges, generates, link_merges, transforms = compute_desired(
-        root, augmented, result.warnings
-    )
+    plan = compute_desired(root, augmented, result.warnings)
+    links, copies, merges = plan.links, plan.copies, plan.merges
+    generates, link_merges, transforms = plan.generates, plan.link_merges, plan.transforms
     manifest = load_manifest(root)
     transform_cmd = config.transform.command if config.transform else []
 
@@ -564,7 +599,7 @@ def _reconcile_generated(
     *,
     allow_run: bool,
     update: bool,
-    lock=None,
+    lock: Lock | None = None,
     trust_callback: TrustCallback | None = None,
 ) -> bool:
     """Run generators (gated by per-source consent). Returns True if trust was newly granted."""
@@ -589,7 +624,7 @@ def _reconcile_generated(
         if already and not update:
             continue  # idempotent: outputs present and tracked
         # Consent gate: a source whose component runs code at install must be trusted —
-        # via a persisted `agy trust` decision (SHA-pinned in the lock), the interactive
+        # via a persisted `agentry trust` decision (SHA-pinned in the lock), the interactive
         # prompt, or the one-shot `--allow-run` blanket override.
         source = ref.split("/", 1)[0]
         entry = lock.entry(source) if lock is not None else None
@@ -603,7 +638,8 @@ def _reconcile_generated(
                 cmds = "; ".join(gen_inst.describe(d.spec))
                 result.warnings.append(
                     f"{ref}: generator skipped — source '{source}' is not trusted to run code. "
-                    f"Run `agy trust {source}` (or `agy sync --allow-run`) to allow: {cmds}"
+                    f"Run `{prog()} trust {source}` (or `{prog()} sync --allow-run`) "
+                    f"to allow: {cmds}"
                 )
                 continue
         try:
@@ -688,43 +724,52 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
     graph, _ = deps.resolve_graph(root, config, load_lock(root))
     warnings.extend(graph.warnings)
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    links, copies, merges, generates, link_merges, transforms = compute_desired(
-        root, augmented, warnings
-    )
+    plan = compute_desired(root, augmented, warnings)
+    links, copies, merges = plan.links, plan.copies, plan.merges
+    generates, link_merges, transforms = plan.generates, plan.link_merges, plan.transforms
 
     rows: list[StatusRow] = []
-    for d in links:
-        rows.append(
-            StatusRow(d.component, d.target, d.path, link_inst.link_state(root, d.artifact, d.path))
-        )
-    for d in copies:
-        rows.append(
-            StatusRow(d.component, d.target, d.path, copy_inst.copy_state(root, d.artifact, d.path))
-        )
-    for d in merges:
+    for dl in links:
         rows.append(
             StatusRow(
-                d.component,
-                d.target,
-                f"{d.dest.file}:{d.dest.pointer}",
-                merge_inst.merge_state(root, d.dest, d.keys),
+                dl.component, dl.target, dl.path, link_inst.link_state(root, dl.artifact, dl.path)
             )
         )
-    for d in generates:
-        where = ", ".join(d.spec.produces)
-        state = "ok" if gen_inst.produces_present(root, d.spec) else "missing"
-        rows.append(StatusRow(d.component, d.target, where, state))
-    for d in link_merges:
-        link_ok = link_inst.link_state(root, d.artifact, d.link_path) == "ok"
-        merge_ok = merge_inst.merge_state(root, d.dest, d.keys) == "ok"
+    for dc in copies:
+        rows.append(
+            StatusRow(
+                dc.component, dc.target, dc.path, copy_inst.copy_state(root, dc.artifact, dc.path)
+            )
+        )
+    for dm in merges:
+        rows.append(
+            StatusRow(
+                dm.component,
+                dm.target,
+                f"{dm.dest.file}:{dm.dest.pointer}",
+                merge_inst.merge_state(root, dm.dest, dm.keys),
+            )
+        )
+    for dg in generates:
+        where = ", ".join(dg.spec.produces)
+        state = "ok" if gen_inst.produces_present(root, dg.spec) else "missing"
+        rows.append(StatusRow(dg.component, dg.target, where, state))
+    for dlm in link_merges:
+        link_ok = link_inst.link_state(root, dlm.artifact, dlm.link_path) == "ok"
+        merge_ok = merge_inst.merge_state(root, dlm.dest, dlm.keys) == "ok"
         state = "ok" if (link_ok and merge_ok) else "missing"
         rows.append(
             StatusRow(
-                d.component, d.target, f"{d.link_path} + {d.dest.file}:{d.dest.pointer}", state
+                dlm.component,
+                dlm.target,
+                f"{dlm.link_path} + {dlm.dest.file}:{dlm.dest.pointer}",
+                state,
             )
         )
-    for d in transforms:
+    for dt in transforms:
         rows.append(
-            StatusRow(d.component, d.target, d.path, transform_inst.transform_state(root, d.path))
+            StatusRow(
+                dt.component, dt.target, dt.path, transform_inst.transform_state(root, dt.path)
+            )
         )
     return rows, warnings

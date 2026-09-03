@@ -30,9 +30,13 @@ def test_merge_variants_carry_harness_affinity(tmp_path: Path):
     """`hooks-cursor.json` is tagged for the cursor harness; the canonical file is not."""
     root = tmp_path / "plugin"
     (root / "hooks").mkdir(parents=True)
-    (root / "hooks" / "hooks.json").write_text('{"hooks": {"SessionStart": []}}')
-    (root / "hooks" / "hooks-cursor.json").write_text('{"hooks": {"sessionStart": []}}')
-    (root / "hooks" / "hooks-codex.json").write_text('{"hooks": {"SessionStart": []}}')
+    (root / "hooks" / "hooks.json").write_text('{"hooks": {"SessionStart": []}}', encoding="utf-8")
+    (root / "hooks" / "hooks-cursor.json").write_text(
+        '{"hooks": {"sessionStart": []}}', encoding="utf-8"
+    )
+    (root / "hooks" / "hooks-codex.json").write_text(
+        '{"hooks": {"SessionStart": []}}', encoding="utf-8"
+    )
     by_name = {d.name: d for d in discovery.discover(root) if d.type is ComponentType.HOOK}
     assert by_name["hooks"].harness is None
     assert by_name["hooks-cursor"].harness == "cursor"
@@ -60,7 +64,8 @@ def test_discovers_root_mcp_json(tmp_path: Path):
     root = tmp_path / "plugin"
     root.mkdir()
     (root / ".mcp.json").write_text(
-        '{"mcpServers": {"weather": {"type": "http", "url": "https://example.com/mcp"}}}'
+        '{"mcpServers": {"weather": {"type": "http", "url": "https://example.com/mcp"}}}',
+        encoding="utf-8",
     )
     found = {(d.type, d.name): d.path for d in discovery.discover(root)}
     assert (ComponentType.MCP, "mcp") in found
@@ -71,7 +76,9 @@ def test_mcp_json_unprefixed_also_found(tmp_path: Path):
     """`mcp.json` (no leading dot) at the root works too."""
     root = tmp_path / "plugin"
     root.mkdir()
-    (root / "mcp.json").write_text('{"mcpServers": {"x": {"type": "http", "url": "u"}}}')
+    (root / "mcp.json").write_text(
+        '{"mcpServers": {"x": {"type": "http", "url": "u"}}}', encoding="utf-8"
+    )
     found = {(d.type, d.name) for d in discovery.discover(root)}
     assert (ComponentType.MCP, "mcp") in found
 
@@ -80,8 +87,10 @@ def test_root_mcp_does_not_duplicate_mcp_dir(tmp_path: Path):
     """An `mcp/mcp.json` already claiming the `mcp` name wins; the root file is skipped."""
     root = tmp_path / "plugin"
     (root / "mcp").mkdir(parents=True)
-    (root / "mcp" / "mcp.json").write_text('{"a": {"command": "x"}}')
-    (root / ".mcp.json").write_text('{"mcpServers": {"b": {"type": "http", "url": "u"}}}')
+    (root / "mcp" / "mcp.json").write_text('{"a": {"command": "x"}}', encoding="utf-8")
+    (root / ".mcp.json").write_text(
+        '{"mcpServers": {"b": {"type": "http", "url": "u"}}}', encoding="utf-8"
+    )
     mcp = [d for d in discovery.discover(root) if d.type is ComponentType.MCP and d.name == "mcp"]
     assert len(mcp) == 1
     assert mcp[0].path == root / "mcp" / "mcp.json"
@@ -90,13 +99,21 @@ def test_root_mcp_does_not_duplicate_mcp_dir(tmp_path: Path):
 def _apm_package(root: Path) -> Path:
     """A Microsoft apm package: primitives live under .apm/ with apm's dir names/extensions."""
     (root / ".apm" / "skills" / "style-checker").mkdir(parents=True)
-    (root / ".apm" / "skills" / "style-checker" / "SKILL.md").write_text("# style\n")
+    (root / ".apm" / "skills" / "style-checker" / "SKILL.md").write_text(
+        "# style\n", encoding="utf-8"
+    )
     (root / ".apm" / "agents").mkdir(parents=True)
-    (root / ".apm" / "agents" / "design-reviewer.agent.md").write_text("# reviewer\n")
+    (root / ".apm" / "agents" / "design-reviewer.agent.md").write_text(
+        "# reviewer\n", encoding="utf-8"
+    )
     (root / ".apm" / "prompts").mkdir(parents=True)
-    (root / ".apm" / "prompts" / "design-review.prompt.md").write_text("# prompt\n")
+    (root / ".apm" / "prompts" / "design-review.prompt.md").write_text(
+        "# prompt\n", encoding="utf-8"
+    )
     (root / ".apm" / "instructions").mkdir(parents=True)
-    (root / ".apm" / "instructions" / "design-standards.instructions.md").write_text("# std\n")
+    (root / ".apm" / "instructions" / "design-standards.instructions.md").write_text(
+        "# std\n", encoding="utf-8"
+    )
     return root
 
 
@@ -132,5 +149,5 @@ def test_apm_package_installs_under_agentry_naming(tmp_path: Path):
     sync(proj)
     # The .agent.md file installs under agentry's convention name (.md), via a symlink.
     agent_link = proj / ".claude/agents/design-reviewer.md"
-    assert agent_link.is_symlink() and agent_link.read_text() == "# reviewer\n"
+    assert agent_link.is_symlink() and agent_link.read_text(encoding="utf-8") == "# reviewer\n"
     assert (proj / ".claude/skills/style-checker").is_symlink()
