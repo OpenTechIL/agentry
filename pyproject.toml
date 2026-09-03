@@ -21,7 +21,7 @@ classifiers = [
 ]
 dependencies = [
     "typer>=0.12",
-    "rich>=13.7",
+    "rich>=15.0.0",
     "pydantic>=2.6",
     "ruamel.yaml>=0.18",
     "tomlkit>=0.13",
