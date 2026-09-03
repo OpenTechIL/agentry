@@ -1,9 +1,12 @@
 # agentry
 
-**A dependency manager for AI coding agents.** Declare the skills, agents, commands, tools,
-hooks, and MCP servers your project uses in one file, then install them into Claude Code,
-Cursor, Gemini CLI, OpenCode, Codex, Windsurf, Kimi, GitHub Copilot, and Kiro with a single
-command. **Write once, deploy to any agent** — and teach it new agents without writing code.
+**A package manager for the files your AI coding agents read.**
+
+If you use Claude Code, Cursor, Copilot, Gemini CLI or any of their cousins, you have
+`.claude/`, `.cursor/` and `.gemini/` folders filling up with skills, subagent definitions,
+slash commands, hooks and MCP server configs — managed by copying files around. agentry
+does for those files what `npm` did for JavaScript libraries: **declare what you want in
+one file, and one command installs it into every tool you use.**
 
 > agentry is a *dependency manager*, not an agent or a runtime. It installs the components
 > your agents read, then gets out of the way — nothing of it runs while your agents do.
@@ -42,14 +45,22 @@ Antigravity CLI command — if you have both, prefer `agentry` or `agyx`
 Package managers, native installers (`.pkg`, `.exe`, `.deb`, `.rpm`) and the Python routes
 are all covered in the [README](https://github.com/OpenTechIL/agentry#install).
 
-## Then
+## Your first five minutes
 
 ```bash
 agentry init --target claude      # .agentry.yml + .gitignore + the default catalog
-agentry search                    # what the catalogs offer
-agentry add <name>                # enable a repo or component
-agentry sync                      # install it everywhere
+agentry search                    # see what the catalogs offer
+agentry add markitdown-for-ai     # install one by name — downloads and installs
+agentry status                    # what's installed, where, and whether it drifted
+agentry doctor                    # health check, if anything looks off
 ```
+
+Then commit `.agentry.yml` and `.agentry.lock`, and a teammate reproduces your exact setup
+with `agentry sync --frozen`.
+
+The [narrated quickstart in the README](https://github.com/OpenTechIL/agentry#quickstart)
+walks through the same steps with the real output of each one and an explanation of what it
+did.
 
 ## Learn more
 
