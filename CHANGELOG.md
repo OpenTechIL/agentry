@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] — 2026-09-03
+
 ### Added
 - **`agentry` is now the CLI's canonical command name**, alongside a new short alias
   `agyx`. `agy` still works, but it is *also* the command for Google's Antigravity CLI —
