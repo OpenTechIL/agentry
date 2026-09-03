@@ -18,7 +18,7 @@ What maps cleanly (deterministic, no network):
 
 What can't be inferred offline (whole-repo deps, ``plugins/*`` bundles, full git URLs without a
 component subpath, marketplace/bundle specs) becomes a **source + a warning** telling the user to
-run ``agy add`` / ``agy list`` — honest over silently guessing. ``includes: auto`` (apm's local
+run ``agentry add`` / ``agentry list`` — honest over silently guessing. ``includes: auto`` (apm's local
 ``.apm/`` shipping) is reported, not translated; consuming an on-disk ``.apm/`` tree is separate.
 
 Pure: :func:`translate_apm` performs no I/O. The CLI layer writes files and the config.
@@ -29,6 +29,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from .models import Component, ComponentType, Source, SourceType
+from .progname import prog
 
 #: apm primitive directory → agentry component type. apm "prompts" are agentry "commands";
 #: apm "instructions" have no agentry component type (a repo-wide doc, not a placed artifact).
@@ -182,8 +183,9 @@ def translate_apm(doc: dict) -> ApmImport:
         if dep.kind == "local":
             _add_source(Source(name=dep.repo, type=SourceType.LOCAL, path=dep.path))
             out.warnings.append(
-                f"'{spec}': added local source '{dep.repo}' — run `agy add {dep.repo}/<type>/<name>`"
-                " (or `agy list`) to enable its components"
+                f"'{spec}': added local source '{dep.repo}' — run "
+                f"`{prog()} add {dep.repo}/<type>/<name>` (or `{prog()} list`) "
+                "to enable its components"
             )
             continue
         # git / url
@@ -197,7 +199,7 @@ def translate_apm(doc: dict) -> ApmImport:
             hint = f" (subpath '{dep.typedir}/{dep.component}')" if dep.typedir else ""
             out.warnings.append(
                 f"'{spec}': added source '{dep.repo}'{hint} but couldn't infer a single "
-                f"component — run `agy add {dep.repo}/<type>/<name>` or `agy list`"
+                f"component — run `{prog()} add {dep.repo}/<type>/<name>` or `{prog()} list`"
             )
 
     for entry in deps.get("mcp") or []:

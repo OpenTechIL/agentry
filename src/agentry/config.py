@@ -14,14 +14,15 @@ from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
 from .models import Component, ComponentType, Config, ProfileRule, Registry, Source, SourceType
+from .progname import prog
 
 CONFIG_NAME = ".agentry.yml"
 LOCK_NAME = ".agentry.lock"
 STORE_DIR = ".agentry"
 MANIFEST_NAME = ".manifest.json"
 
-# The curated catalog `agy init` seeds into a new project, so `agy add <name>` resolves out of
-# the box. Drop it with `agy catalog remove agentry` (or `agy init --no-default-catalog`).
+# The curated catalog `agentry init` seeds into a new project, so `agentry add <name>` resolves
+# out of the box. Drop it with `agentry catalog remove agentry` (or `init --no-default-catalog`).
 DEFAULT_CATALOG_NAME = "agentry"
 DEFAULT_CATALOG_URL = (
     "https://raw.githubusercontent.com/OpenTechIL/agentry/refs/heads/main/"
@@ -60,7 +61,11 @@ class ConfigStore:
     def load(cls, root: Path) -> ConfigStore:
         path = cls.path_for(root)
         if not path.is_file():
-            raise FileNotFoundError(f"No {CONFIG_NAME} found in {root}. Run `agy init` first.")
+            raise FileNotFoundError(
+                f"No {CONFIG_NAME} found in {root}. Run `{prog()} init` first "
+                f"(agentry reads config from the current directory, so run it from the "
+                f"project root)."
+            )
         doc = _yaml().load(path.read_text(encoding="utf-8")) or CommentedMap()
         return cls(root, doc)
 
@@ -83,7 +88,7 @@ class ConfigStore:
             store.add_repository(Registry(name=DEFAULT_CATALOG_NAME, location=DEFAULT_CATALOG_URL))
         doc.yaml_set_start_comment(
             "agentry — AI agent dependencies for this project.\n"
-            "Declare sources and components here; run `agy sync` to install.\n"
+            "Declare sources and components here; run `agentry sync` to install.\n"
         )
         return store
 

@@ -16,7 +16,7 @@ body:
     id: repro
     attributes:
       label: Steps to reproduce
-      description: Commands you ran (e.g. `agy sync`) and the relevant parts of your `.agentry.yml`.
+      description: Commands you ran (e.g. `agentry sync`) and the relevant parts of your `.agentry.yml`.
       placeholder: |
         1. ...
         2. ...
@@ -27,8 +27,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: agy version
-      description: Output of `agy --version` (or the git commit if running from source).
+      label: agentry version
+      description: Output of `agentry --version` (or the git commit if running from source).
     validations:
       required: true
   - type: dropdown

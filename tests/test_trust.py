@@ -41,7 +41,7 @@ def test_untrusted_generator_is_skipped(project: Path, local_source: Path):
     _wire(project, local_source)
     res = sync(project)  # no allow_run, no trust, no callback
     assert not (project / ".claude/skills/fake").exists()
-    assert any("not trusted" in w and "agy trust g" in w for w in res.warnings)
+    assert any("not trusted" in w and "trust g" in w for w in res.warnings)
 
 
 def test_trusted_source_runs_without_allow_run(project: Path, local_source: Path):

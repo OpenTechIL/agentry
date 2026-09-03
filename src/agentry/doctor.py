@@ -1,4 +1,4 @@
-"""``agy doctor`` — a read-only preflight that turns silent failure modes into loud, explicit
+"""``agentry doctor`` — a read-only preflight that turns silent failure modes into loud, explicit
 checks before they bite at install or runtime.
 
 The design principle (from the apm pain-points analysis): *agentry tells you, loudly, rather
@@ -12,6 +12,8 @@ active target installs, an unset env var your agent resolves at runtime, on-disk
 
 from __future__ import annotations
 
+import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +23,7 @@ from .drivers import resolve_drivers
 from .envscan import unset_env_refs
 from .lockfile import load_lock
 from .models import MERGE_TYPES, ComponentType
+from .progname import CANONICAL, prog
 from .reconcile import status
 from .resolver import ResolveError, effective_root
 from .targets import unresolved_targets
@@ -33,10 +36,37 @@ class Check:
     message: str
 
 
+def command_name_check() -> Check | None:
+    """Warn when the `agy` alias on PATH belongs to a different tool.
+
+    ``agy`` is also Google's Antigravity CLI. When both are installed, PATH order decides
+    silently which one runs — a confusing failure to debug from the symptom alone, so
+    doctor names it explicitly.
+    """
+    found = shutil.which("agy")
+    if not found:
+        return None
+    try:
+        mine = Path(sys.argv[0]).resolve()
+    except OSError:
+        return None
+    if Path(found).resolve() == mine:
+        return None
+    return Check(
+        "warn",
+        "command",
+        f"`agy` on PATH is {found}, not this agentry (Google's Antigravity CLI also uses "
+        f"the name) — invoke agentry as `{CANONICAL}` or `agyx` to be unambiguous",
+    )
+
+
 def run_checks(root: Path) -> list[Check]:
     """Run all preflight checks for the project at ``root``. Read-only."""
     config = ConfigStore.load(root).parsed()
     checks: list[Check] = []
+    name_check = command_name_check()
+    if name_check is not None:
+        checks.append(name_check)
 
     for t in unresolved_targets(config):
         checks.append(
@@ -109,7 +139,7 @@ def run_checks(root: Path) -> list[Check]:
         for r in rows:
             if r.state != "ok":
                 checks.append(
-                    Check("warn", "drift", f"{r.ref} → {r.target}: {r.state} (run `agy sync`)")
+                    Check("warn", "drift", f"{r.ref} → {r.target}: {r.state} (run `{prog()} sync`)")
                 )
     except (ResolveError, deps.DependencyError):
         pass  # resolution errors already reported above

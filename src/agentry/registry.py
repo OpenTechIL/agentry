@@ -1,7 +1,7 @@
 """Resolve repos from external catalogs — the "artifactory" front end.
 
 A :class:`~agentry.models.Registry` points at a JSON catalog (a local file or an http(s)
-URL) mapping a bare repo name to its source + curated components. ``agy add <name>`` consults
+URL) mapping a bare repo name to its source + curated components. ``agentry add <name>`` consults
 the configured catalogs in order and turns the match into the same Sources + Components a
 user would otherwise hand-write — so this adds no new install mechanics, only resolution.
 

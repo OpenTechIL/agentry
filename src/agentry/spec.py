@@ -64,7 +64,7 @@ class TargetSpec:
     #: component type -> composite link+merge destination
     link_merge: dict[ComponentType, LinkMergeDest] = field(default_factory=dict)
     #: Always-loaded instruction/memory file this tool auto-reads (path relative to project
-    #: root), e.g. ``.claude/CLAUDE.md`` or ``AGENTS.md``. ``agy emit triggers`` registers a
+    #: root), e.g. ``.claude/CLAUDE.md`` or ``AGENTS.md``. ``agentry emit triggers`` registers a
     #: managed block of skill triggers here. ``None`` means the tool has no such concept.
     memory_file: str | None = None
 

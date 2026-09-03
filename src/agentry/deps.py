@@ -30,6 +30,7 @@ from . import discovery
 from .config import LOCK_NAME
 from .lockfile import upsert_entry
 from .models import Component, Config, Dependency, Lock, Source, SourceType
+from .progname import prog
 from .resolver import ResolveError, effective_root, resolve
 
 
@@ -106,7 +107,7 @@ def resolve_graph(
         if frozen and existing is None:
             raise ResolveError(
                 f"--frozen: source '{src.name}' is not pinned in {LOCK_NAME}; "
-                "run `agy update` to refresh the lockfile first"
+                f"run `{prog()} update` to refresh the lockfile first"
             )
         pinned = None if update else (existing.resolved if existing else None)
         entry = resolve(root, src, pinned=pinned, normalize=config.hashing.normalize_line_endings)

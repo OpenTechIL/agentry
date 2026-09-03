@@ -195,7 +195,7 @@ class GeneratorSpec(BaseModel):
     """A component that installs itself by *running its own CLI* (e.g. ``graphify install``).
 
     Used for tools that ship no symlinkable artifact and instead generate files at install
-    time. Running third-party commands is opt-in (``agy sync --allow-run``) — see the
+    time. Running third-party commands is opt-in (``agentry sync --allow-run``) — see the
     reconcile engine. ``produces`` is the contract that keeps removal safe: agentry only
     ever deletes the paths listed here.
     """
@@ -321,7 +321,7 @@ class Registry(BaseModel):
     """A catalog the project consults: a local file path or an http(s) URL.
 
     The catalog (``repositories.json``) maps a bare repo name to its source + curated
-    components, so ``agy add <name>`` can resolve everything without the user knowing the
+    components, so ``agentry add <name>`` can resolve everything without the user knowing the
     repo URL or path/generate flags. The local-file and hosted-server forms are
     interchangeable (same JSON contract).
     """
@@ -331,7 +331,7 @@ class Registry(BaseModel):
 
 
 class TransformConfig(BaseModel):
-    """How the AI-agent transform provider runs (opt-in; used by ``agy emit ... --agent``).
+    """How the AI-agent transform provider runs (opt-in; used by ``agentry emit ... --agent``).
 
     ``command`` is an argv list for *your own* agent CLI (e.g. ``["claude", "-p"]`` or
     ``["codex", "exec"]``); agentry feeds the prompt on **stdin** and reads the result from
@@ -346,7 +346,7 @@ class HashingConfig(BaseModel):
 
     ``normalize_line_endings`` (default ``True``) hashes a canonical, OS-independent form of
     text files — CRLF/CR collapsed to LF before hashing — so the same content yields the same
-    ``sha256:`` on Windows and Unix and ``agy sync --frozen`` doesn't report phantom drift from
+    ``sha256:`` on Windows and Unix and ``agentry sync --frozen`` doesn't report phantom drift from
     a checkout's autocrlf. Binary files (any that aren't valid UTF-8) are always hashed raw.
     Set to ``False`` to restore exact byte-for-byte hashing when line-ending fidelity matters.
     """
@@ -362,11 +362,11 @@ class Config(BaseModel):
     sources: list[Source] = Field(default_factory=list)
     components: list[Component] = Field(default_factory=list)
     # Repository catalogs (``repositories.json``): named source repos resolved whole or
-    # narrowed to selected components at ``agy add`` time.
+    # narrowed to selected components at ``agentry add`` time.
     repositories: list[Registry] = Field(default_factory=list)
     # Override built-in target maps or define entirely new tools (data-driven).
     target_profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
-    # AI-agent transform provider (opt-in): how ``agy emit ... --agent`` invokes your agent CLI.
+    # AI-agent transform provider (opt-in): how ``agentry emit ... --agent`` invokes your agent CLI.
     transform: TransformConfig | None = None
     # OS-independent content hashing for local sources (line-ending normalization).
     hashing: HashingConfig = Field(default_factory=HashingConfig)
@@ -504,13 +504,13 @@ class RepositoryEntry(BaseModel):
     expose: list[ExposeEntry] | None = None
     # Install file/dir components by *copying* (self-contained, committable) instead of the
     # default *symlink*. Opt-in per repo; link stays the built-in default. Resolved into
-    # concrete copy profile rules at ``agy add`` time (see registry.build_install_profiles).
+    # concrete copy profile rules at ``agentry add`` time (see registry.build_install_profiles).
     copy_install: bool = Field(default=False, alias="copy")
     # Nest command + agent installs under a ``<repo>/`` subfolder so Claude Code namespaces
     # the slash commands (``.claude/commands/<repo>/adr.md`` -> ``/<repo>:adr``). Skills are
     # left flat (Claude only discovers ``.claude/skills/<name>/SKILL.md``).
     namespaced: bool = True
-    # Per-repo target-profile overrides merged into the project's config on ``agy add``.
+    # Per-repo target-profile overrides merged into the project's config on ``agentry add``.
     # Lets a plugin repo declare how its hooks/mcp install (e.g. a claude hook link+merge
     # rewriting ${CLAUDE_PLUGIN_ROOT}) so the curated install works without manual config.
     target_profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
@@ -522,7 +522,7 @@ class RepositoryIndex(BaseModel):
     version: int = 1
     repositories: dict[str, RepositoryEntry] = Field(default_factory=dict)
     # Shareable *driver overlays*, keyed by target name: how some agent installs each
-    # component type. Installing one (``agy target add <name>``) merges it into the
+    # component type. Installing one (``agentry target add <name>``) merges it into the
     # project's ``target_profiles``, making an otherwise-undefined target resolvable —
     # the community-driver layer. Same shape as ``Config.target_profiles[<target>]``.
     targets: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
@@ -545,7 +545,7 @@ class LockEntry(BaseModel):
     synthesized: bool = False
     # Per-source consent for running code at install (generators). Pinned to ``resolved``:
     # if the source's SHA changes, trust is dropped and must be re-confirmed. Set by
-    # ``agy trust`` or the interactive prompt in ``agy sync``.
+    # ``agentry trust`` or the interactive prompt in ``agentry sync``.
     trusted: bool = False
 
 

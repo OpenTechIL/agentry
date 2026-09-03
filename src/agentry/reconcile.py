@@ -46,6 +46,7 @@ from .models import (
     SourceType,
     Strategy,
 )
+from .progname import prog
 from .resolver import effective_root
 from .spec import LinkMergeDest, MergeDest
 from .targets import unresolved_targets
@@ -131,7 +132,7 @@ def compute_desired(
     for missing in unresolved_targets(config):
         warnings.append(
             f"target '{missing}' is undefined — define it under target_profiles in .agentry.yml, "
-            "or install a shared driver overlay (`agy target list`)"
+            f"or install a shared driver overlay (`{prog()} target list`)"
         )
 
     # Build a (type, name) -> path index per source.
@@ -176,7 +177,7 @@ def compute_desired(
 
         # agentry ships ${VAR} placeholders verbatim (the runtime resolves them), but a
         # reference that is unset *and* has no default would ship dead. Warn once per
-        # component rather than silently install it — mirrors `agy doctor`.
+        # component rather than silently install it — mirrors `agentry doctor`.
         if comp.type in MERGE_TYPES and artifact.is_file():
             for var in envscan.unset_env_refs(artifact.read_text(encoding="utf-8")):
                 warnings.append(
@@ -589,7 +590,7 @@ def _reconcile_generated(
         if already and not update:
             continue  # idempotent: outputs present and tracked
         # Consent gate: a source whose component runs code at install must be trusted —
-        # via a persisted `agy trust` decision (SHA-pinned in the lock), the interactive
+        # via a persisted `agentry trust` decision (SHA-pinned in the lock), the interactive
         # prompt, or the one-shot `--allow-run` blanket override.
         source = ref.split("/", 1)[0]
         entry = lock.entry(source) if lock is not None else None
@@ -603,7 +604,8 @@ def _reconcile_generated(
                 cmds = "; ".join(gen_inst.describe(d.spec))
                 result.warnings.append(
                     f"{ref}: generator skipped — source '{source}' is not trusted to run code. "
-                    f"Run `agy trust {source}` (or `agy sync --allow-run`) to allow: {cmds}"
+                    f"Run `{prog()} trust {source}` (or `{prog()} sync --allow-run`) "
+                    f"to allow: {cmds}"
                 )
                 continue
         try:

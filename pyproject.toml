@@ -41,7 +41,13 @@ Repository = "https://github.com/OpenTechIL/agentry"
 Issues = "https://github.com/OpenTechIL/agentry/issues"
 
 [project.scripts]
+# agentry installs under three names for the same app. `agentry` is canonical and matches
+# the distribution and import package. `agy` is kept for back-compat, but it is *also* the
+# command for Google's Antigravity CLI, so `agyx` exists as a short name that can't collide.
+# See src/agentry/progname.py and `agentry doctor`.
+agentry = "agentry.cli:app"
 agy = "agentry.cli:app"
+agyx = "agentry.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentry"]
