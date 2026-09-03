@@ -29,6 +29,11 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        # mkdocs.yml uses `!!python/name:pymdownx…` for the mermaid custom fence, which
+        # safe-load can't construct — this hook has always failed on it. MkDocs validates
+        # its own config via `mkdocs build --strict` in CI, so skip it here rather than
+        # loosen the check (`--unsafe`) for every other YAML file.
+        exclude: ^mkdocs\.yml$
       - id: check-toml
       - id: check-merge-conflict
       - id: check-added-large-files

@@ -85,7 +85,9 @@ def _shadowed_agy() -> str | None:
     if not found:
         return None
     try:
-        if Path(found).resolve() == Path(sys.argv[0]).resolve():
+        # Compare directories, not files: our three names are separate wrapper scripts
+        # sitting in the same bin dir, so file identity would flag every normal install.
+        if Path(found).resolve().parent == Path(sys.argv[0]).resolve().parent:
             return None
     except OSError:
         return None
@@ -1117,9 +1119,9 @@ def catalog_add_repo(
 def _describe_overlay(profile: dict[ComponentType, ProfileRule]) -> list[str]:
     """One human-readable line per component type in a driver overlay, for the prompt."""
     lines: list[str] = []
-    for ctype, rule in sorted(profile.items(), key=lambda kv: str(kv[0])):
+    for ctype, rule in sorted(profile.items(), key=lambda kv: kv[0].value):
         where = " -> ".join(x for x in (rule.dest, rule.file) if x)
-        lines.append(f"  {str(ctype):9} {rule.strategy.value:11} {where}")
+        lines.append(f"  {ctype.value:9} {rule.strategy.value:11} {where}")
     return lines
 
 

@@ -67,23 +67,61 @@ def test_missing_config_hint_explains_the_project_root_rule(monkeypatch, tmp_pat
 # -- collision detection --------------------------------------------------
 
 
-def test_doctor_flags_a_foreign_agy_on_path(monkeypatch):
-    monkeypatch.setattr("sys.argv", ["/opt/homebrew/bin/agentry"])
-    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/local/bin/agy")
+def test_doctor_flags_an_agy_from_a_different_install(monkeypatch, tmp_path):
+    ours = tmp_path / "ours"
+    theirs = tmp_path / "theirs"
+    for d in (ours, theirs):
+        d.mkdir()
+    (ours / "agentry").write_text("#!/bin/sh\n")
+    (theirs / "agy").write_text("#!/bin/sh\n")
+    monkeypatch.setattr("sys.argv", [str(ours / "agentry")])
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: str(theirs / "agy"))
     check = doctor.command_name_check()
     assert check is not None
     assert check.level == "warn" and check.category == "command"
     assert "Antigravity" in check.message and "agyx" in check.message
 
 
-def test_doctor_is_quiet_when_agy_is_this_agentry(monkeypatch, tmp_path):
-    mine = tmp_path / "agy"
-    mine.write_text("#!/bin/sh\n")
-    monkeypatch.setattr("sys.argv", [str(mine)])
-    monkeypatch.setattr(doctor.shutil, "which", lambda name: str(mine))
+def test_doctor_is_quiet_when_agy_sits_beside_us(monkeypatch, tmp_path):
+    """The three names are *separate* wrapper scripts in one bin dir.
+
+    Comparing files rather than directories flagged every ordinary pip/uv install as a
+    conflict, because `agentry` and `agy` are distinct console-script files.
+    """
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name in ("agentry", "agy"):
+        (bindir / name).write_text("#!/bin/sh\n")
+    monkeypatch.setattr("sys.argv", [str(bindir / "agentry")])
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: str(bindir / "agy"))
     assert doctor.command_name_check() is None
 
 
 def test_doctor_is_quiet_when_agy_is_absent(monkeypatch):
     monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
     assert doctor.command_name_check() is None
+
+
+# -- driver-overlay consent ----------------------------------------------
+
+
+def test_overlay_description_uses_readable_type_and_strategy_names():
+    """The prompt is what a user reads before authorizing writes to their repo.
+
+    Enum `str()` yields `ComponentType.SKILL`; the destinations table must show `skill`.
+    """
+    from agentry.cli import _describe_overlay
+    from agentry.models import ComponentType, ProfileRule, Strategy
+
+    lines = _describe_overlay(
+        {
+            ComponentType.SKILL: ProfileRule(strategy=Strategy.LINK, dest=".myide/skills/{name}"),
+            ComponentType.MCP: ProfileRule(
+                strategy=Strategy.MERGE, file=".myide/config.json", pointer="mcpServers"
+            ),
+        }
+    )
+    joined = "\n".join(lines)
+    assert "ComponentType" not in joined
+    assert "skill" in joined and "link" in joined and ".myide/skills/{name}" in joined
+    assert "mcp" in joined and "merge" in joined and ".myide/config.json" in joined

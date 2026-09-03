@@ -42,16 +42,21 @@ def command_name_check() -> Check | None:
     ``agy`` is also Google's Antigravity CLI. When both are installed, PATH order decides
     silently which one runs — a confusing failure to debug from the symptom alone, so
     doctor names it explicitly.
+
+    Ownership is decided by **directory**, not by comparing files: agentry's three names are
+    separate console-script wrappers (or shims, or symlinks) that live side by side in one
+    bin dir, so a file-identity check would flag every ordinary install as a conflict.
     """
     found = shutil.which("agy")
     if not found:
         return None
     try:
-        mine = Path(sys.argv[0]).resolve()
+        mine = Path(sys.argv[0]).resolve().parent
+        theirs = Path(found).resolve().parent
     except OSError:
         return None
-    if Path(found).resolve() == mine:
-        return None
+    if mine == theirs:
+        return None  # installed alongside us — our own alias
     return Check(
         "warn",
         "command",
