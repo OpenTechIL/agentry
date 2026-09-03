@@ -1,23 +1,28 @@
 # .github/workflows/release-binaries.yml
 name: Release Binaries
 
-# Builds standalone `agy` executables + native installers and attaches them to
+# Builds standalone `agentry` executables + native installers and attaches them to
 # the GitHub Release for a v* tag. This is the sole release/distribution channel
 # (no PyPI).
 #
 # Artifacts per release:
-#   agy-<version>-linux-x86_64                 raw binary
-#   agy-<version>-macos-x86_64                 raw binary
-#   agy-<version>-macos-arm64                  raw binary
-#   agy-<version>-macos-x86_64.pkg             macOS installer (per-user)
-#   agy-<version>-macos-arm64.pkg              macOS installer (per-user)
-#   agy-<version>-windows-x86_64.exe           raw binary
-#   agy-<version>-windows-x86_64-setup.exe     Inno Setup installer
-#   agy_<version>_amd64.deb                    Debian/Ubuntu package
-#   agy-<version>.x86_64.rpm                   Fedora/RHEL package
-#   agy-<version>-linux-x86_64.tar.gz          tarball
+#   agentry-<version>-linux-x86_64             raw binary
+#   agentry-<version>-macos-x86_64             raw binary
+#   agentry-<version>-macos-arm64              raw binary
+#   agentry-<version>-macos-x86_64.pkg         macOS installer (per-user)
+#   agentry-<version>-macos-arm64.pkg          macOS installer (per-user)
+#   agentry-<version>-windows-x86_64.exe       raw binary
+#   agentry-<version>-windows-x86_64-setup.exe Inno Setup installer
+#   agentry_<version>_amd64.deb                Debian/Ubuntu package
+#   agentry-<version>.x86_64.rpm               Fedora/RHEL package
+#   agentry-<version>-linux-x86_64.tar.gz      tarball
 #   SHA256SUMS.txt                             checksums for all of the above
 #   <asset>.cosign.bundle                      keyless Sigstore signature per asset
+#
+# Plus, for one release only, a byte-identical copy of each raw binary under its old
+# `agy-<version>-<target>` name. install.sh / install.ps1 shipped before 0.1.4 fetch that
+# name when they self-update, so dropping it immediately would break existing installs.
+# Remove the "Duplicate raw binary" step (and the agy-* globs) in the release after 0.1.4.
 #
 # Every asset is signed with cosign keyless (Sigstore) via GitHub OIDC — no
 # secrets or certificates required. See packaging/README.md for how users verify.
@@ -64,9 +69,9 @@ jobs:
             # under Rosetta, so PyInstaller freezes an x86_64 binary with x86_64
             # dependency wheels.
             uv run --python "cpython-3.12-macos-${{ matrix.pyarch }}" \
-              --extra build pyinstaller packaging/agy.spec
+              --extra build pyinstaller packaging/agentry.spec
           else
-            uv run --extra build pyinstaller packaging/agy.spec
+            uv run --extra build pyinstaller packaging/agentry.spec
           fi
       - name: Resolve version
         id: ver
@@ -75,10 +80,10 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=$(./dist/agy${{ matrix.ext }} version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+            echo "version=$(./dist/agentry${{ matrix.ext }} version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
           fi
 
-      # --- Linux: native packages (.deb / .rpm) + tarball, from ./dist/agy ---
+      # --- Linux: native packages (.deb / .rpm) + tarball, from ./dist/agentry ---
       - name: Build Linux packages
         if: matrix.target == 'linux-x86_64'
         env:
@@ -88,9 +93,9 @@ jobs:
           sudo dpkg -i /tmp/nfpm.deb
           nfpm package -f packaging/nfpm.yaml -p deb -t .
           nfpm package -f packaging/nfpm.yaml -p rpm -t .
-          tar -czf "agy-${VERSION}-linux-x86_64.tar.gz" -C dist agy
+          tar -czf "agentry-${VERSION}-linux-x86_64.tar.gz" -C dist agentry
 
-      # --- Windows: Inno Setup installer, from dist\agy.exe ---
+      # --- Windows: Inno Setup installer, from dist\agentry.exe ---
       - name: Build Windows installer
         if: matrix.target == 'windows-x86_64'
         shell: pwsh
@@ -98,11 +103,11 @@ jobs:
           choco install innosetup --no-progress -y
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
             "/DMyAppVersion=${{ steps.ver.outputs.version }}" `
-            packaging\windows\agy.iss
+            packaging\windows\agentry.iss
           # Keep every release asset flat at the repo root for a clean upload.
-          Move-Item dist\agy-*-setup.exe .
+          Move-Item dist\agentry-*-setup.exe .
 
-      # --- macOS: per-user .pkg installer (~/.local/bin), from ./dist/agy ---
+      # --- macOS: per-user .pkg installer (~/.local/bin), from ./dist/agentry ---
       - name: Build macOS installer
         if: startsWith(matrix.target, 'macos-')
         env:
@@ -111,42 +116,52 @@ jobs:
         run: |
           set -euo pipefail
           # Payload rooted at the user's home; enable_currentUserHome maps it to ~,
-          # so ./local/bin/agy lands at ~/.local/bin/agy (matches install.sh).
+          # so ./local/bin/agentry lands at ~/.local/bin/agentry (matches install.sh).
+          # The postinstall script adds the agy/agyx symlinks next to it.
           mkdir -p pkgroot/.local/bin
-          cp dist/agy pkgroot/.local/bin/agy
-          chmod +x pkgroot/.local/bin/agy
+          cp dist/agentry pkgroot/.local/bin/agentry
+          chmod +x pkgroot/.local/bin/agentry
           chmod +x packaging/macos/scripts/postinstall
           pkgbuild --root pkgroot \
             --identifier com.opentech.agentry \
             --version "$VERSION" \
             --scripts packaging/macos/scripts \
             --install-location / \
-            agy-component.pkg
+            agentry-component.pkg
           sed "s/\${VERSION}/$VERSION/g" packaging/macos/distribution.xml > distribution.xml
           productbuild --distribution distribution.xml \
             --package-path . \
-            "agy-${VERSION}-${TARGET}.pkg"
-          # Verify the payload lands at ~/.local/bin/agy.
-          pkgutil --expand-full "agy-${VERSION}-${TARGET}.pkg" /tmp/pkgcheck
-          ls /tmp/pkgcheck/*.pkg/Payload/.local/bin/agy
+            "agentry-${VERSION}-${TARGET}.pkg"
+          # Verify the payload lands at ~/.local/bin/agentry.
+          pkgutil --expand-full "agentry-${VERSION}-${TARGET}.pkg" /tmp/pkgcheck
+          ls /tmp/pkgcheck/*.pkg/Payload/.local/bin/agentry
           # Drop intermediates so only the final product pkg is uploaded
-          # (agy-component.pkg would otherwise match the agy-* upload glob).
-          rm -rf agy-component.pkg distribution.xml pkgroot /tmp/pkgcheck
+          # (agentry-component.pkg would otherwise match the agentry-* upload glob).
+          rm -rf agentry-component.pkg distribution.xml pkgroot /tmp/pkgcheck
 
       - name: Rename raw binary
         shell: bash
-        run: mv "dist/agy${{ matrix.ext }}" "agy-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
+        run: mv "dist/agentry${{ matrix.ext }}" "agentry-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
       - name: Smoke test
         shell: bash
-        run: ./agy-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }} version
+        run: ./agentry-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }} version
+      # Compatibility shim for one release: install.sh / install.ps1 shipped before 0.1.4
+      # fetch `agy-<version>-<target>` when self-updating. Byte-identical copy, checksummed
+      # and signed alongside the real asset. Delete this step in the release after 0.1.4.
+      - name: Duplicate raw binary under the legacy asset name
+        shell: bash
+        run: |
+          cp "agentry-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}" \
+             "agy-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: agy-${{ matrix.target }}
+          name: agentry-${{ matrix.target }}
           # Raw binary, plus any installer/packages produced above — all live
           # flat at the repo root, so a single set of globs keeps the layout.
           path: |
+            agentry-*
             agy-*
             *.deb
           if-no-files-found: error
@@ -170,13 +185,13 @@ jobs:
       - name: Generate checksums
         working-directory: artifacts
         run: |
-          sha256sum agy-* agy_* > SHA256SUMS.txt
+          sha256sum agentry-* agentry_* agy-* > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - name: Sign all assets (cosign keyless)
         working-directory: artifacts
         run: |
           shopt -s nullglob
-          for f in agy-* agy_* SHA256SUMS.txt; do
+          for f in agentry-* agentry_* agy-* SHA256SUMS.txt; do
             case "$f" in *.cosign.bundle) continue ;; esac
             echo "Signing $f"
             cosign sign-blob --yes --bundle "$f.cosign.bundle" "$f"
@@ -208,7 +223,8 @@ jobs:
       - name: Render formula
         run: |
           python3 scripts/render_homebrew.py \
-            "${{ steps.ver.outputs.version }}" SHA256SUMS.txt packaging/homebrew/agy.rb > agy.rb
+            "${{ steps.ver.outputs.version }}" SHA256SUMS.txt \
+            packaging/homebrew/agentry.rb > agentry.rb
       - name: Push to tap
         env:
           VERSION: ${{ steps.ver.outputs.version }}
@@ -222,12 +238,16 @@ jobs:
           fi
           git clone --depth 1 \
             "https://x-access-token:${TAP_TOKEN}@github.com/OpenTechIL/homebrew-tap.git" tap
-          mkdir -p tap/Formula
-          cp agy.rb tap/Formula/agy.rb
+          mkdir -p tap/Formula tap/Aliases
+          cp agentry.rb tap/Formula/agentry.rb
+          # Keep `brew install OpenTechIL/tap/agy` working via Homebrew's alias mechanism
+          # (a symlink under Aliases/), and drop the old formula file it replaces.
+          rm -f tap/Formula/agy.rb
+          ln -sf ../Formula/agentry.rb tap/Aliases/agy
           cd tap
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/agy.rb
+          git add -A Formula Aliases
           # No-op-safe: re-running a tag with an identical formula shouldn't fail.
-          git commit -m "agy ${VERSION}" || { echo "Formula unchanged — nothing to push."; exit 0; }
+          git commit -m "agentry ${VERSION}" || { echo "Formula unchanged — nothing to push."; exit 0; }
           git push

@@ -3,14 +3,14 @@
 
 Usage:  python scripts/render_homebrew.py <version> <sha256sums-path> <template-path>
 
-Reads the placeholder formula (packaging/homebrew/agy.rb) and the release's
+Reads the placeholder formula (packaging/homebrew/agentry.rb) and the release's
 SHA256SUMS.txt, then prints the rendered formula to stdout with:
   * the `version "…"` line set to <version>, and
   * each `sha256 "0000…"` placeholder replaced by the real hash of the binary
     named in the preceding `url "…"` line.
 
 The three placeholder shas in the template are identical, so a plain `sed`
-can't tell them apart — we key each one off the `agy-<version>-<target>` asset
+can't tell them apart — we key each one off the `agentry-<version>-<target>` asset
 named in the url line just above it.
 """
 
@@ -19,9 +19,9 @@ from __future__ import annotations
 import re
 import sys
 
-# url "…/agy-#{version}-<target>" — the template uses #{version} interpolation,
+# url "…/agentry-#{version}-<target>" — the template uses #{version} interpolation,
 # so match the literal token here (the rendered URL is resolved by Homebrew).
-_URL_TARGET = re.compile(r'url\s+".*agy-#\{version\}-([a-z0-9_-]+)"')
+_URL_TARGET = re.compile(r'url\s+".*agentry-#\{version\}-([a-z0-9_-]+)"')
 _VERSION_LINE = re.compile(r'^(\s*version\s+)"[^"]*"(.*)$')
 _SHA_LINE = re.compile(r'^(\s*sha256\s+)"[^"]*"(.*)$')
 
@@ -57,7 +57,7 @@ def render(template: str, version: str, sums: dict[str, str]) -> str:
 
         sm = _SHA_LINE.match(line)
         if sm and pending_target is not None:
-            asset = f"agy-{version}-{pending_target}"
+            asset = f"agentry-{version}-{pending_target}"
             sha = sums.get(asset)
             if not sha:
                 raise SystemExit(

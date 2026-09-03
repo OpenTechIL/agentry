@@ -1,7 +1,7 @@
-"""PyInstaller entrypoint for the `agy` CLI.
+"""PyInstaller entrypoint for the `agentry` CLI.
 
-Kept separate from the ``agy`` console-script in ``pyproject.toml`` so the
-frozen binary has a stable, import-clean entry module.
+Kept separate from the console scripts in ``pyproject.toml`` so the frozen binary has a
+stable, import-clean entry module.
 """
 
 from agentry.cli import app

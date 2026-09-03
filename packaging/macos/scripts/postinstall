@@ -1,15 +1,22 @@
 #!/bin/sh
-# packaging/macos/scripts/postinstall — run by the agy component pkg after payload
+# packaging/macos/scripts/postinstall — run by the agentry component pkg after payload
 # extraction. This is a per-user (enable_currentUserHome) install, so it runs as the
 # user with $HOME pointing at their home directory.
 #
-# A GUI .pkg can't print a terminal note the way install.sh does, so ensure
+# It also creates the agy/agyx alias symlinks next to the installed binary, and — because
+# a GUI .pkg can't print a terminal note the way install.sh does — ensures
 # ~/.local/bin is on PATH by adding an export line to the common login shell profiles,
 # idempotently. Mirrors install.sh's PATH advice.
 set -eu
 
 BIN_DIR="$HOME/.local/bin"
 LINE="export PATH=\"$BIN_DIR:\$PATH\""
+
+# Short aliases for the canonical `agentry`. `agy` is kept for back-compat but is also
+# Google's Antigravity CLI command; `agyx` is the short name that cannot collide.
+for alias_name in agy agyx; do
+  ln -sf "$BIN_DIR/agentry" "$BIN_DIR/$alias_name"
+done
 
 for profile in "$HOME/.zprofile" "$HOME/.bash_profile"; do
   # Skip if this dir is already exported in the profile.
@@ -18,7 +25,7 @@ for profile in "$HOME/.zprofile" "$HOME/.bash_profile"; do
   fi
   {
     echo ""
-    echo "# Added by agentry (agy) installer"
+    echo "# Added by the agentry installer"
     echo "$LINE"
   } >> "$profile"
 done

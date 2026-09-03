@@ -5,21 +5,31 @@
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/OpenTechIL/agentry/releases/download/v0.1.0/agy-0.1.0-windows-x86_64.exe#/agy.exe",
+      "url": "https://github.com/OpenTechIL/agentry/releases/download/v0.1.0/agentry-0.1.0-windows-x86_64.exe#/agentry.exe",
       "hash": "0000000000000000000000000000000000000000000000000000000000000000"
     }
   },
-  "bin": "agy.exe",
+  "bin": [
+    "agentry.exe",
+    [
+      "agentry.exe",
+      "agy"
+    ],
+    [
+      "agentry.exe",
+      "agyx"
+    ]
+  ],
   "checkver": "github",
   "autoupdate": {
     "architecture": {
       "64bit": {
-        "url": "https://github.com/OpenTechIL/agentry/releases/download/v$version/agy-$version-windows-x86_64.exe#/agy.exe"
+        "url": "https://github.com/OpenTechIL/agentry/releases/download/v$version/agentry-$version-windows-x86_64.exe#/agentry.exe"
       }
     },
     "hash": {
       "url": "https://github.com/OpenTechIL/agentry/releases/download/v$version/SHA256SUMS.txt",
-      "regex": "$sha256\\s+agy-$version-windows-x86_64.exe"
+      "regex": "$sha256\\s+agentry-$version-windows-x86_64.exe"
     }
   }
 }

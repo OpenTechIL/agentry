@@ -1,5 +1,10 @@
-# packaging/agy.spec — one-file build for the `agy` CLI.
-# Run from the repo root: `uv run --extra build pyinstaller packaging/agy.spec`
+# packaging/agentry.spec — one-file build for the `agentry` CLI.
+#
+# Produces dist/agentry. The `agy` and `agyx` aliases are created next to it by whichever
+# channel installs the binary (install.sh/.ps1, nfpm, Homebrew, Scoop, Inno Setup) — a
+# frozen one-file build has exactly one executable name.
+#
+# Run from the repo root: `uv run --extra build pyinstaller packaging/agentry.spec`
 import os
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
@@ -31,7 +36,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="agy",
+    name="agentry",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -1,5 +1,8 @@
 #!/bin/sh
-# install.sh — download and install the `agy` binary from GitHub Releases.
+# install.sh — download and install the `agentry` binary from GitHub Releases.
+#
+# Installs `agentry` plus the short aliases `agy` and `agyx` as symlinks. `agy` is also
+# the command for Google's Antigravity CLI; `agyx` is the short name that cannot collide.
 #
 #   curl -fsSL https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.sh | sh
 #
@@ -39,29 +42,48 @@ else
   tag="v${version#v}"
 fi
 
-asset="agy-${tag#v}-${target}"
+version_no_v="${tag#v}"
 base="https://github.com/$REPO/releases/download/$tag"
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
-echo "Downloading $asset ($tag)…"
-curl -fsSL "$base/$asset" -o "$tmp/agy" || err "download failed: $base/$asset"
 curl -fsSL "$base/SHA256SUMS.txt" -o "$tmp/SHA256SUMS.txt" || err "checksum download failed"
+
+# Release assets were named agy-<version>-<target> before 0.1.4. Prefer the current name
+# and fall back, so an older copy of this script keeps working against a new release and
+# a new copy keeps working against an old one.
+asset=""
+for candidate in "agentry-${version_no_v}-${target}" "agy-${version_no_v}-${target}"; do
+  if grep -q "  $candidate\$" "$tmp/SHA256SUMS.txt"; then
+    asset="$candidate"
+    break
+  fi
+done
+[ -n "$asset" ] || err "no asset for $target in release $tag"
+
+echo "Downloading $asset ($tag)…"
+curl -fsSL "$base/$asset" -o "$tmp/agentry" || err "download failed: $base/$asset"
 
 expected=$(grep "  $asset\$" "$tmp/SHA256SUMS.txt" | awk '{print $1}')
 [ -n "$expected" ] || err "no checksum entry for $asset"
 if command -v sha256sum >/dev/null 2>&1; then
-  actual=$(sha256sum "$tmp/agy" | awk '{print $1}')
+  actual=$(sha256sum "$tmp/agentry" | awk '{print $1}')
 else
-  actual=$(shasum -a 256 "$tmp/agy" | awk '{print $1}')
+  actual=$(shasum -a 256 "$tmp/agentry" | awk '{print $1}')
 fi
 [ "$expected" = "$actual" ] || err "checksum mismatch (expected $expected, got $actual)"
 
 mkdir -p "$INSTALL_DIR"
-chmod +x "$tmp/agy"
-mv "$tmp/agy" "$INSTALL_DIR/agy"
-echo "Installed agy to $INSTALL_DIR/agy"
+chmod +x "$tmp/agentry"
+mv "$tmp/agentry" "$INSTALL_DIR/agentry"
+# Short aliases. Replaced unconditionally: an older install left a real binary at
+# $INSTALL_DIR/agy, and it must become a link to the new one rather than go stale.
+for alias_name in agy agyx; do
+  rm -f "$INSTALL_DIR/$alias_name"
+  ln -s "agentry" "$INSTALL_DIR/$alias_name"
+done
+echo "Installed agentry to $INSTALL_DIR/agentry (aliases: agy, agyx)"
 
 case ":$PATH:" in
   *":$INSTALL_DIR:"*) ;;
@@ -69,4 +91,4 @@ case ":$PATH:" in
      echo "  export PATH=\"$INSTALL_DIR:\$PATH\"" ;;
 esac
 
-"$INSTALL_DIR/agy" version || true
+"$INSTALL_DIR/agentry" version || true
