@@ -189,6 +189,10 @@ target resolvable — community-supplied universality you don't have to author. 
 shows the targets in use, whether each resolves (built-in / profile) or is unresolved, and which
 overlays are installable; an unresolved target during `agentry sync` points here. This decentralizes
 the cost of supporting a new agent: a driver is *data* anyone can publish, not a code change.
+`agentry target drivers` lists every built-in driver name. Defining a target this way (built-in,
+or via an overlay/hand-written `target_profiles`) only makes it *resolvable* — `agentry target use
+<name>` (or `agentry init -t <name>` on an existing project) is the separate step that actually
+activates it for the current project, by adding it to `targets:` and syncing.
 
 **Authoring a catalog (`agentry catalog add-repo`).** Add an entry from a git/GitHub URL — a browser
 `…/tree/<ref>/<subdir>` URL infers the `ref` and `subdir`; the name defaults to the repo

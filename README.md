@@ -256,6 +256,24 @@ whichever comes first on your `PATH` wins — silently. So **prefer `agentry` or
 [Troubleshooting](docs/troubleshooting.md#the-agy-command-runs-the-wrong-tool) explains how
 to check.
 
+### Updating agentry
+
+This is about the CLI itself — not a project's targets (for that, see `agentry target use`
+in [Targets (drivers & driver overlays)](docs/commands.md#targets-drivers--driver-overlays),
+and `agentry update` for component sources). Re-run whichever install method you used
+originally:
+
+| How you installed it | How to update |
+|---|---|
+| `install.sh` / `install.ps1` | Re-run the same curl/`irm` one-liner — it always fetches the latest release and overwrites the existing binary in place. |
+| Homebrew | `brew upgrade agentry` |
+| Scoop | `scoop update agentry` |
+| `.pkg` / `.exe` / `.deb` / `.rpm` | Download the newer asset from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest) and install it the same way — it replaces the previous version. |
+| `uv tool install` | `uv tool upgrade agentry` (falls back to `uv tool install --reinstall git+https://github.com/OpenTechIL/agentry` if it doesn't pick up new commits) |
+| `pipx` | `pipx upgrade agentry` |
+
+Check the result with `agentry --version`.
+
 ## Quickstart
 
 A real walkthrough, about five minutes. Every command below was actually run, and the
@@ -277,8 +295,11 @@ Initialized agentry for targets: claude
 Three things just happened:
 
 1. **`.agentry.yml` was created** — your declaration file, currently listing `claude` as
-   the only target. Add more with repeated `-t` flags:
-   `agentry init -t claude -t cursor -t copilot`.
+   the only target. Add more up front with repeated `-t` flags:
+   `agentry init -t claude -t cursor -t copilot`. Adding a target to a project you already
+   initialized works the same way — re-run `agentry init -t codex` (it adds `codex` and
+   syncs instead of erroring), or use `agentry target use codex` directly. See
+   `agentry target drivers` for the full list of built-in targets.
 2. **A catalog was registered**, so you can install things by short name right away with no
    URLs to look up. (Skip it with `--no-default-catalog`.)
 3. **`.agentry/` was added to `.gitignore`** — that's the download cache, like
@@ -419,7 +440,7 @@ Grouped by what you're trying to do. Full reference with every flag:
 
 | Command | What it does |
 |---|---|
-| `agentry init [-t TARGET]...` | Set up a project: create `.agentry.yml`, register the default catalog, git-ignore `.agentry/`. |
+| `agentry init [-t TARGET]...` | Set up a project: create `.agentry.yml`, register the default catalog, git-ignore `.agentry/`. Re-running it with `-t` on an existing project adds targets instead of erroring. |
 | `agentry search [QUERY]` | Browse catalogs for installable repos. No query lists everything. |
 | `agentry add <ref>` | Install a component, or a whole catalog repo. Downloads and installs in one step. |
 | `agentry remove <ref>` | Uninstall and drop from config. Fully reverses the install. |
@@ -445,6 +466,8 @@ Grouped by what you're trying to do. Full reference with every flag:
 | `agentry source remove NAME` / `source list` | Detach or list sources. |
 | `agentry catalog add NAME LOCATION` / `catalog list` / `catalog remove NAME` | Manage the catalogs that `add` and `search` resolve names against. |
 | `agentry target add NAME` / `target list` | Install or browse a shared **driver** definition published by a catalog, so a new tool works without you writing config. |
+| `agentry target drivers` | List agentry's built-in target drivers (claude, codex, opencode, …). |
+| `agentry target use NAME` | Activate a resolvable target (built-in or already-overlaid) for this project — adds it to `targets:` and syncs. |
 
 ### Occasional
 
@@ -516,6 +539,11 @@ and you can define a **brand-new agent** entirely in `.agentry.yml` under
 
 That definition is shareable: publish it in a catalog and anyone can run
 `agentry target add <name>` to support the tool without writing any config themselves.
+Defining a target and activating it are separate steps: `target add` (or hand-written
+`target_profiles`) makes a name *resolvable*; `agentry target use <name>` is what actually
+turns it on for the current project — the same command you'd use for a built-in like
+`codex` or `opencode`, which need no overlay at all. See `agentry target drivers` for the
+full built-in list.
 
 ```mermaid
 %%{init: {'theme':'base','themeVariables':{'primaryColor':'#5A4FCF','primaryTextColor':'#F8FAFC','lineColor':'#22D3EE','primaryBorderColor':'#22D3EE','secondaryColor':'#1E1E2E'}}}%%

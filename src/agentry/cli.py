@@ -20,6 +20,7 @@ from rich.tree import Tree
 from . import __version__, deps, discovery
 from .config import DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL, LOCK_NAME, ConfigStore
 from .deps import DependencyError
+from .drivers import BUILTIN_DRIVERS
 from .lockfile import load_lock, save_lock
 from .models import (
     Component,
@@ -64,6 +65,9 @@ app.add_typer(emit_app, name="emit")
 
 console = Console()
 err = Console(stderr=True)
+
+#: Built-in driver names in a stable, canonical order (registration order in drivers/__init__.py).
+_BUILTIN_TARGET_ORDER: list[str] = list(BUILTIN_DRIVERS)
 
 
 # -- program name / alias collision --------------------------------------
@@ -413,6 +417,23 @@ def _do_sync(
     _print_result(res)
 
 
+def _add_targets_and_sync(
+    store: ConfigStore, names: list[str], *, verb: str = "Activated"
+) -> tuple[list[str], list[str]]:
+    """Add each of ``names`` to ``targets:`` (idempotent). Saves + syncs iff anything changed.
+
+    Returns ``(added, already_active)``. Callers validate ``names`` themselves (e.g.
+    resolvability) before calling this — this helper only handles the mutation + sync.
+    """
+    added = [n for n in names if store.add_target(n)]
+    already = [n for n in names if n not in added]
+    if added:
+        store.save()
+        console.print(f"[green]{verb}[/green] target(s): {', '.join(added)}")
+        _do_sync()
+    return added, already
+
+
 _ALLOW_RUN = typer.Option(
     False,
     "--allow-run",
@@ -447,21 +468,35 @@ def init(
         None,
         "--target",
         "-t",
-        help="Target AI tool(s): claude, opencode, cursor, codex, gemini, windsurf, kimi, "
-        "copilot, kiro, agents (or a custom tool defined under target_profiles). Repeatable.",
+        help=f"Target AI tool(s): {', '.join(_BUILTIN_TARGET_ORDER)} (or a custom tool "
+        "defined under target_profiles). Repeatable. Safe to re-run with new targets on an "
+        "already-initialized project.",
     ),
     default_catalog: bool = typer.Option(
         True,
         "--default-catalog/--no-default-catalog",
-        help="Register agentry's curated catalog so `agentry add <name>` works out of the box.",
+        help="Register agentry's curated catalog so `agentry add <name>` works out of the "
+        "box. Only applies the first time a project is initialized.",
     ),
 ) -> None:
-    """Create .agentry.yml and add .agentry/ to .gitignore."""
+    """Create .agentry.yml (or, on an existing project, add --target(s) to it and sync)."""
     root = _root()
+    targets = _parse_targets(target)
     if ConfigStore.exists(root):
-        err.print("[yellow]Already initialized (.agentry.yml exists).[/yellow]")
-        raise typer.Exit(1)
-    targets = _parse_targets(target) or [Target.CLAUDE]
+        if not targets:
+            console.print(
+                "[dim]Already initialized (.agentry.yml exists); no --target given, "
+                f"nothing to do. Use `{prog()} target use <name>` to activate a target, "
+                f"or `{prog()} sync` to reconcile.[/dim]"
+            )
+            raise typer.Exit(0)
+        store = _load()
+        added, already = _add_targets_and_sync(store, targets, verb="Added")
+        if already:
+            console.print(f"[dim]Already active: {', '.join(already)}[/dim]")
+        raise typer.Exit(0)
+
+    targets = targets or [Target.CLAUDE]
     store = ConfigStore.create(root, targets, default_catalog=default_catalog)
     store.save()
     from .gitignore import ensure_gitignore
@@ -1191,6 +1226,43 @@ def target_add(
             f"[dim]Target '{name}' already has profile rules in .agentry.yml — left as-is.[/dim]"
         )
     _do_sync()
+
+
+@target_app.command("use")
+def target_use(
+    name: str = typer.Argument(
+        ...,
+        help="Target to activate: a built-in (see `target drivers`) or a name already "
+        "defined under target_profiles (e.g. via `target add`).",
+    ),
+) -> None:
+    """Activate a target for this project: add it to `targets:` in .agentry.yml, then sync.
+
+    Only resolvable names are accepted — a built-in driver, or a target already defined
+    under `target_profiles`. For a community driver overlay that isn't installed yet, run
+    `target add <name>` first, then `target use <name>`.
+    """
+    store = _load()
+    config = store.parsed()
+    if not is_builtin(name) and name not in config.target_profiles:
+        err.print(
+            f"[red]'{name}' isn't a built-in target and has no target_profiles entry.[/red] "
+            f"Built-ins: {', '.join(_BUILTIN_TARGET_ORDER)}. "
+            f"For a community driver overlay, run `{prog()} target add {name}` first, "
+            f"then `{prog()} target use {name}`."
+        )
+        raise typer.Exit(1)
+    if name in config.targets:
+        console.print(f"[dim]Target '{name}' is already active.[/dim]")
+        raise typer.Exit(0)
+    _add_targets_and_sync(store, [name])
+
+
+@target_app.command("drivers")
+def target_drivers() -> None:
+    """List agentry's built-in target drivers (agents supported out of the box)."""
+    for name in _BUILTIN_TARGET_ORDER:
+        console.print(name)
 
 
 @target_app.command("list")
