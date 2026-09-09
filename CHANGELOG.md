@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `agentry target use <name>` — activate a target (built-in, or already defined via
+  `target add` / hand-written `target_profiles`) for the current project: adds it to
+  `targets:` in `.agentry.yml` and syncs. Idempotent — a no-op if already active.
+- `agentry target drivers` — list agentry's built-in target drivers (`claude`, `opencode`,
+  `cursor`, `codex`, `gemini`, `windsurf`, `kimi`, `copilot`, `kiro`, `agents`).
+- `agentry init -t <name>` is now safe to re-run on an already-initialized project: it adds
+  the given target(s) to the existing `.agentry.yml` and syncs, instead of erroring with
+  "Already initialized". **Behavior change:** running bare `agentry init` (no `-t`) on an
+  already-initialized project now prints an informational message and exits **0** instead
+  of exiting 1.
+
 ## [0.1.4] — 2026-09-03
 
 ### Added

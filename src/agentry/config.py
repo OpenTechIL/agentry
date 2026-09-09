@@ -146,6 +146,14 @@ class ConfigStore:
         repos[:] = [r for r in repos if r.get("name") != name]
         return len(repos) != before
 
+    def add_target(self, name: str) -> bool:
+        """Append ``name`` to ``targets:`` if not already present. Returns True if added."""
+        targets = self._seq("targets")
+        if name in targets:
+            return False
+        targets.append(name)
+        return True
+
     def merge_target_profiles(self, profiles: dict[str, dict[ComponentType, ProfileRule]]) -> bool:
         """Merge per-target profile rules into ``target_profiles``, never clobbering existing.
 

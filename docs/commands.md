@@ -9,7 +9,7 @@ behind these commands.
 | Command | What it does |
 |---|---|
 | `agentry version` | Print the installed agentry version |
-| `agentry init [-t TARGET]... [--no-default-catalog]` | Create `.agentry.yml`, add `.agentry/` to `.gitignore`, register the default `agentry` catalog (skip with `--no-default-catalog`) |
+| `agentry init [-t TARGET]... [--no-default-catalog]` | Create `.agentry.yml`, add `.agentry/` to `.gitignore`, register the default `agentry` catalog (skip with `--no-default-catalog`). Safe to re-run on an already-initialized project: `-t TARGET` then just adds the target(s) and syncs instead of erroring |
 | `agentry list` | Show discovered components grouped by source, with state |
 | `agentry search [QUERY]` | Search catalogs for repos (filter by QUERY); lists components with no query |
 | `agentry add <source>/<type>/<name> [--path P]` | Enable a component and install it (`--path` = explicit artifact location) |
@@ -47,16 +47,21 @@ for the catalog schema.
 | `agentry catalog list` | List configured catalogs and the repos they offer |
 | `agentry catalog add-repo GIT_URL [NAME] [--ref R] [--subdir DIR] [--summary S] [--discover] [--file F] [--force]` | Add a repo entry to a catalog file (default `registry/repositories.json`); `--discover` pre-fills `expose` |
 
-## Targets (driver overlays)
+## Targets (drivers & driver overlays)
 
-A *driver overlay* is a named, shareable definition of how some agent installs each component
-type — published by a catalog under its `targets` block. Installing one makes an otherwise-
-undefined target resolvable without hand-writing `target_profiles`.
+A *driver* is agentry's built-in definition of how some agent installs each component type
+(`agentry target drivers` lists them all). A *driver overlay* is the same idea published by a
+catalog under its `targets` block — a way to add a driver for a tool agentry doesn't ship
+built in. `target add` installs an overlay (fetches from a catalog, needs consent); `target use`
+turns on a target that's already resolvable — built in, or already defined via `target add` or
+hand-written `target_profiles` — for the current project.
 
 | Command | What it does |
 |---|---|
+| `agentry target drivers` | List agentry's built-in target drivers (claude, codex, opencode, …) |
 | `agentry target list` | Show targets in use (resolved via built-in / profile / unresolved) and which overlays are installable from catalogs |
 | `agentry target add NAME [--catalog C]` | Install a shared driver overlay into `target_profiles`, then sync |
+| `agentry target use NAME` | Activate a resolvable target (built-in or already-overlaid) for this project: add it to `targets:`, then sync |
 
 ## Interop & portability
 

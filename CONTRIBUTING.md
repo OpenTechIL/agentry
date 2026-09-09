@@ -55,7 +55,8 @@ under `target_profiles` in `.agentry.yml`. To ship it as a **built-in**:
    `HookEventPolicy`/`NamespacePolicy` only if the agent needs that behavior — see
    `drivers/claude.py` for the fully-featured example and `drivers/kimi.py` for a minimal one.
 2. Register it in `BUILTIN_DRIVERS` in `drivers/__init__.py`, and add the name to
-   `Target` + `BUILTIN_TARGET_NAMES` in `models.py`.
+   `Target` + `BUILTIN_TARGET_NAMES` in `models.py`. (This is also what powers
+   `agentry target drivers` and `agentry target use <name>` — no separate step needed there.)
 3. Add a row to the capability table in `docs/architecture.md` and a case to
    `tests/test_drivers.py` (it's parametrized — usually a few lines).
 

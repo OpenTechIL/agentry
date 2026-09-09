@@ -4,6 +4,7 @@ from typer.testing import CliRunner
 
 from agentry.cli import app
 from agentry.config import DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL, ConfigStore
+from agentry.models import ProfileRule
 from conftest import make_source
 
 runner = CliRunner()
@@ -165,6 +166,73 @@ def test_target_list_shows_status_and_available(tmp_path, monkeypatch):
     assert "claude" in out and "resolved" in out
     # myide is active but unresolved, yet an overlay is available to fix it.
     assert "myide" in out and "overlay available" in out
+
+
+def test_target_use_activates_builtin_and_syncs(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    make_source(tmp_path / "team")
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    runner.invoke(app, ["add", "team/skill/code-reviewer"])
+    assert not (project / ".codex").exists()
+
+    out = runner.invoke(app, ["target", "use", "codex"]).output
+    assert "Activated" in out and "codex" in out
+    assert "codex" in ConfigStore.load(project).parsed().targets
+    assert (project / ".agents/skills/code-reviewer").exists()
+
+
+def test_target_use_already_active_is_noop(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    monkeypatch.chdir(project)
+
+    result = runner.invoke(app, ["target", "use", "claude"])
+    assert result.exit_code == 0
+    assert "already active" in result.output
+    assert ConfigStore.load(project).parsed().targets == ["claude"]
+
+
+def test_target_use_unknown_name_errors(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    monkeypatch.chdir(project)
+
+    result = runner.invoke(app, ["target", "use", "ghostide"])
+    assert result.exit_code == 1
+    assert "isn't a built-in target" in result.output
+    assert "target add" in result.output
+
+
+def test_target_use_activates_existing_overlay_without_add(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    store = ConfigStore.create(project, ["claude"])
+    store.merge_target_profiles(
+        {"myide": {"skill": ProfileRule(strategy="link", dest=".myide/skills/{name}")}}
+    )
+    store.save()
+    monkeypatch.chdir(project)
+
+    result = runner.invoke(app, ["target", "use", "myide"])
+    assert result.exit_code == 0
+    assert "myide" in ConfigStore.load(project).parsed().targets
+
+
+def test_target_drivers_lists_builtin_names(tmp_path, monkeypatch):
+    from agentry.drivers import BUILTIN_DRIVERS
+
+    project = tmp_path / "proj"
+    project.mkdir()
+    ConfigStore.create(project, ["claude"]).save()
+    monkeypatch.chdir(project)
+
+    out = runner.invoke(app, ["target", "drivers"]).output
+    assert [line for line in out.splitlines() if line] == list(BUILTIN_DRIVERS)
 
 
 def test_import_apm_creates_config_and_mcp_fragments(tmp_path, monkeypatch):
@@ -482,3 +550,43 @@ def test_init_no_default_catalog_opts_out(tmp_path, monkeypatch):
 
     assert runner.invoke(app, ["init", "--no-default-catalog"]).exit_code == 0
     assert ConfigStore.load(project).parsed().repositories == []
+
+
+def test_init_rerun_with_new_target_adds_and_syncs(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["init", "--target", "claude"])
+    make_source(tmp_path / "team")
+    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    runner.invoke(app, ["add", "team/skill/code-reviewer"])
+
+    result = runner.invoke(app, ["init", "--target", "codex"])
+    assert result.exit_code == 0
+    assert "Added" in result.output and "codex" in result.output
+    assert ConfigStore.load(project).parsed().targets == ["claude", "codex"]
+    assert (project / ".agents/skills/code-reviewer").exists()
+
+
+def test_init_rerun_same_target_reports_already_active(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["init", "--target", "claude"])
+
+    result = runner.invoke(app, ["init", "--target", "claude"])
+    assert result.exit_code == 0
+    assert "Already active" in result.output
+    assert ConfigStore.load(project).parsed().targets == ["claude"]
+
+
+def test_init_rerun_no_target_is_friendly_noop(tmp_path, monkeypatch):
+    project = tmp_path / "proj"
+    project.mkdir()
+    monkeypatch.chdir(project)
+    runner.invoke(app, ["init", "--target", "claude"])
+
+    result = runner.invoke(app, ["init"])
+    assert result.exit_code == 0
+    assert "nothing to do" in result.output
+    assert ConfigStore.load(project).parsed().targets == ["claude"]

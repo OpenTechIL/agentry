@@ -29,7 +29,9 @@ see [Troubleshooting](troubleshooting.md#recovering-a-broken-agentry-store).
 | `hashing` | [HashingConfig](#hashing) | `{normalize_line_endings: true}` | How local-source content is hashed. |
 
 Built-in `targets` values: `claude`, `opencode`, `cursor`, `codex`, `gemini`, `windsurf`,
-`kimi`, `copilot`, `kiro`, plus the tool-neutral `agents` (writes `.agents/skills/…`).
+`kimi`, `copilot`, `kiro`, plus the tool-neutral `agents` (writes `.agents/skills/…`) —
+also listed by `agentry target drivers`. Add or activate one with `agentry init -t <name>`
+or `agentry target use <name>`.
 
 ## `sources`
 
