@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.5] — 2026-09-09
+
 ### Added
 - `agentry target use <name>` — activate a target (built-in, or already defined via
   `target add` / hand-written `target_profiles`) for the current project: adds it to
