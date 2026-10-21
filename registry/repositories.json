@@ -142,6 +142,20 @@
         "url": "https://github.com/jeffallan/claude-skills",
         "ref": "main"
       }
+    },
+    "hol-guard": {
+      "summary": "HOL Guard local MCP access to receipts, inventory, and status; requires the HOL Guard CLI.",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/hashgraph-online/hol-guard-plugin",
+        "ref": "4625758de6050fbd2c54550e39bb249a0af6e11d"
+      },
+      "expose": [
+        {
+          "type": "mcp",
+          "name": "mcp"
+        }
+      ]
     }
   }
 }
