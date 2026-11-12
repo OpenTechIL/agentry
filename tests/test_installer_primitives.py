@@ -234,3 +234,150 @@ def test_load_fragment_round_trips_json(tmp_path):
     p = tmp_path / "hooks.json"
     p.write_text(json.dumps({"SessionStart": [{"hooks": []}]}), encoding="utf-8")
     assert load_fragment(p) == {"SessionStart": [{"hooks": []}]}
+
+
+# --- Merge write fidelity (task T6): unicode round-trips, no-op merges never rewrite ------
+
+
+def _merge_dest(file: str = ".mcp.json", pointer: str = "mcpServers"):
+    from agentry.spec import MergeDest
+
+    return MergeDest(file, pointer)
+
+
+def _freeze_mtime(path):
+    """Back-date mtime so an unwanted rewrite is detectable even on coarse clocks."""
+    import os
+
+    os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+    return path.stat().st_mtime_ns
+
+
+def test_install_merge_keeps_non_ascii_user_values_verbatim(tmp_path):
+    from agentry.installers.merge import install_merge
+
+    cfg = tmp_path / ".mcp.json"
+    cfg.write_text(
+        json.dumps({"mcpServers": {"mine": {"command": "café", "args": ["日本語"]}}}),
+        encoding="utf-8",
+    )
+    install_merge(tmp_path, _merge_dest(), {"ours": {"command": "npx"}})
+
+    text = cfg.read_text(encoding="utf-8")
+    assert "café" in text and "日本語" in text
+    assert "\\u" not in text
+    assert json.loads(text)["mcpServers"]["mine"] == {"command": "café", "args": ["日本語"]}
+
+
+def test_install_merge_that_changes_nothing_leaves_file_bytes_untouched(tmp_path):
+    """Re-merging an entry already present with the same value must not rewrite the file —
+    even when the user's formatting (compact, key order) differs from agentry's."""
+    from agentry.installers.merge import install_merge
+
+    cfg = tmp_path / ".mcp.json"
+    original = '{"mcpServers":{"mine":{"command":"x"},"ours":{"command":"npx"}},"other":1}'
+    cfg.write_text(original, encoding="utf-8")
+    mtime = _freeze_mtime(cfg)
+
+    install_merge(tmp_path, _merge_dest(), {"ours": {"command": "npx"}})
+
+    assert cfg.read_text(encoding="utf-8") == original
+    assert cfg.stat().st_mtime_ns == mtime
+
+
+def test_remove_merge_with_nothing_of_ours_leaves_file_bytes_untouched(tmp_path):
+    from agentry.installers.merge import remove_merge
+
+    cfg = tmp_path / ".mcp.json"
+    original = '{"mcpServers":{"mine":{"command":"café"}}}'
+    cfg.write_text(original, encoding="utf-8")
+    mtime = _freeze_mtime(cfg)
+
+    assert remove_merge(tmp_path, _merge_dest(), ["not-there"]) is False
+    assert cfg.read_text(encoding="utf-8") == original
+    assert cfg.stat().st_mtime_ns == mtime
+
+
+def test_remove_merge_never_prunes_a_user_empty_section(tmp_path):
+    """A user's deliberately-empty section is not ours to prune when we removed nothing."""
+    from agentry.installers.merge import remove_merge
+
+    cfg = tmp_path / ".mcp.json"
+    original = '{"mcpServers": {}}'
+    cfg.write_text(original, encoding="utf-8")
+
+    remove_merge(tmp_path, _merge_dest(), ["ours"])
+    assert cfg.read_text(encoding="utf-8") == original
+
+
+def test_install_merge_toml_noop_and_unicode_round_trip(tmp_path):
+    from agentry.installers.merge import install_merge
+
+    cfg = tmp_path / ".codex" / "config.toml"
+    cfg.parent.mkdir()
+    original = (
+        '# mine\n[mcp_servers.mine]\ncommand = "café"\n\n[mcp_servers.ours]\ncommand = "npx"\n'
+    )
+    cfg.write_text(original, encoding="utf-8")
+    mtime = _freeze_mtime(cfg)
+
+    install_merge(
+        tmp_path, _merge_dest(".codex/config.toml", "mcp_servers"), {"ours": {"command": "npx"}}
+    )
+
+    assert cfg.read_text(encoding="utf-8") == original
+    assert cfg.stat().st_mtime_ns == mtime
+
+
+def test_second_sync_leaves_merged_config_bytes_untouched(tmp_path):
+    """End-to-end: once installed, a re-sync never rewrites the merged config file."""
+    from agentry.config import ConfigStore
+    from agentry.models import Component, ComponentType, Source, SourceType, Target
+    from agentry.reconcile import sync
+
+    src = tmp_path / "src"
+    (src / "mcp").mkdir(parents=True)
+    (src / "mcp" / "github.json").write_text(
+        json.dumps({"github": {"command": "npx"}}), encoding="utf-8"
+    )
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    ConfigStore.create(proj, [Target.CLAUDE]).save()
+    store = ConfigStore.load(proj)
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(src)))
+    store.add_component(Component(source="s", type=ComponentType.MCP, name="github"))
+    store.save()
+    (proj / ".mcp.json").write_text('{"mcpServers": {"mine": {"command": "é"}}}', encoding="utf-8")
+
+    sync(proj)
+    cfg = proj / ".mcp.json"
+    after_first = cfg.read_bytes()
+    mtime = _freeze_mtime(cfg)
+
+    sync(proj)
+    assert cfg.read_bytes() == after_first
+    assert cfg.stat().st_mtime_ns == mtime
+
+
+def test_remove_merge_keeps_non_ascii_user_values_verbatim(tmp_path):
+    from agentry.installers.merge import install_merge, remove_merge
+
+    cfg = tmp_path / ".mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": {"mine": {"command": "héllo"}}}), encoding="utf-8")
+    install_merge(tmp_path, _merge_dest(), {"ours": {"command": "npx"}})
+    remove_merge(tmp_path, _merge_dest(), ["ours"])
+
+    text = cfg.read_text(encoding="utf-8")
+    assert "héllo" in text and "\\u" not in text
+    assert json.loads(text) == {"mcpServers": {"mine": {"command": "héllo"}}}
+
+
+def test_remove_merge_of_a_present_key_still_prunes_the_emptied_section(tmp_path):
+    from agentry.installers.merge import install_merge, remove_merge
+
+    cfg = tmp_path / ".mcp.json"
+    cfg.write_text(json.dumps({"other": 1}), encoding="utf-8")
+    install_merge(tmp_path, _merge_dest(), {"ours": {"command": "npx"}})
+
+    assert remove_merge(tmp_path, _merge_dest(), ["ours"]) is True
+    assert json.loads(cfg.read_text(encoding="utf-8")) == {"other": 1}

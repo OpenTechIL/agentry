@@ -87,21 +87,38 @@ def _read_doc(path: Path) -> MutableMapping:
     return doc
 
 
-def _write_doc(path: Path, doc: MutableMapping) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _serialize(path: Path, doc: MutableMapping) -> str:
+    """Render ``doc`` in the format chosen by ``path``'s extension.
+
+    JSON is written with ``ensure_ascii=False`` so a user's non-ASCII values (``"héllo"``)
+    round-trip verbatim instead of being rewritten as ``\\u`` escapes.
+    """
     if _is_toml(path):
         text = tomlkit.dumps(doc)
-        if not text.endswith("\n"):
-            text += "\n"
-        path.write_text(text, encoding="utf-8")
-    else:
-        path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+        return text if text.endswith("\n") else text + "\n"
+    return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+
+
+def _write_doc(path: Path, doc: MutableMapping, *, before: str | None) -> None:
+    """Write ``doc`` unless it is unchanged from the ``before`` snapshot.
+
+    ``before`` is the serialization of the document as read (``None`` when the file did not
+    exist). Comparing serializations — not raw file bytes — means a merge that changes
+    nothing leaves the user's file untouched (bytes, formatting, and mtime), even when its
+    formatting differs from ours.
+    """
+    text = _serialize(path, doc)
+    if before is not None and text == before:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def install_merge(root: Path, dest: MergeDest, fragment: dict) -> list[str]:
     """Merge ``fragment`` into the target config; return the owned keys."""
     path = require_confined(root, dest.file)
     doc = _read_doc(path)
+    before = _serialize(path, doc) if path.is_file() else None
     section = doc.get(dest.pointer)
     if not isinstance(section, MutableMapping):
         doc[dest.pointer] = {}
@@ -110,7 +127,7 @@ def install_merge(root: Path, dest: MergeDest, fragment: dict) -> list[str]:
         section = doc[dest.pointer]
     for key, value in fragment.items():
         section[key] = value
-    _write_doc(path, doc)
+    _write_doc(path, doc, before=before)
     return list(fragment.keys())
 
 
@@ -123,14 +140,17 @@ def remove_merge(root: Path, dest: MergeDest, keys: list[str]) -> bool:
     section = doc.get(dest.pointer)
     if not isinstance(section, MutableMapping):
         return False
+    before = _serialize(path, doc)
     removed = False
     for key in keys:
         if key in section:
             del section[key]
             removed = True
+    if not removed:
+        return False  # nothing of ours here — never rewrite (or prune) the user's file
     if not section:
         doc.pop(dest.pointer, None)
-    _write_doc(path, doc)
+    _write_doc(path, doc, before=before)
     return removed
 
 
