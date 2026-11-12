@@ -53,9 +53,9 @@ jobs:
           - { runner: macos-14,       target: macos-arm64,     ext: "",     pyarch: "" }
           - { runner: windows-latest, target: windows-x86_64,  ext: ".exe", pyarch: "" }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
       - name: Ensure Rosetta 2 (macOS x86_64 cross build)
@@ -68,10 +68,10 @@ jobs:
             # Cross-build for Intel on the arm64 runner: an x86_64 CPython runs
             # under Rosetta, so PyInstaller freezes an x86_64 binary with x86_64
             # dependency wheels.
-            uv run --python "cpython-3.12-macos-${{ matrix.pyarch }}" \
+            uv run --frozen --python "cpython-3.12-macos-${{ matrix.pyarch }}" \
               --extra build pyinstaller packaging/agentry.spec
           else
-            uv run --extra build pyinstaller packaging/agentry.spec
+            uv run --frozen --extra build pyinstaller packaging/agentry.spec
           fi
       - name: Resolve version
         id: ver
@@ -155,7 +155,7 @@ jobs:
              "agy-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: agentry-${{ matrix.target }}
           # Raw binary, plus any installer/packages produced above — all live
@@ -176,12 +176,12 @@ jobs:
       id-token: write   # cosign keyless signing via OIDC
     steps:
       - name: Download all artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
           merge-multiple: true
       - name: Install cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
       - name: Generate checksums
         working-directory: artifacts
         run: |
@@ -197,7 +197,7 @@ jobs:
             cosign sign-blob --yes --bundle "$f.cosign.bundle" "$f"
           done
       - name: Create / update Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           files: artifacts/*
           generate_release_notes: true
@@ -210,7 +210,7 @@ jobs:
     permissions:
       contents: read   # read SHA256SUMS.txt off this repo's release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Resolve version
         id: ver
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
