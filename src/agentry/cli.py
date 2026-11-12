@@ -44,6 +44,7 @@ from .targets import (
     UnresolvedTargetError,
     check_targets,
     is_builtin,
+    resolve_targets,
     suggest_target,
 )
 
@@ -272,6 +273,12 @@ def _summary_line(kind: str, n: int) -> str:
             f"{_plural(n, 'key in keep: has', 'keys in keep: have')} no entry on one or more "
             f"targets and {'was' if n == 1 else 'were'} not installed — run `{prog()} doctor` "
             "for the list"
+        )
+    if kind == "inactive":
+        return (
+            f"{_plural(n, 'component target', 'component targets')} "
+            f"{'isn' if n == 1 else 'aren'}'t active in this project and "
+            f"{'was' if n == 1 else 'were'} skipped — run `{prog()} doctor` for the list"
         )
     if kind == "unsupported":
         return (
@@ -1080,6 +1087,16 @@ def keep_cmd(
         raise typer.Exit(1)
     if scope is not None:
         installs_into = component.applies_to(config.targets)
+        if scope in component.inactive_targets(config.targets) and scope in resolve_targets(config):
+            err.print(
+                escape(
+                    f"target '{scope}' isn't in the project's targets — add it with "
+                    f"`{prog()} target use {scope}`, or keep the bare '<key>' for the targets "
+                    f"{ref} does install into."
+                ),
+                style="red",
+            )
+            raise typer.Exit(1)
         if scope not in installs_into:
             err.print(
                 escape(
@@ -1504,6 +1521,17 @@ def target_list() -> None:
         console.print(table)
     else:
         console.print("[dim]No targets configured.[/dim]")
+    # Named in some component's `targets:` but not switched on project-wide: those
+    # components skip it (component targets only narrow the project's list).
+    referenced = sorted(config.referenced_targets() - active)
+    if referenced:
+        console.print("\n[bold]Referenced but not active[/bold] [dim](components skip these)[/dim]")
+        for t in referenced:
+            users = ", ".join(c.ref for c in config.components if c.targets and t in c.targets)
+            console.print(
+                f"  [cyan]{_e(t)}[/cyan] [dim]← {_e(users)}[/dim] — activate with "
+                f"`{prog()} target use {_e(t)}`"
+            )
     extras = sorted((t, c) for t, c in available.items() if t not in active)
     if extras:
         console.print(

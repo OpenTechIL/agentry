@@ -54,7 +54,7 @@ A source is a git repo or a directory on this machine.
 | `type` | str | — | One of `skill`, `agent`, `command`, `tool`, `hook`, `mcp`. |
 | `name` | str | — | The component's name in that source. `agentry list` shows the real names. |
 | `enabled` | bool | `true` | `false` uninstalls on the next sync but keeps the entry (`agentry disable`). |
-| `targets` | list of str | `null` | Install only into these targets. `null` means every target in the project's `targets`. |
+| `targets` | list of str | `null` | Narrow this component to some of the project's `targets`. It can only narrow: a name the project doesn't list is skipped with a warning. To install there, add it to the project with `agentry target use <name>`. `null` means every target in the project's `targets`. |
 | `path` | str | `null` | Explicit path to the artifact within the source, overriding discovery. Must be relative and inside the repo. |
 | `generate` | [GeneratorSpec](#generate) | `null` | The component installs itself by running its own CLI. |
 | `transform` | `{provider, prompt}` | `null` | Materialize through a content provider instead of a live symlink. `provider` is `strip-frontmatter` or `agent`. |
@@ -273,6 +273,7 @@ components:
     type: skill
     name: code-reviewer
   # Only install this one into Claude, not every target.
+  # (It narrows the project's targets: listing a target the project doesn't use is skipped.)
   - source: team-skills
     type: mcp
     name: github

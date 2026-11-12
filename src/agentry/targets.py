@@ -139,7 +139,7 @@ def resolve_targets(config: Config) -> dict[str, TargetSpec]:
 def unresolved_targets(config: Config, specs: dict[str, TargetSpec] | None = None) -> list[str]:
     """Active targets that have neither a built-in nor a profile definition."""
     specs = specs if specs is not None else resolve_targets(config)
-    return sorted(t for t in config.active_targets() if t not in specs)
+    return sorted(t for t in config.referenced_targets() if t not in specs)
 
 
 class UnresolvedTargetError(ResolveError):

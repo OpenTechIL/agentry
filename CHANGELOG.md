@@ -33,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agentry handles each entry independently.
 
 ### Changed
+- **Behavior change: a component's `targets:` now only narrows the project's `targets:`.** A
+  target that is valid but not in the project's list is skipped with a warning that suggests
+  `agentry target use <name>`. Earlier versions installed there anyway. If one did, the next
+  sync removes that install and prints each removal. Only agentry's own entries are removed,
+  and entries you added by hand stay. Related changes:
+  `agentry emit triggers` writes no memory file for a target that isn't active, `agentry add`
+  ignores inactive targets, and `agentry target list` shows a **Referenced but not active**
+  group naming the components that point at each such target. A `generate` component whose
+  targets are all inactive is skipped and its generator doesn't run. If one was installed into
+  such a target before, the files it produced are deleted on the next sync. That's intended: it's
+  the same removal as any other uninstall. And
+  `agentry keep <ref> <target>:<key>` refuses an inactive target with exit 1. Two or more skips
+  collapse into one summary line that points to `agentry doctor`.
 - **Behavior change: an unknown target name is now an error, and nothing is changed.**
   `sync`, `install`, `update`, `status`, and every command that edits `.agentry.yml` and syncs
   refuse a target that has no built-in driver, `target_profiles` entry or overlay. That covers

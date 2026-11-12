@@ -343,7 +343,19 @@ target_profiles:
 
 > YAML note: a `dest` containing `{name}` must be **quoted**, or YAML reads `{…}` as a flow mapping.
 
-An active target with neither a built-in driver nor a profile is reported via `unresolved_targets`.
+A referenced target (project or component) with neither a built-in driver nor a profile is reported via `unresolved_targets`, which is fatal for sync (§6 step 0).
+
+**Active vs. referenced targets.** The project's `targets:` is the **single switch**
+(`Config.active_targets()`): agentry installs only into those. A component's own `targets:`
+can only **narrow** that list, never switch a target on. `Component.applies_to` returns the
+*intersection*. A component target that resolves but isn't active is skipped, with a warning
+(`agentry target use <t>` to activate it). `doctor` reports it under `target`, sync summarises
+the warnings, and `target list` shows it as "referenced but not active". A `generate`
+component with no active target in common is skipped, and its generator does not run.
+`Config.referenced_targets()`, the union of project and component lists, is used **only** for
+the resolvability check (§6 step 0), so a typo in a component's list is still fatal. Dropping a
+target from the project removes it everywhere: the next sync uninstalls those components
+through the normal orphan path. Transitive dependencies inherit their root's narrowed set.
 
 Adding an agent is **data, not a code change** — `target_profiles` deep-merges over the
 built-ins to override paths or introduce an entirely new tool:
@@ -385,7 +397,8 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
 
 ```
 0. Validate targets (fail fast)          targets.unresolved_targets(config)
-   every active target (project `targets:` + declared components' `targets:`) must be
+   every referenced target (project `targets:` + declared components' `targets:`, i.e.
+   `Config.referenced_targets()`) must be
    built-in or defined in target_profiles; otherwise raise UnresolvedTargetError (exit 1)
    naming each one with an offline did-you-mean (targets.suggest_target). Runs before any
    network, lock write, or orphan removal — a typo like `clade` changes nothing. A catalog
@@ -406,7 +419,7 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
    └─ emit an augmented (sources + components) graph; write .agentry.lock.
 
 2. Compute desired state          reconcile.compute_desired(augmented_config)
-   for each ENABLED component × each applicable target:
+   for each ENABLED component × each applicable target (project targets ∩ component targets):
      LINK     → DesiredLink(dest path, store artifact)   [path: override skips discovery]
      MERGE    → DesiredMerge(config file, pointer, fragment keys)
      GENERATE → DesiredGenerate(component, generate spec)

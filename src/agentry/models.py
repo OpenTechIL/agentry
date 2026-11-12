@@ -313,7 +313,18 @@ class Component(BaseModel):
         return frozenset(out)
 
     def applies_to(self, project_targets: list[str]) -> list[str]:
-        return self.targets if self.targets is not None else project_targets
+        """The targets this component installs into: the project's ``targets:``, narrowed to
+        the component's own ``targets:`` when set (intersection — a component can only
+        *restrict* where it goes, never switch a target on; that's the project's list)."""
+        if self.targets is None:
+            return list(project_targets)
+        return [t for t in self.targets if t in project_targets]
+
+    def inactive_targets(self, project_targets: list[str]) -> list[str]:
+        """Targets this component lists that the project hasn't activated (so it skips)."""
+        if self.targets is None:
+            return []
+        return [t for t in self.targets if t not in project_targets]
 
 
 class ExpectRule(BaseModel):
@@ -434,12 +445,21 @@ class Config(BaseModel):
         return next((c for c in self.components if c.ref == ref), None)
 
     def active_targets(self) -> set[str]:
-        """Every target referenced by the project or any component."""
-        active = set(self.targets)
+        """The targets agentry installs into: the project's ``targets:`` (the switch).
+
+        A component's ``targets:`` only narrows within these — see
+        :meth:`Component.applies_to` and :meth:`referenced_targets`.
+        """
+        return set(self.targets)
+
+    def referenced_targets(self) -> set[str]:
+        """Every target named anywhere — project or component ``targets:``. Used only to
+        check resolvability, so a typo in a component's list is still fatal."""
+        named = set(self.targets)
         for c in self.components:
             if c.targets:
-                active.update(c.targets)
-        return active
+                named.update(c.targets)
+        return named
 
 
 # -- source descriptor (optional, lives in the source repo) ---------------

@@ -496,6 +496,15 @@ one, rerun with `-v`:
 [capability table in the README](https://github.com/OpenTechIL/agentry/blob/main/README.md#supported-agents)
 shows which component types each target installs.
 
+**Component targets that aren't active** (a component's `targets:` names a target the project
+doesn't list) are summarized too:
+
+```text
+! 2 component targets aren't active in this project and were skipped — run `agentry doctor` for the list
+```
+
+See [`target '<name>' is not in the project's targets — skipped`](#target-name-is-not-in-the-projects-targets-skipped).
+
 **Format mismatches** have their own summary:
 
 ```text
@@ -579,6 +588,44 @@ state. Removing the component whose `targets:` holds the typo also works.
 ```text
 'cursr' isn't a built-in target and has no target_profiles entry. Did you mean 'cursor'? Built-ins: claude, opencode, cursor, codex, gemini, windsurf, kimi, copilot, kiro, agents. For a community driver overlay, run `agentry target add cursr` first, then `agentry target use cursr`.
 ```
+
+## `target '<name>' is not in the project's targets — skipped`
+
+**Symptom.** sync, status or doctor prints:
+
+```text
+! demo/skill/a: target 'opencode' is not in the project's targets — skipped. Add it with `agentry target use opencode`, or remove it from this component.
+```
+
+**Cause.** The component's own `targets:` lists a target that the project's `targets:` doesn't.
+A component's `targets:` can only narrow the project's list, so agentry skips that target. If
+an earlier agentry version had installed the component there, the next sync removes it and
+prints each removal (`- link …`, `- merge …`). Only agentry's own entries are removed: entries
+you added by hand to that tool's config stay. `agentry doctor` reports it as a `target`
+warning, so `doctor --strict` fails. `agentry target list` shows these under **Referenced but
+not active**:
+
+```text
+Referenced but not active (components skip these)
+  opencode ← demo/skill/a, demo/mcp/github — activate with `agentry target use opencode`
+```
+
+When two or more are skipped, sync prints one summary line instead, and `agentry doctor` lists
+each one:
+
+```text
+! 2 component targets aren't active in this project and were skipped — run `agentry doctor` for the list
+```
+
+A `generate` component whose targets are all inactive is skipped the same way, and its
+generator doesn't run. `agentry keep <ref> <target>:<key>` also refuses an inactive target:
+
+```text
+target 'opencode' isn't in the project's targets — add it with `agentry target use opencode`, or keep the bare '<key>' for the targets demo/mcp/github does install into.
+```
+
+**Fix.** If you do want that tool, activate it for the project with
+`agentry target use <name>`. Otherwise remove the name from the component's `targets:`.
 
 ## `--frozen` fails in CI
 

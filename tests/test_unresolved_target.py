@@ -189,8 +189,8 @@ def test_doctor_error_uses_the_suggestion(tmp_path, local_source):
 
 def test_component_valid_inactive_target_ok(tmp_path, local_source, monkeypatch):
     """A component listing a defined target (copilot) that the project doesn't list is not
-    an unresolved-target error: only *undefined* names fail. (Whether such a target gets
-    installed is a separate question, not pinned here.)"""
+    an unresolved-target error: only *undefined* names fail. Since T18 it is skipped with a
+    warning, not installed."""
     proj = _project(tmp_path, local_source)
     store = ConfigStore.load(proj)
     for c in store.doc["components"]:
@@ -200,6 +200,10 @@ def test_component_valid_inactive_target_ok(tmp_path, local_source, monkeypatch)
     result = runner.invoke(app, ["sync"])
     assert result.exit_code == 0, result.output
     assert (proj / ".claude/skills/code-reviewer").is_symlink()
+    # T18: the inactive target is skipped with a warning and nothing is written for it.
+    skipped = [w for w in sync(proj).warnings if "is not in the project's targets" in w]
+    assert len(skipped) == 2 and all("target 'copilot'" in w for w in skipped)
+    assert not (proj / ".vscode").exists()
 
 
 def test_catalog_overlay_not_yet_added_still_fails_without_fetching(

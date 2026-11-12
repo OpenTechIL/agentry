@@ -157,6 +157,9 @@ class DesiredPlan:
     #: ``(canonical ref, target) -> variant ref``: a suffix-less merge fragment that a
     #: same-source per-harness variant replaces on that target (routing, so no row there).
     replaced: dict[tuple[str, str], str] = field(default_factory=dict)
+    #: "target '<t>' is not in the project's targets — skipped" warnings (also in the
+    #: caller's warnings): a component listing a valid target the project hasn't activated.
+    inactive: list[str] = field(default_factory=list)
 
 
 def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredPlan:
@@ -190,7 +193,10 @@ def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredP
         if src is None:
             warnings.append(f"{comp.ref}: unknown source '{comp.source}'")
             continue
+        _warn_inactive_targets(comp, config, drivers, plan, warnings)
         if comp.generate is not None:
+            if not comp.applies_to(config.targets):
+                continue  # no overlap with the project: the generator must not run
             # Self-installing component (GENERATE strategy) — artifact resolution does not apply.
             label = ", ".join(comp.applies_to(config.targets))
             plan.generates.append(DesiredGenerate(comp.ref, label, comp.generate))
@@ -228,6 +234,28 @@ def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredP
 
     _warn_unmatched_keep(config, plan, warnings)
     return plan
+
+
+def _warn_inactive_targets(
+    comp: Component,
+    config: Config,
+    drivers: dict[str, Driver],
+    plan: DesiredPlan,
+    warnings: list[str],
+) -> None:
+    """One warning per valid component target the project hasn't activated (it's skipped).
+
+    Unresolvable names are T17's fatal check, not this warning.
+    """
+    for t in comp.inactive_targets(config.targets):
+        if t not in drivers:
+            continue
+        msg = (
+            f"{comp.ref}: target '{t}' is not in the project's targets — skipped. Add it with "
+            f"`{prog()} target use {t}`, or remove it from this component."
+        )
+        warnings.append(msg)
+        plan.inactive.append(msg)
 
 
 def _warn_unmatched_keep(config: Config, plan: DesiredPlan, warnings: list[str]) -> None:
@@ -532,6 +560,7 @@ def sync(
     plan = compute_desired(root, augmented, result.warnings)
     result.summarized["unsupported"] = list(plan.skipped)
     result.summarized["format"] = list(plan.format_issues)
+    result.summarized["inactive"] = list(plan.inactive)
     links, copies, merges = plan.links, plan.copies, plan.merges
     generates, link_merges, transforms = plan.generates, plan.link_merges, plan.transforms
     manifest = load_manifest(root)
