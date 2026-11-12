@@ -350,18 +350,27 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
    │    └─ version conflict (same repo/source, two refs) → abort with a clear error
    └─ emit an augmented (sources + components) graph; write .agentry.lock.
 
-2. Compute desired state          reconcile.compute_desired(augmented_config)
-   for each ENABLED component × each applicable target:
-     LINK     → DesiredLink(dest path, store artifact)   [path: override skips discovery]
-     MERGE    → DesiredMerge(config file, pointer, fragment keys)
-     GENERATE → DesiredGenerate(component, generate spec)
+2. Compute desired state          reconcile.compute_desired(augmented_config) → DesiredPlan
+   for each ENABLED component × each applicable target (driver.strategy picks one):
+     LINK       → DesiredLink(dest path, store artifact)   [path: override skips discovery]
+     COPY       → DesiredCopy(dest path, store artifact)
+     MERGE      → DesiredMerge(config file, pointer, fragment keys)
+     LINK_MERGE → DesiredLinkMerge(link path, script dir, config file, pointer, rewritten keys)
+     TRANSFORM  → DesiredTransform(dest path, source file, provider)   [component has transform:,
+                  single-file type on a LINK target; replaces the link]
+     GENERATE   → DesiredGenerate(component, generate spec)            [component has generate:]
 
-3. Diff against the manifest and apply
-   links:     remove manifest links not desired (safe-remove) → create/refresh desired
-   merges:    remove manifest merges not desired (strip keys) → inject desired keys
-   generated: remove orphans (delete produced paths) → run (only with --allow-run), record produced paths
+3. Diff against the manifest and apply (in this order)
+   links:       remove manifest links not desired (safe-remove) → create/refresh desired
+   copies:      remove manifest copies not desired → copy desired (never over an unmanaged path)
+   merges:      remove manifest merges not desired (strip keys) → inject desired keys
+   generated:   remove orphans (delete produced paths) → run (gated by trust / --allow-run),
+                record produced paths
+   link+merge:  remove orphans (link + keys) → link script dir, merge rewritten keys
+   transforms:  remove orphans → render via provider (agent provider gated by --allow-transform),
+                write as a manifest-tracked file
 
-4. Persist manifest; ensure .agentry/ is in .gitignore.
+4. Persist manifest (and the lock again if trust was granted); ensure .agentry/ is in .gitignore.
 ```
 
 `sync` is **idempotent**: a second run with the same inputs is a no-op. With
@@ -439,6 +448,7 @@ deps.py         transitive dependency closure (recursive, version-aware) → aug
 registry.py     resolve a bare repo name via external catalogs (file/URL) → Sources + Components
 apm_import.py   translate an apm-format manifest (apm.yml) → agentry sources/components/MCP
 manifest.py     .agentry/.manifest.json read/write
+naming.py       derive a short, stable name from a git URL or local path (repo basename)
 emit.py         compose AGENTS.md; splice the skill-trigger block into each memory file
 envscan.py      scan merge fragments for dead ${VAR} placeholders
 doctor.py       aggregate preflight checks (targets, components, env vars, drift, command name)
@@ -450,29 +460,6 @@ installers/
   link_merge.py symlink + config merge together, rewriting plugin-root command paths
   generate.py   run a component's own installer (gated); track produced files for safe removal
   transform.py  copy-with-rewrite: materialize a component through a content provider
-reconcile.py    sync engine + status (drift report)
-gitignore.py    ensure .agentry/ is ignored
-```
-cli.py          Typer app — command wiring + Rich output
-models.py       pydantic: Config, Source, Component, Lock, Manifest, enums
-config.py       .agentry.yml round-trip (ruamel, comment-preserving) + mutators
-lockfile.py     .agentry.lock read/write
-spec.py         capability-map dataclasses (TargetSpec / MergeDest / LinkMergeDest)
-drivers/        one module per AI agent (claude, opencode, cursor, codex, gemini, windsurf, kimi, copilot, kiro)
-                 plus `agents` — the tool-neutral .agents/skills universal target
-  base.py       Driver = capability map + optional policies (hook-event, namespace, transform)
-  __init__.py   BUILTIN_DRIVERS registry + resolve_drivers()
-targets.py      effective capability map: BUILTIN_TARGETS (from drivers) + target_profiles merge
-discovery.py    scan a source for available components + their `requires` (LAYOUT)
-resolver.py     download/checkout into the store; resolve refs → SHA/hash
-deps.py         transitive dependency closure (recursive, version-aware) → augmented graph
-registry.py     resolve a bare repo name via external catalogs (file/URL) → Sources + Components
-apm_import.py   translate an apm-format manifest (apm.yml) → agentry sources/components/MCP
-manifest.py     .agentry/.manifest.json read/write
-installers/
-  link.py       symlink create/remove/state (lexical, store-scoped)
-  merge.py      JSON/TOML inject/remove/state (key-scoped, reversible; codec by file ext)
-  generate.py   run a component's own installer (gated); track produced files for safe removal
 reconcile.py    sync engine + status (drift report)
 gitignore.py    ensure .agentry/ is ignored
 ```
@@ -509,9 +496,13 @@ gitignore.py    ensure .agentry/ is ignored
   agent CLI (`transform.command` in `.agentry.yml`; prompt on stdin) is now shipped — gated by
   `--allow-transform`, with a diff preview + confirmation (`--yes` to auto-apply in CI), and
   `--check` reserved for the reproducible deterministic mode. agentry embeds no model or key, in
-  keeping with "nothing of it runs while your agents do." Per-component copy-with-rewrite remains
-  the next phase.
+  keeping with "nothing of it runs while your agents do." Per-component copy-with-rewrite has
+  since shipped too (`transform:` on a component, §4; `installers/transform.py`); what remains is
+  the driver-level `transform` seam for cross-agent format/field translation.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
 - **Hook array-merge** — richer merging for event-keyed hook arrays beyond the named-key contract.
-- **Copy fallback** — copy instead of symlink for filesystems without symlink support (Windows).
+- **Automatic copy fallback** — the **copy** strategy itself ships (a target's `copy` capability
+  map, or `"copy": true` per catalog repo, installs real files tracked in the manifest), but it is
+  opt-in. What remains is choosing it *automatically* when the filesystem refuses symlinks
+  (Windows without Developer Mode); today `symlink_to` fails there instead of falling back.
 - **TUI** — a Textual front-end over this same core (browse/toggle/sync).
