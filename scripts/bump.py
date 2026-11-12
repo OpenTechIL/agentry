@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bump the agentry version across pyproject, __init__, and CHANGELOG, then tag.
+"""Bump the agentry version across pyproject, __init__, CHANGELOG, and uv.lock, then tag.
 
 Usage:  python scripts/bump.py X.Y.Z
 """
@@ -18,6 +18,12 @@ ROOT = Path(__file__).resolve().parent.parent
 PYPROJECT = ROOT / "pyproject.toml"
 INIT = ROOT / "src" / "agentry" / "__init__.py"
 CHANGELOG = ROOT / "CHANGELOG.md"
+# uv.lock records agentry's own version, so it must be re-locked in the release commit —
+# otherwise CI's `uv lock --check` fails on the tagged commit.
+UV_LOCK = ROOT / "uv.lock"
+
+#: Every file the release commit stages, in order.
+RELEASE_FILES = (PYPROJECT, INIT, CHANGELOG, UV_LOCK)
 
 _SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 
@@ -55,6 +61,11 @@ def bump_changelog(text: str, version: str, date: str) -> str:
 def _run(*args: str) -> None:
     # S603: a maintainer-run release helper; every call site below passes literal argv.
     subprocess.run(args, cwd=ROOT, check=True)  # noqa: S603
+
+
+def refresh_lock() -> None:
+    """Re-lock so uv.lock picks up the new project version (no dependency upgrades)."""
+    _run("uv", "lock")
 
 
 def _is_dirty() -> bool:
@@ -96,8 +107,17 @@ def main(argv: list[str]) -> int:
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    try:
+        refresh_lock()
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(
+            f"error: `uv lock` failed ({exc}); nothing was committed — fix it, or discard "
+            "the version edits with `git checkout -- .`",
+            file=sys.stderr,
+        )
+        return 1
 
-    _run("git", "add", str(PYPROJECT), str(INIT), str(CHANGELOG))
+    _run("git", "add", *(str(p) for p in RELEASE_FILES))
     _run("git", "commit", "-m", f"chore(release): v{version}")
     # Annotated tag: `git push --follow-tags` only pushes annotated tags, so a
     # lightweight tag would silently stay local and never trigger the release.
