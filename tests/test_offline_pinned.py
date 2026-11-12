@@ -68,6 +68,21 @@ def _skill(proj: Path, name: str) -> str:
     return (proj / f".claude/skills/s{name}/SKILL.md").read_text(encoding="utf-8")
 
 
+def _remove_store_clone(clone: Path) -> None:
+    """Delete a store clone the way agentry must: git pack files are read-only (Windows refuses
+    to unlink them). The pack dir is made read-only too, so a plain shutil.rmtree would fail on
+    every OS — keeping this regression visible on POSIX CI, not just on Windows."""
+    import stat
+
+    pack = clone / ".git" / "objects" / "pack"
+    if pack.is_dir():
+        for f in pack.iterdir():
+            os.chmod(f, stat.S_IRUSR)
+        os.chmod(pack, stat.S_IRUSR | stat.S_IXUSR)
+    resolver._remove(clone)
+    assert not clone.exists()
+
+
 @pytest.fixture
 def git_calls(monkeypatch):
     """Record every git subcommand agentry runs, as (subcommand, cwd-name)."""
@@ -166,10 +181,9 @@ def test_pinned_sha_missing_from_clone_is_fetched(one_source, git_calls):
 
 
 def test_missing_store_clone_is_cloned(one_source, git_calls):
-    import shutil
 
     proj, _ = one_source
-    shutil.rmtree(proj / ".agentry" / "a")
+    _remove_store_clone(proj / ".agentry" / "a")
     sync(proj)
     assert ("clone", "a") in git_calls
     assert "v1" in _skill(proj, "a")
@@ -295,14 +309,13 @@ def test_scoped_refusal_restore_does_not_fetch(tmp_path, git_calls):
 def test_fresh_clone_with_pin_gone_from_origin_errors_and_keeps_lock(one_source, monkeypatch):
     """No store clone yet (fresh checkout) and the lock pins a commit origin no longer has:
     after cloning, the same friendly error points at `update`, exit 1, lock unchanged."""
-    import shutil
 
     from typer.testing import CliRunner
 
     from agentry.cli import app
 
     proj, _ = one_source
-    shutil.rmtree(proj / ".agentry" / "a")
+    _remove_store_clone(proj / ".agentry" / "a")
     gone = "fedcba9876543210fedcba9876543210fedcba98"
     lock = load_lock(proj)
     lock.entry("a").resolved = gone
