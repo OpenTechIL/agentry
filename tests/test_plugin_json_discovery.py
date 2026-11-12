@@ -517,3 +517,31 @@ def test_manifest_entries_absent_key_merges_nothing(tmp_path: Path):
         "plugin.json 'hooks' is missing — merged nothing. Make it an object or a list of objects "
         "in plugin.json, or ask the plugin author to."
     ]
+
+
+def _not_path(key: str, raw: str, example: str, inline: bool) -> str:
+    tail = " or an inline object." if inline else "."
+    return (
+        f"source 'plugin': plugin.json '{key}' value {raw} is neither a path nor an object — "
+        f"skipped it. Use a relative path inside the plugin (e.g. '{example}'){tail}"
+    )
+
+
+@pytest.mark.parametrize(
+    "key, value, raw, example, inline",
+    [
+        ("mcpServers", 42, "42", "./.mcp.json", True),
+        ("hooks", [None], "null", "./hooks/hooks.json", True),
+        ("agents", "", '""', "./agents", False),
+        ("skills", "   ", '"   "', "./skills", False),
+        ("commands", ["./c", True], "true", "./commands", False),
+    ],
+    ids=["mcp-number", "hooks-null-item", "agents-empty", "skills-blank", "commands-bool-item"],
+)
+def test_non_path_non_object_values_are_reported_exactly(
+    plugin: Path, key, value, raw, example, inline
+):
+    """Path-only keys (commands/agents/skills) never suggest an inline object; empty or blank
+    strings and list items get the same message; raw is rendered as JSON."""
+    _plugin(plugin, {"name": "demo", key: value})
+    assert _not_path(key, raw, example, inline) in _warnings(plugin)
