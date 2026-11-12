@@ -396,7 +396,7 @@ def test_unscoped_update_failure_leaves_earlier_sources_at_their_pins(tmp_path: 
     assert "OLD" in _skill_text(proj, "ra")
 
 
-def test_keyboard_interrupt_mid_update_restores_store_and_propagates(tmp_path, monkeypatch):
+def test_update_interrupt_restores_store_checkout(tmp_path, monkeypatch):
     """Ctrl-C after one source has moved: the moved store checkout goes back to its lock SHA
     and the KeyboardInterrupt still propagates."""
     repo_a, url_a = _repo(tmp_path, "a", {"ra": "OLD"})
@@ -419,6 +419,31 @@ def test_keyboard_interrupt_mid_update_restores_store_and_propagates(tmp_path, m
     with pytest.raises(KeyboardInterrupt):
         sync(proj, update=True)
     monkeypatch.setattr(deps_mod, "resolve", real)
+
+    assert _git(proj / ".agentry" / "a", "rev-parse", "HEAD") == locked
+    assert "OLD" in _skill_text(proj, "ra")
+
+
+def test_scoped_update_interrupt_during_walk_restores_store_checkout(tmp_path, monkeypatch):
+    """Ctrl-C inside the dependency walk of `update a` (after a's checkout moved): the store
+    goes back to the lock SHA, the installed skill is the old revision, and the interrupt
+    propagates."""
+    from agentry import discovery
+
+    repo_a, url_a = _repo(tmp_path, "a", {"ra": "OLD"})
+    _, url_b = _repo(tmp_path, "b", {"rb": "v1"})
+    proj = _project(tmp_path, {"a": url_a, "b": url_b}, [("a", "ra"), ("b", "rb")])
+    sync(proj)
+    locked = load_lock(proj).entry("a").resolved
+    _advance(repo_a, "ra", "NEW")
+
+    def interrupt(*a, **k):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(discovery, "requires_for", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        sync(proj, update=True, update_only=frozenset({"a"}))
+    monkeypatch.undo()
 
     assert _git(proj / ".agentry" / "a", "rev-parse", "HEAD") == locked
     assert "OLD" in _skill_text(proj, "ra")
