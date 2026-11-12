@@ -30,7 +30,7 @@ from pathlib import Path
 from . import discovery
 from .config import LOCK_NAME
 from .lockfile import upsert_entry
-from .models import Component, Config, Dependency, Lock, Source, SourceType
+from .models import Component, Config, Dependency, Lock, LockEntry, Source, SourceType
 from .naming import repo_basename
 from .progname import prog
 from .resolver import ResolveError, effective_root, resolve
@@ -75,6 +75,51 @@ def _synth_name(url: str, taken: set[str]) -> str:
     return f"{base}-{suffix}"
 
 
+def pin_mismatch(entry: LockEntry, src: Source) -> str | None:
+    """Why a lock pin no longer describes ``src`` (``None`` when it still does).
+
+    Compares the source identity the pin was resolved from — type, and for git the url and
+    requested ref — against the current config. Local sources are re-hashed on every
+    resolve, so only a type switch invalidates them. A ``None`` ref in the lock (written by
+    an older agentry) is treated as unknown rather than changed, keeping old locks
+    idempotent.
+    """
+    if entry.type is not src.type:
+        return f"type: {entry.type.value} → {src.type.value}"
+    if src.type is not SourceType.GIT:
+        return None
+    if entry.url != src.url:
+        return f"url: {entry.url} → {src.url}"
+    if entry.ref is not None and entry.ref != src.ref:
+        return f"ref: {entry.ref} → {src.ref}"
+    return None
+
+
+def _choose_pin(
+    existing: LockEntry | None, src: Source, *, update: bool, frozen: bool
+) -> str | None:
+    """The locked revision to check out for ``src``, or ``None`` to resolve its ref afresh.
+
+    A pin is only valid for the identity it was resolved from: an edited url/ref makes the
+    locked SHA meaningless (it may not even exist in the new origin), so it is dropped.
+    Under ``frozen`` a missing or stale pin is an error instead.
+    """
+    if existing is None:
+        if frozen:
+            raise ResolveError(
+                f"--frozen: source '{src.name}' is not pinned in {LOCK_NAME}; "
+                f"run `{prog()} update` to refresh the lockfile first"
+            )
+        return None
+    changed = pin_mismatch(existing, src)
+    if changed and frozen:
+        raise ResolveError(
+            f"--frozen: source '{src.name}' changed in .agentry.yml since it was locked "
+            f"({changed}); run `{prog()} update` to re-pin"
+        )
+    return None if (update or changed) else existing.resolved
+
+
 def resolve_graph(
     root: Path, config: Config, lock: Lock, *, update: bool = False, frozen: bool = False
 ) -> tuple[DepGraph, Lock]:
@@ -103,12 +148,7 @@ def resolve_graph(
         if src.name in graph.resolved:
             return
         existing = lock.entry(src.name)
-        if frozen and existing is None:
-            raise ResolveError(
-                f"--frozen: source '{src.name}' is not pinned in {LOCK_NAME}; "
-                f"run `{prog()} update` to refresh the lockfile first"
-            )
-        pinned = None if update else (existing.resolved if existing else None)
+        pinned = _choose_pin(existing, src, update=update, frozen=frozen)
         entry = resolve(root, src, pinned=pinned, normalize=config.hashing.normalize_line_endings)
         if frozen and existing is not None and entry.resolved != existing.resolved:
             raise ResolveError(
@@ -116,9 +156,17 @@ def resolve_graph(
                 f"({existing.resolved} != {entry.resolved})"
             )
         entry.synthesized = src.name not in cfg_names
-        # Carry forward consent only while the pinned SHA is unchanged — a moved source
-        # must be re-trusted (the SHA-pinned consent contract).
-        entry.trusted = bool(existing and existing.trusted and existing.resolved == entry.resolved)
+        # Carry forward consent only while the source's origin and pinned SHA are unchanged —
+        # a moved source must be re-trusted (the SHA-pinned consent contract). A new url
+        # revokes trust even at the same SHA (a fork shares history but not its owner); a ref
+        # change that lands on the same SHA keeps it, since trust is about content.
+        entry.trusted = bool(
+            existing
+            and existing.trusted
+            and existing.resolved == entry.resolved
+            and existing.type is entry.type
+            and existing.url == entry.url
+        )
         upsert_entry(new_lock, entry)
         graph.resolved[src.name] = entry.resolved
 
