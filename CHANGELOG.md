@@ -73,6 +73,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   long lines still wrap on screen.
 
 ### Fixed
+- **Per-harness variants now replace the canonical fragment on their target, as documented.**
+  This applies when an `mcp` or `hook` component has an enabled `<base>-<target>.json` variant
+  from the same source, such as `mcp/github-opencode.json` next to `mcp/github.json`.
+  Previously both installed into that target, so the variant collided with the canonical entry
+  or the hook ran twice. Now only the variant installs there, and the other targets keep the
+  canonical file. **Compatibility:** install results change if you use variants. The next sync
+  removes the canonical entry agentry had added on that target and installs the variant, in a
+  single sync. Entries you added by hand are left untouched. `agentry why <ref>` shows the
+  routing, for example `opencode ← github-opencode.json (variant; replaces github.json)`.
 - A component's `transform:` was dropped from `.agentry.yml` when the component was added through
   the Python config API (`ConfigStore.add_component`). A `transform:` you write by hand in
   `.agentry.yml` was not affected, and is kept when agentry commands rewrite the file.

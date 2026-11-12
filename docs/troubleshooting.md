@@ -385,11 +385,25 @@ under the `format` category (`doctor --strict` fails). Each warning names what t
 and what's wrong.
 
 The general fixes:
-- **Ship a target-specific copy, limited with `targets:`.** Restrict the original component to
-  the targets it works on, and add a second component that only installs into the problem
-  target ([`targets`](config-reference.md#components) on each entry). Note that a
-  `-<target>` variant file (for example `mcp/github-opencode.json`) is routed only to its own
-  target, but the original file is still installed there too, so you need `targets:` either way.
+- **For `mcp` and `hook` components, ship a per-target variant.** Put a
+  `<base>-<target>.json` file next to the original in the same source, for example
+  `mcp/github-opencode.json` next to `mcp/github.json`, and enable both. On that target only the
+  variant installs, and every other target keeps the original. `agentry why <ref>` shows which
+  file each target gets:
+
+  ```text
+  demo/mcp/github
+  └── installs to
+      ├── claude  .mcp.json:mcpServers  ok
+      └── opencode  replaced by demo/mcp/github-opencode
+  demo/mcp/github-opencode
+  └── installs to
+      └── opencode ← github-opencode.json (variant; replaces github.json)  opencode.json:mcp  ok
+  ```
+
+- **For other types (such as commands), ship a second component limited with `targets:`.**
+  Restrict the original to the targets it works on, and limit the target-specific copy to the
+  problem target ([`targets`](config-reference.md#components) on each entry).
 - **Override the rule** under [`target_profiles`](config-reference.md#target_profiles). If your
   override changes the format the tool reads, add `expect: {}` to drop the check.
 
@@ -405,17 +419,14 @@ such as `args`. A Claude-style `{"command": "npx", "args": [...], "env": {...}}`
 start. A `type: "http"` entry gets the same warning (`'docs'.type is 'http', not one of local,
 remote`).
 
-**Fix.** Ship an OpenCode version of the server and limit each copy with `targets:`:
+**Fix.** Ship an OpenCode variant, `mcp/github-opencode.json`, in the same source and enable
+it alongside `github`:
 
 ```json
 {"github": {"type": "local", "command": ["npx", "-y", "gh-mcp"], "environment": {"TOKEN": "x"}}}
 ```
 
-```yaml
-components:
-  - {source: demo, type: mcp, name: github, targets: [claude, gemini]}
-  - {source: demo, type: mcp, name: github-opencode, targets: [opencode]}
-```
+OpenCode then gets only the variant, and the other targets keep `mcp/github.json`.
 
 ### Gemini: a command that isn't a `.toml` file
 
@@ -440,9 +451,9 @@ demo/hook/guard: may not work in gemini (expects Gemini hook event names (Before
 instead of Claude's `PreToolUse` and `PostToolUse`. A hook under a Claude event name is merged
 but never fires.
 
-**Fix.** Ship a hook fragment with Gemini event names, for example
-`hooks/guard-gemini.json` with `{"BeforeTool": [...]}`, limited to `targets: [gemini]`. Then
-limit the Claude-named hook to the other targets.
+**Fix.** Ship a Gemini variant with Gemini event names, for example `hooks/guard-gemini.json`
+with `{"BeforeTool": [...]}`, in the same source, and enable it alongside `guard`. Gemini then
+gets only `BeforeTool`, and Claude keeps `PreToolUse`.
 
 ### Gemini: an HTTP MCP server read as SSE
 
@@ -454,7 +465,8 @@ demo/mcp/docs: may not work in gemini (expects `httpUrl` for HTTP servers (`url`
 `httpUrl` as streamable HTTP. A Claude-style `{"type": "http", "url": "…"}` entry (or
 `type: "streamable-http"`) quietly connects over SSE, which fails against an HTTP-only server.
 
-**Fix.** Ship a Gemini version that uses `httpUrl`, limited to `targets: [gemini]`:
+**Fix.** Ship a Gemini variant, `mcp/docs-gemini.json`, that uses `httpUrl`, and enable it
+alongside `docs`:
 
 ```json
 {"docs": {"httpUrl": "https://example.com/mcp"}}

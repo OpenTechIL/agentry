@@ -242,7 +242,11 @@ is used unchanged, so both shapes work.
 side — e.g. `hooks/hooks.json` (canonical), `hooks/hooks-cursor.json`, `hooks/hooks-codex.json`.
 agentry reads the `-<harness>` suffix and routes each variant **only** to its matching target, so
 a Cursor or Codex fragment never lands in Claude's `settings.json`. The canonical, suffix-less
-file applies to every target that supports the type. As a final guard, a hook event Claude Code
+file applies to every target that supports the type **and has no enabled variant for it**; on a
+target with an enabled `<base>-<target>` variant from the same source, the variant installs
+*instead of* the canonical (resolved in `reconcile.compute_desired` via `_enabled_variants` /
+`_routes_to`, since it depends on which components are enabled; `agentry why` shows which
+fragment each target gets). As a final guard, a hook event Claude Code
 doesn't recognize is dropped from `.claude/settings.json` with a warning rather than written out.
 
 **Importing an apm-format project (`agentry import apm`, `apm_import.py`).** It's the same category

@@ -154,6 +154,9 @@ class DesiredPlan:
     #: Cross-target format mismatches (phase A, also in the caller's warnings): one message
     #: per (component, target) whose content the target's ``expect`` says won't work there.
     format_issues: list[str] = field(default_factory=list)
+    #: ``(canonical ref, target) -> variant ref``: a suffix-less merge fragment that a
+    #: same-source per-harness variant replaces on that target (routing, so no row there).
+    replaced: dict[tuple[str, str], str] = field(default_factory=dict)
 
 
 def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredPlan:
@@ -178,6 +181,7 @@ def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredP
             indexes[indexed.name] = discovery.index(sp)
 
     plan = DesiredPlan()
+    variants = _enabled_variants(config)
 
     for comp in config.components:
         if not comp.enabled:
@@ -220,7 +224,7 @@ def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredP
             driver = drivers.get(tname)
             if driver is None:
                 continue  # already warned via unresolved_targets
-            _desired_for_target(comp, src, tname, driver, artifact, plan, warnings)
+            _desired_for_target(comp, src, tname, driver, artifact, plan, warnings, variants)
 
     _warn_unmatched_keep(config, plan, warnings)
     return plan
@@ -247,6 +251,37 @@ def _warn_unmatched_keep(config: Config, plan: DesiredPlan, warnings: list[str])
                 )
 
 
+def _enabled_variants(config: Config) -> frozenset[tuple[str, ComponentType, str, str]]:
+    """``(source, type, base, harness)`` for every enabled per-harness merge variant
+    (``<base>-<harness>``) that applies to its own harness target."""
+    out: set[tuple[str, ComponentType, str, str]] = set()
+    for comp in config.components:
+        if not comp.enabled or comp.type not in MERGE_TYPES:
+            continue
+        h = discovery.harness_suffix(comp.name)
+        if h is not None and h in comp.applies_to(config.targets):
+            out.add((comp.source, comp.type, comp.name.rpartition("-")[0], h))
+    return frozenset(out)
+
+
+def _routes_to(
+    comp: Component, tname: str, variants: frozenset[tuple[str, ComponentType, str, str]]
+) -> bool:
+    """Per-harness routing for merge fragments: does ``comp`` belong on ``tname`` at all?
+
+    A ``<base>-<harness>`` variant installs only into its own harness target. The
+    suffix-less canonical file applies to every *other* target: where the same source has
+    an enabled variant for this target, the variant replaces it (routing, not a conflict —
+    so silent, and no status row there). Non-merge types always route.
+    """
+    if comp.type not in MERGE_TYPES:
+        return True
+    h = discovery.harness_suffix(comp.name)
+    if h is not None:
+        return h == tname
+    return (comp.source, comp.type, comp.name, tname) not in variants
+
+
 def _desired_for_target(
     comp: Component,
     src: Source,
@@ -255,6 +290,7 @@ def _desired_for_target(
     artifact: Path,
     plan: DesiredPlan,
     warnings: list[str],
+    variants: frozenset[tuple[str, ComponentType, str, str]] = frozenset(),
 ) -> None:
     """Dispatch one (component, target) pair to the right strategy, appending to ``plan``.
 
@@ -265,10 +301,12 @@ def _desired_for_target(
     # Per-harness merge fragments (e.g. hooks-cursor.json) install only into the
     # matching target; skip foreign harnesses so a Cursor/Codex variant never
     # lands in another tool's config (e.g. Claude's settings.json).
-    if comp.type in MERGE_TYPES:
-        h = discovery.harness_suffix(comp.name)
-        if h is not None and h != tname:
-            return
+    if not _routes_to(comp, tname, variants):
+        if discovery.harness_suffix(comp.name) is None:  # a canonical, replaced here
+            plan.replaced[(comp.ref, tname)] = (
+                f"{comp.source}/{comp.type.value}/{comp.name}-{tname}"
+            )
+        return
     strat = driver.strategy(comp.type)
     if strat is None:
         msg = f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped"
@@ -1241,6 +1279,8 @@ class StatusRow:
     # Merge rows only: each entry agentry can't vouch for (edited, or unproven from a v1
     # manifest), so doctor can name them one per line.
     drifted: list[DriftedEntry] = field(default_factory=list)
+    #: Variant rows only: the canonical ref this per-harness variant replaces on the target.
+    replaces: str | None = None
 
 
 @dataclass(frozen=True)
@@ -1322,6 +1362,7 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
         ]
         return state, note, drifted
 
+    replaces = {(var, t): canon for (canon, t), var in plan.replaced.items()}
     for dm in merges:
         state, note, drifted = merge_state(
             (dm.component, dm.target), dm.dest, dm.fragment, dm.kept, dm.bare
@@ -1334,6 +1375,7 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
                 state,
                 note,
                 drifted,
+                replaces.get((dm.component, dm.target)),
             )
         )
     for dg in generates:
@@ -1359,6 +1401,7 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
                 state,
                 note,
                 drifted,
+                replaces.get((dlm.component, dlm.target)),
             )
         )
     for dt in transforms:

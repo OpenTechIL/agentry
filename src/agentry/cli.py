@@ -25,6 +25,7 @@ from .deps import DependencyError
 from .drivers import BUILTIN_DRIVERS
 from .lockfile import load_lock, save_lock
 from .models import (
+    TYPE_EXT,
     Component,
     ComponentType,
     Config,
@@ -973,6 +974,12 @@ def _source_provenance(store: ConfigStore, source_name: str) -> str:
     return f"{_e(source_name)} [dim]local[/dim] {_e(where)} @ [cyan]{_e(short)}[/cyan]"
 
 
+def _fragment_file(ref: str) -> str:
+    """``s/hook/hooks-cursor`` -> ``hooks-cursor.json`` (merge fragments are JSON files)."""
+    _, ctype, name = ref.split("/", 2)
+    return f"{name}{TYPE_EXT.get(ComponentType(ctype), '')}"
+
+
 @app.command(name="why")
 def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/<name>.")) -> None:
     """Explain a component: where it came from (source + pinned revision) and where it installs.
@@ -997,12 +1004,22 @@ def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/
     targets = tree.add("installs to")
     style = {"ok": "green", "ok (kept)": "green", "missing": "red", "drift": "yellow"}
     mine = [r for r in rows if r.ref == ref]
-    if mine:
+    # Targets where a same-source per-harness variant installs instead of this component.
+    replaced_by = [r for r in rows if r.replaces == ref]
+    if mine or replaced_by:
         for r in mine:
+            via = ""
+            if r.replaces is not None:
+                via = (
+                    f" ← {_e(_fragment_file(r.ref))} (variant; replaces "
+                    f"{_e(_fragment_file(r.replaces))})"
+                )
             targets.add(
-                f"[bold]{_e(r.target)}[/bold]  [dim]{_e(r.where)}[/dim]  "
+                f"[bold]{_e(r.target)}[/bold]{via}  [dim]{_e(r.where)}[/dim]  "
                 f"[{style.get(r.state, 'white')}]{_e(r.state)}[/]"
             )
+        for r in replaced_by:
+            targets.add(f"[bold]{_e(r.target)}[/bold]  [dim]replaced by {_e(r.ref)}[/dim]")
     else:
         targets.add("[dim]no target resolves this component[/dim]")
     if component.keep:

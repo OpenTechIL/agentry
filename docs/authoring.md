@@ -36,8 +36,10 @@ Two conveniences worth knowing about:
   `--subdir packages/agent-kit`; you don't need to restructure.
 - **Per-harness merge variants.** For `hooks`/`mcp` only, a `<base>-<harness>.json` filename
   (e.g. `hooks-cursor.json`) routes that fragment to that harness instead of the canonical
-  one. Recognized suffixes: `claude`, `opencode`, `cursor`, `codex`, `gemini`, `kimi`, `pi`,
-  `windsurf`, `copilot`, `kiro`.
+  one. When both are enabled from the same source, the harness gets only the variant, and every
+  other target gets the canonical file. Recognized suffixes: `claude`, `opencode`, `cursor`,
+  `codex`, `gemini`, `kimi`, `pi`, `windsurf`, `copilot`, `kiro`. `agentry why <ref>` shows the
+  routing, for example `cursor ← hooks-cursor.json (variant; replaces hooks.json)`.
 
 ### `SKILL.md` frontmatter
 
