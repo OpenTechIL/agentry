@@ -33,6 +33,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the old upstream version no longer match and can't be verified. Delete stale entries by
   hand.
 
+- **CLI output change: repeated warnings are summarized.** When `sync`, `install`, `update` or
+  `add` would print the same kind of warning two or more times, they now print one summary line
+  instead. This affects:
+  - components skipped on targets that don't support their type;
+  - merged entries that differ from their source and were kept.
+
+  A warning that occurs only once still prints in full. Every other warning still prints
+  individually: refused merges, unparseable files, the trust gate, and unset `${VAR}`s. **To
+  restore the previous full output, pass `--verbose` / `-v`.** If a script parses agentry's
+  warnings, add `-v`.
+- Warning lines from `sync`, `add` and `update` are no longer broken at the terminal width when
+  output goes to a log or pipe. Each warning is one line, so it's easy to grep. In a terminal,
+  long lines still wrap on screen.
+
 ## [0.1.5] — 2026-09-09
 
 ### Added

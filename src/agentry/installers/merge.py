@@ -273,6 +273,9 @@ class NamedPlan:
     updated: bool = False
     refused: bool = False
     warnings: list[str] = field(default_factory=list)
+    #: The W2 subset of ``warnings`` (kept entries that differ from their source) — the
+    #: CLI summarizes these; doctor lists them per key.
+    drift_warnings: list[str] = field(default_factory=list)
     note: str | None = None  # why the component isn't installed (status row note)
 
 
@@ -344,16 +347,18 @@ def plan_named(
                 # reports drift; never write over it.
                 plan.entries[key] = rec
                 if rec.fingerprint is None:  # v1 record, value never proven to be agentry's
-                    plan.warnings.append(
+                    w2 = (
                         f"{ctx.ref}: {ctx.at(key)} was recorded by an older agentry and "
                         "differs from the current source — keeping it. If you didn't edit it, "
                         "delete it and re-run sync to get the current version."
                     )
                 else:
-                    plan.warnings.append(
+                    w2 = (
                         f"{ctx.ref}: {ctx.at(key)} was edited after agentry installed it — "
                         "keeping your version. Delete it and re-run sync to restore agentry's."
                     )
+                plan.warnings.append(w2)
+                plan.drift_warnings.append(w2)
                 continue
             plan.entries[key] = OwnedEntry(mode="named", fingerprint=want)
             if have != want:

@@ -15,6 +15,7 @@ behind these commands.
 | `agentry add <source>/<type>/<name> [--path P]` | Enable a component and install it (`--path` = explicit artifact location) |
 | `agentry add <repo>[@name[,name]] [--type T]...` | Resolve a catalog repo and install all / selected / by-type components |
 | `agentry add <ref> --generate-setup CMD --generate-command CMD --produces PATH [--allow-run]` | Install a self-installing tool via its own CLI |
+| `agentry sync` / `install` / `update` / `add` `… -v` | `-v`/`--verbose` prints every warning in full instead of summarizing repeated ones |
 | `agentry remove <source>/<type>/<name>` | Remove a component and uninstall it |
 | `agentry enable <ref>` / `agentry disable <ref>` | Toggle a component's `enabled` flag, then sync |
 | `agentry sync [--allow-run] [--frozen] [--allow-transform]` / `agentry install …` | Reconcile on-disk state to config + lock (idempotent). `--allow-run` permits `generate` installers; `--frozen` installs strictly from `.agentry.lock` and fails on drift (CI); `--allow-transform` permits `agent` transforms to run |

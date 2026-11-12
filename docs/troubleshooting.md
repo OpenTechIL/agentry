@@ -298,6 +298,39 @@ agentry can check the entry, and it removes a matching one cleanly without this 
 **Fix.** Open `<file>` and delete the hook entries under `<pointer>.<key>` that reference
 `<link path>`. Keep any hook commands you added yourself.
 
+## A summary line instead of individual warnings
+
+To keep output readable, `sync`, `install`, `update` and `add` collapse a warning that occurs two
+or more times into one line:
+
+```text
+! 2 components skipped on targets that don't support their type — run with `--verbose` for the list (expected; see `agentry target drivers`)
+! 2 merged entries differ from their source and were kept as-is — run `agentry doctor` for the list
+```
+
+**Skipped components** are normal when your targets have different capabilities. Cursor has no
+skills, for example, so with `claude` and `cursor` as targets every skill is skipped for Cursor.
+`agentry doctor` doesn't list these skips and `doctor --strict` doesn't fail on them. To see each
+one, rerun with `-v`:
+
+```text
+! demo/skill/a: target 'cursor' does not support skill — skipped
+! demo/skill/b: target 'cursor' does not support skill — skipped
+```
+
+`agentry target drivers` lists the built-in targets. The
+[capability table in the README](https://github.com/OpenTechIL/agentry/blob/main/README.md#supported-agents)
+shows which component types each target installs.
+
+**Merged entries that differ** are entries you edited by hand, or entries an older agentry
+recorded that no longer match their source. `agentry doctor` lists each one with its file, key
+and fix. See
+[`was recorded by an older agentry and differs from the current source`](#was-recorded-by-an-older-agentry-and-differs-from-the-current-source).
+
+To print every warning in full, as earlier versions did, pass `-v` / `--verbose` to any of those
+commands. Warnings that need action always print individually: refused merges, unparseable
+files, the trust gate, and unset `${VAR}`s.
+
 ## Reading `agentry doctor`
 
 `doctor` is a read-only preflight. It exits non-zero on **errors** and, with `--strict`,

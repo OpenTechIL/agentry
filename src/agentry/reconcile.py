@@ -119,6 +119,10 @@ class SyncResult:
     removed: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     gitignore_changed: bool = False
+    # Repetitive warnings the CLI may collapse into one summary line, by kind
+    # (``"unsupported"``: type/target skips; ``"drift"``: W2). Every string here is also in
+    # ``warnings``, which stays the complete list.
+    summarized: dict[str, list[str]] = field(default_factory=dict)
 
 
 # -- desired-state computation -------------------------------------------
@@ -139,6 +143,9 @@ class DesiredPlan:
     generates: list[DesiredGenerate] = field(default_factory=list)
     link_merges: list[DesiredLinkMerge] = field(default_factory=list)
     transforms: list[DesiredTransform] = field(default_factory=list)
+    #: "target does not support <type> — skipped" warnings (also in the caller's warnings),
+    #: kept apart so the CLI can summarize them.
+    skipped: list[str] = field(default_factory=list)
 
 
 def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredPlan:
@@ -234,9 +241,9 @@ def _desired_for_target(
             return
     strat = driver.strategy(comp.type)
     if strat is None:
-        warnings.append(
-            f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped"
-        )
+        msg = f"{comp.ref}: target '{tname}' does not support {comp.type.value} — skipped"
+        warnings.append(msg)
+        plan.skipped.append(msg)
         return
     if comp.transform is not None:
         # Copy-with-rewrite: a transformed file replaces the live symlink. Only
@@ -405,6 +412,7 @@ def sync(
     #    transitive components so reconcile treats them like any declared dependency.
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
     plan = compute_desired(root, augmented, result.warnings)
+    result.summarized["unsupported"] = list(plan.skipped)
     links, copies, merges = plan.links, plan.copies, plan.merges
     generates, link_merges, transforms = plan.generates, plan.link_merges, plan.transforms
     manifest = load_manifest(root)
@@ -758,6 +766,7 @@ def _plan_record(
         claims.lookup(who, dest.file, dest.pointer),
     )
     result.warnings.extend(plan.warnings)
+    result.summarized.setdefault("drift", []).extend(plan.drift_warnings)
     return plan, stale
 
 

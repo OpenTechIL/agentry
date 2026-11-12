@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections import Counter
 from pathlib import Path
 
 import typer
@@ -221,7 +222,31 @@ def _print_unified_diff(before: str, after: str, label: str) -> None:
         console.print("[dim](no changes)[/dim]")
 
 
-def _print_result(res: SyncResult) -> None:
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+#: Summary line per collapsible warning kind (see ``SyncResult.summarized``). A kind is
+#: summarized only when it occurs at least ``_SUMMARY_MIN`` times; fewer print in full.
+_SUMMARY_MIN = 2
+
+
+def _summary_line(kind: str, n: int) -> str:
+    if kind == "unsupported":
+        return (
+            f"{_plural(n, 'component', 'components')} skipped on targets that don't support "
+            f"their type — run with `--verbose` for the list (expected; see "
+            f"`{prog()} target drivers`)"
+        )
+    verb = "differs" if n == 1 else "differ"
+    kept = "was" if n == 1 else "were"
+    return (
+        f"{_plural(n, 'merged entry', 'merged entries')} {verb} from their source and {kept} "
+        f"kept as-is — run `{prog()} doctor` for the list"
+    )
+
+
+def _print_result(res: SyncResult, *, verbose: bool = False) -> None:
     for name, sha in res.resolved.items():
         console.print(f"  [dim]resolved[/dim] {name} → [cyan]{sha[:12]}[/cyan]")
     for item in res.created:
@@ -230,8 +255,22 @@ def _print_result(res: SyncResult) -> None:
         console.print(f"  [yellow]~ {item}[/yellow]")
     for item in res.removed:
         console.print(f"  [red]- {item}[/red]")
+    # Repetitive kinds collapse to one line unless --verbose; everything else prints in
+    # full. soft_wrap keeps each warning on one line in logs, so it stays greppable.
+    hidden: Counter[str] = Counter()
+    summaries: list[str] = []
+    if not verbose:
+        for kind, msgs in res.summarized.items():
+            if len(msgs) >= _SUMMARY_MIN:
+                hidden.update(msgs)
+                summaries.append(_summary_line(kind, len(msgs)))
     for w in res.warnings:
-        err.print(f"  [yellow]! {w}[/yellow]")
+        if hidden[w] > 0:
+            hidden[w] -= 1
+            continue
+        err.print(f"  [yellow]! {w}[/yellow]", soft_wrap=True)
+    for line in summaries:
+        err.print(f"  [yellow]! {line}[/yellow]", soft_wrap=True)
     if res.gitignore_changed:
         console.print("  [dim]added .agentry/ to .gitignore[/dim]")
     if not (res.created or res.updated or res.removed):
@@ -239,7 +278,12 @@ def _print_result(res: SyncResult) -> None:
 
 
 def _add_from_catalog(
-    repo: str, names: list[str], *, types: list[ComponentType], allow_run: bool
+    repo: str,
+    names: list[str],
+    *,
+    types: list[ComponentType],
+    allow_run: bool,
+    verbose: bool = False,
 ) -> None:
     """Resolve a repo name via the configured catalogs and install all/selected components.
 
@@ -330,7 +374,7 @@ def _add_from_catalog(
     console.print(
         f"[green]Added[/green] {repo} [dim]({len(comps)} component(s) from catalog)[/dim]"
     )
-    _do_sync(allow_run=allow_run)
+    _do_sync(allow_run=allow_run, verbose=verbose)
 
 
 def _select_components(
@@ -401,6 +445,7 @@ def _do_sync(
     allow_run: bool = False,
     frozen: bool = False,
     allow_transform: bool = False,
+    verbose: bool = False,
 ) -> None:
     try:
         res = sync(
@@ -414,7 +459,7 @@ def _do_sync(
     except (ResolveError, DependencyError) as exc:
         err.print(f"[red]{exc}[/red]")
         raise typer.Exit(1)
-    _print_result(res)
+    _print_result(res, verbose=verbose)
 
 
 def _add_targets_and_sync(
@@ -444,6 +489,13 @@ _FROZEN = typer.Option(
     False,
     "--frozen",
     help="Install strictly from .agentry.lock; fail if any source is unpinned or has drifted.",
+)
+
+_VERBOSE = typer.Option(
+    False,
+    "--verbose",
+    "-v",
+    help="Print every warning in full instead of summarizing repeated ones.",
 )
 
 _ALLOW_TRANSFORM = typer.Option(
@@ -629,6 +681,7 @@ def add(
         help="Path(s) the generate command creates; agentry tracks + cleans exactly these. Repeatable.",
     ),
     allow_run: bool = _ALLOW_RUN,
+    verbose: bool = _VERBOSE,
 ) -> None:
     """Enable a component and install it.
 
@@ -642,7 +695,9 @@ def add(
     if "/" not in ref:
         repo, _, names_raw = ref.partition("@")
         names = [n.strip() for n in names_raw.split(",") if n.strip()] if names_raw else []
-        _add_from_catalog(repo, names, types=_parse_types(type_), allow_run=allow_run)
+        _add_from_catalog(
+            repo, names, types=_parse_types(type_), allow_run=allow_run, verbose=verbose
+        )
         return
 
     if type_:
@@ -673,7 +728,7 @@ def add(
     store.add_component(comp)
     store.save()
     console.print(f"[green]Added[/green] {ref}")
-    _do_sync(allow_run=allow_run)
+    _do_sync(allow_run=allow_run, verbose=verbose)
 
 
 @app.command()
@@ -712,28 +767,35 @@ def _set_enabled(ref: str, enabled: bool) -> None:
 
 @app.command(name="sync")
 def sync_command(
-    allow_run: bool = _ALLOW_RUN, frozen: bool = _FROZEN, allow_transform: bool = _ALLOW_TRANSFORM
+    allow_run: bool = _ALLOW_RUN,
+    frozen: bool = _FROZEN,
+    allow_transform: bool = _ALLOW_TRANSFORM,
+    verbose: bool = _VERBOSE,
 ) -> None:
     """Install everything per .agentry.yml + .agentry.lock (idempotent)."""
-    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform)
+    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform, verbose=verbose)
 
 
 @app.command(name="install")
 def install_command(
-    allow_run: bool = _ALLOW_RUN, frozen: bool = _FROZEN, allow_transform: bool = _ALLOW_TRANSFORM
+    allow_run: bool = _ALLOW_RUN,
+    frozen: bool = _FROZEN,
+    allow_transform: bool = _ALLOW_TRANSFORM,
+    verbose: bool = _VERBOSE,
 ) -> None:
     """Alias for `sync`."""
-    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform)
+    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform, verbose=verbose)
 
 
 @app.command()
 def update(
     source: str = typer.Argument(None, help="Only update this source (default: all)."),
+    verbose: bool = _VERBOSE,
 ) -> None:
     """Re-resolve refs to latest, rewrite .agentry.lock, and reinstall."""
     # `source` is accepted for forward-compat; v1 re-resolves all sources.
     _ = source
-    _do_sync(update=True)
+    _do_sync(update=True, verbose=verbose)
 
 
 @app.command(name="deps")
