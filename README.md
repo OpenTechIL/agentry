@@ -194,11 +194,12 @@ installer prints the exact line to add.
 
 ```bash
 brew install OpenTechIL/tap/agentry   # macOS / Linux
-scoop install agentry                 # Windows
 ```
 
 The Homebrew tap is refreshed automatically on every release, so `brew upgrade agentry`
-always tracks the latest version.
+always tracks the latest version. On Windows, use the
+[`install.ps1` one-liner](#the-quickest-way-no-python-needed), the `.exe` installer below, or
+the [Python install](#if-youre-a-python-user).
 
 ### Double-click installers and native packages
 
@@ -267,7 +268,6 @@ originally:
 |---|---|
 | `install.sh` / `install.ps1` | Re-run the same curl/`irm` one-liner — it always fetches the latest release and overwrites the existing binary in place. |
 | Homebrew | `brew upgrade agentry` |
-| Scoop | `scoop update agentry` |
 | `.pkg` / `.exe` / `.deb` / `.rpm` | Download the newer asset from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest) and install it the same way — it replaces the previous version. |
 | `uv tool install` | `uv tool upgrade agentry` (falls back to `uv tool install --reinstall git+https://github.com/OpenTechIL/agentry` if it doesn't pick up new commits) |
 | `pipx` | `pipx upgrade agentry` |
@@ -474,6 +474,7 @@ Grouped by what you're trying to do. Full reference with every flag:
 | Command | What it does |
 |---|---|
 | `agentry enable <ref>` / `disable <ref>` | Turn a component off without forgetting it. `disable` uninstalls on the next sync; `enable` puts it back. |
+| `agentry keep <ref> [<target>:]<key>` | Keep your own value for a merged `mcp`/`hook` entry: adds it to the component's [`keep:`](docs/config-reference.md#keep) list, then syncs. agentry stops writing or removing it. `<target>:<key>` keeps it on one target, a bare `<key>` on every target. An unknown target is rejected. |
 | `agentry trust <source>` | Allow a source to run its own installer at install time. Pinned to that source's commit, and revoked automatically if the source moves. |
 | `agentry sync --frozen` | Install strictly from `.agentry.lock`, failing if any source is unpinned or has drifted. Use this in CI. |
 | `agentry emit agents-md [--check]` | Generate a portable `AGENTS.md` from your skills, agents and commands. `--check` verifies it's up to date in CI. |
@@ -500,8 +501,10 @@ There are two install styles, because the two kinds of thing need different hand
   an edit is instantly visible to every tool. agentry refuses to replace a real file, or a
   symlink it doesn't own.
 - **Config merge**, for hooks and MCP servers, which have to live *inside* a shared JSON or
-  TOML file. agentry writes only the specific keys it owns and leaves everything else —
-  your entries, your key order, your comments — exactly as it found them.
+  TOML file. agentry writes only the entries it owns (a named entry such as an MCP server, or
+  its own hook groups inside an event) and leaves everything else exactly as it found it: your
+  entries, your key order, and TOML comments. JSON with comments (JSONC) isn't supported, so
+  agentry leaves such a file untouched and warns instead of merging into it.
 
 Prefer committable real files over symlinks? Override the rule for that component type.
 Note that the install style is a property of *where a type goes for a target*, not of an
@@ -561,9 +564,10 @@ Full details: the [configuration reference](docs/config-reference.md) for every 
 agentry never clobbers what you wrote, and every install fully reverses. These aren't
 promises — they're [CI-enforced guarantees](tests/test_guarantees.py):
 
-- **It never overwrites hand-edited config.** A config merge writes only the keys it owns
-  and leaves the rest of your `.mcp.json` / `settings.json` — comments, key order, and your
-  own entries — untouched. A symlink install refuses to clobber a path it doesn't own.
+- **It never overwrites hand-edited config.** A config merge writes only the entries it owns
+  and leaves the rest of your `.mcp.json` / `settings.json` (key order and your own entries)
+  untouched. A file it can't parse, such as JSON with comments, is left alone with a warning.
+  A symlink install refuses to clobber a path it doesn't own.
 - **`agentry remove` truly reverses.** It deletes exactly its own symlinks and merged keys,
   then prunes the directories that are now empty. No stale files, no empty shells.
 - **One resolution path.** `agentry status` runs the same resolver as `agentry sync`, so it
@@ -716,8 +720,9 @@ binary installer, a package manager, or install from git with
 `uv tool install git+https://github.com/OpenTechIL/agentry`.
 
 **Will agentry overwrite my hand-edited `.mcp.json` or `settings.json`?**
-No. A config merge writes only the keys it owns and leaves your entries, key order and
-comments untouched; a symlink install refuses to clobber a real file; and `agentry remove`
+No. A config merge writes only the entries it owns and leaves your entries and key order
+untouched (a JSON file with comments is skipped with a warning, never rewritten); a symlink
+install refuses to clobber a real file; and `agentry remove`
 reverses cleanly. These are [CI-enforced guarantees](tests/test_guarantees.py) — see
 [Safe by construction](#safe-by-construction).
 

@@ -58,10 +58,10 @@ A source is a git repo or a directory on this machine.
 | `path` | str | `null` | Explicit path to the artifact within the source, overriding discovery. Must be relative and inside the repo. |
 | `generate` | [GeneratorSpec](#generate) | `null` | The component installs itself by running its own CLI. |
 | `transform` | `{provider, prompt}` | `null` | Materialize through a content provider instead of a live symlink. `provider` is `strip-frontmatter` or `agent`. |
-| `keep` | list of str | `[]` | Merged entries (`mcp`/`hook` keys) you own instead of agentry. Each is `<key>` for every target, or `<target>:<key>` for one. See [keep](#keep). |
+| `keep` | list of str | `[]` | Merged entries you own instead of agentry: an MCP server name, or a hook event name. Each is `<key>` for every target, or `<target>:<key>` for one. See [keep](#keep). |
 
-Its identifier on the CLI is `<source>/<type>/<name>` — that's what `add`, `remove`, `why`
-and `deps` take.
+Its identifier on the CLI is `<source>/<type>/<name>` — that's what `add`, `remove`, `enable`,
+`disable`, `keep` and `why` take.
 
 **There is no `strategy` key on a component.** The install strategy belongs to the
 (target, type) rule in [`target_profiles`](#target_profiles). A `strategy:` written under a

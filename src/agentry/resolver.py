@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .config import STORE_DIR
 from .models import LockEntry, Source, SourceType
+from .progname import prog
 
 
 class ResolveError(RuntimeError):
@@ -132,8 +133,17 @@ def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
         if dest.exists() or dest.is_symlink():
             _remove(dest)
         _git(["clone", "--quiet", source.url, str(dest)])
-    else:
+    elif pinned is None or not _has_commit(dest, pinned):
+        # Only reach the network when the lock can't be satisfied locally: no pin (update,
+        # a changed url/ref, a new source) or the pinned commit isn't in the clone yet.
+        # With the pin present, sync/status/doctor/--frozen stay fully offline.
         _git(["fetch", "--quiet", "--tags", "--force", "origin"], cwd=dest)
+    # After a fresh clone or a fetch, a pin that's still missing was force-pushed away.
+    if pinned is not None and not _has_commit(dest, pinned):
+        raise ResolveError(
+            f"source '{source.name}': locked commit {pinned[:12]} is no longer on origin "
+            f"(force-pushed or deleted?). Run `{prog()} update {source.name}` to re-pin."
+        )
 
     sha = pinned or _resolve_git_sha(dest, source.ref)
     _git(["checkout", "--quiet", "--detach", sha], cwd=dest)
@@ -144,6 +154,18 @@ def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
         ref=source.ref,
         resolved=sha,
     )
+
+
+def _has_commit(clone: Path, sha: str) -> bool:
+    """Whether ``sha`` is a commit already present in the clone (local, never raises).
+
+    Any git error counts as "not present", so the caller falls back to fetching.
+    """
+    try:
+        _git(["cat-file", "-e", f"{sha}^{{commit}}"], cwd=clone)
+    except (ResolveError, OSError):
+        return False
+    return True
 
 
 def _origin_url(clone: Path) -> str | None:
