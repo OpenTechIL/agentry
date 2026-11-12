@@ -27,7 +27,7 @@ name: Release Binaries
 # secrets or certificates required. See packaging/README.md for how users verify.
 #
 # workflow_dispatch builds + uploads artifacts for inspection but does NOT
-# create a Release or sign (dry run).
+# create a Release or sign (dry run), even when dispatched on a tag ref.
 on:
   push:
     tags: ["v*"]
@@ -161,7 +161,9 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
-    if: github.ref_type == 'tag'
+    # Both checks, not just ref_type: a workflow_dispatch started on a tag also has
+    # ref_type == 'tag', and a dispatch must never sign, publish a Release or push the tap.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create the release + upload assets
@@ -197,7 +199,8 @@ jobs:
   homebrew:
     name: Publish Homebrew formula
     needs: release
-    if: github.ref_type == 'tag'
+    # Same guard as `release` (dispatch on a tag must never publish the tap).
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: read   # read SHA256SUMS.txt off this repo's release
