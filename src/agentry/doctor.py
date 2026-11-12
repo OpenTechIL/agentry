@@ -26,7 +26,7 @@ from .models import MERGE_TYPES, Component, ComponentType, Config, Source
 from .progname import CANONICAL, prog
 from .reconcile import compute_desired, status
 from .resolver import ResolveError, effective_root
-from .targets import unresolved_targets
+from .targets import describe_unresolved, unresolved_targets
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,10 @@ def command_name_check() -> Check | None:
         f"`agy` on PATH is {found}, not this agentry (Google's Antigravity CLI also uses "
         f"the name) — invoke agentry as `{CANONICAL}` or `agyx` to be unambiguous",
     )
+
+
+def _sentence(text: str) -> str:
+    return text if text.endswith(("?", ".")) else text + "."
 
 
 def _component_checks(
@@ -127,7 +131,11 @@ def run_checks(root: Path) -> list[Check]:
     for t in unresolved_targets(config):
         checks.append(
             Check(
-                "error", "target", f"target '{t}' is undefined — no built-in, profile, or overlay"
+                "error",
+                "target",
+                f"{_sentence(describe_unresolved(t, config))} No built-in, profile, or overlay "
+                "defines it — "
+                f"fix `targets:`, define it under target_profiles, or `{prog()} target add {t}`",
             )
         )
 

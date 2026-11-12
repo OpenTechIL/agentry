@@ -39,7 +39,13 @@ from .models import (
 from .progname import CANONICAL, prog
 from .reconcile import SyncResult, status, sync
 from .resolver import ResolveError, effective_root, resolve
-from .targets import BUILTIN_TARGETS, is_builtin
+from .targets import (
+    BUILTIN_TARGETS,
+    UnresolvedTargetError,
+    check_targets,
+    is_builtin,
+    suggest_target,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -405,7 +411,7 @@ def _add_from_catalog(
         console.print(
             "  [dim]added target_profiles from catalog (install overrides for this repo)[/dim]"
         )
-    store.save()
+    _save_validated(store)
     console.print(
         f"[green]Added[/green] {_e(repo)} [dim]({_e(len(comps))} component(s) from catalog)[/dim]"
     )
@@ -474,6 +480,21 @@ def _interactive_trust(source: str, sha: str) -> bool:
     return typer.confirm(f"Trust '{source}' to execute its installer?", default=False)
 
 
+def _save_validated(store: ConfigStore) -> None:
+    """Persist a config edit only if the edited config still resolves every target.
+
+    Every command that edits ``.agentry.yml`` and then syncs goes through here: the
+    post-edit config is checked in memory first, so a typo'd target refuses the command
+    with nothing written (an edit that *fixes* the typo passes). Exits 1 on refusal.
+    """
+    try:
+        check_targets(store.parsed())
+    except UnresolvedTargetError as exc:
+        err.print(_e(exc), style="red")
+        raise typer.Exit(1)
+    store.save()
+
+
 def _do_sync(
     *,
     update: bool = False,
@@ -508,7 +529,7 @@ def _add_targets_and_sync(
     added = [n for n in names if store.add_target(n)]
     already = [n for n in names if n not in added]
     if added:
-        store.save()
+        _save_validated(store)
         console.print(f"[green]{_e(verb)}[/green] target(s): {_e(', '.join(added))}")
         _do_sync()
     return added, already
@@ -585,7 +606,7 @@ def init(
 
     targets = targets or [Target.CLAUDE]
     store = ConfigStore.create(root, targets, default_catalog=default_catalog)
-    store.save()
+    _save_validated(store)
     from .gitignore import ensure_gitignore
 
     changed = ensure_gitignore(root)
@@ -767,7 +788,7 @@ def add(
         err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
     store.add_component(comp)
-    store.save()
+    _save_validated(store)
     console.print(f"[green]Added[/green] {_e(ref)}")
     _do_sync(allow_run=allow_run, verbose=verbose)
 
@@ -779,7 +800,7 @@ def remove(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/<
     if not store.remove_component(ref):
         err.print(f"[yellow]No such component: {_e(ref)}[/yellow]")
         raise typer.Exit(1)
-    store.save()
+    _save_validated(store)
     console.print(f"[red]Removed[/red] {_e(ref)}")
     _do_sync()
 
@@ -801,7 +822,7 @@ def _set_enabled(ref: str, enabled: bool) -> None:
     if not store.set_enabled(ref, enabled):
         err.print(f"[yellow]No such component: {_e(ref)}[/yellow]")
         raise typer.Exit(1)
-    store.save()
+    _save_validated(store)
     console.print(f"[green]{_e('Enabled' if enabled else 'Disabled')}[/green] {_e(ref)}")
     _do_sync()
 
@@ -1072,7 +1093,7 @@ def keep_cmd(
     if not store.add_keep(ref, key):
         console.print(escape(f"{ref} already keeps {key}"), style="dim")
         return
-    store.save()
+    _save_validated(store)
     console.print(f"[green]Keeping[/green] {escape(key)} for {escape(ref)}")
     _do_sync()
 
@@ -1134,7 +1155,7 @@ def source_add(
     except ValueError as exc:
         err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
-    store.save()
+    _save_validated(store)
     console.print(f"[green]Added source[/green] {_e(name)}")
     _do_sync()
     # Provenance at first install: show exactly what was pinned (URL/path + resolved SHA),
@@ -1149,7 +1170,7 @@ def source_remove(name: str = typer.Argument(..., help="Source name to remove.")
     if not store.remove_source(name):
         err.print(f"[yellow]No such source: {_e(name)}[/yellow]")
         raise typer.Exit(1)
-    store.save()
+    _save_validated(store)
     console.print(f"[red]Removed source[/red] {_e(name)}")
     _do_sync()
 
@@ -1201,7 +1222,7 @@ def catalog_add(
     except ValueError as exc:
         err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
-    store.save()
+    store.save()  # no sync: catalogs are how a missing target gets fixed
     console.print(f"[green]Added catalog[/green] {_e(name)} → [dim]{_e(location)}[/dim]")
 
 
@@ -1212,7 +1233,7 @@ def catalog_remove(name: str = typer.Argument(..., help="Catalog name to remove.
     if not store.remove_repository(name):
         err.print(f"[yellow]No such catalog: {_e(name)}[/yellow]")
         raise typer.Exit(1)
-    store.save()
+    store.save()  # no sync: catalogs are how a missing target gets fixed
     console.print(f"[red]Removed catalog[/red] {_e(name)}")
 
 
@@ -1396,7 +1417,7 @@ def target_add(
             console.print("[dim]Aborted — nothing was written.[/dim]")
             raise typer.Exit(1)
     if store.merge_target_profiles({name: profile}):
-        store.save()
+        _save_validated(store)
         console.print(
             f"[green]Added[/green] driver overlay [cyan]{_e(name)}[/cyan] [dim](from {_e(registry.name)})[/dim]"
         )
@@ -1424,8 +1445,11 @@ def target_use(
     store = _load()
     config = store.parsed()
     if not is_builtin(name) and name not in config.target_profiles:
+        guess = suggest_target(name, config)
+        hint = f" — did you mean '{_e(guess)}'?" if guess else "."
         err.print(
-            f"[red]'{_e(name)}' isn't a built-in target and has no target_profiles entry.[/red] "
+            f"[red]'{_e(name)}' isn't a built-in target and has no target_profiles entry"
+            f"{hint}[/red] "
             f"Built-ins: {_e(', '.join(_BUILTIN_TARGET_ORDER))}. "
             f"For a community driver overlay, run `{prog()} target add {_e(name)}` first, "
             f"then `{prog()} target use {_e(name)}`."
@@ -1573,7 +1597,7 @@ def import_apm(
         store.add_source(s)
     for c in result.components:
         store.add_component(c)
-    store.save()
+    _save_validated(store)
 
     console.print(
         f"[green]Imported[/green] {_e(len(result.sources))} source(s), "

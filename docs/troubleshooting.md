@@ -548,6 +548,38 @@ agentry target add foo       # shows the destinations, then asks before applying
 confirmation, because an overlay arrives over the network and dictates where files land.
 Pass `--yes` in CI once you've reviewed it.
 
+## `target '<name>' is not defined` — nothing was changed
+
+**Symptom.** A command exits 1 with:
+
+```text
+target 'cladue' is not defined — did you mean 'claude'? Nothing was changed. Fix `targets:` in .agentry.yml, define it under target_profiles, or install a driver overlay (`agentry target list`, then `agentry target add cladue`).
+```
+
+If the typo is in one component's `targets:` list, the message starts with that component:
+
+```text
+demo/skill/a: target 'claud' is not defined — did you mean 'claude'? Nothing was changed. Fix `targets:` in .agentry.yml, define it under target_profiles, or install a driver overlay (`agentry target list`, then `agentry target add claud`).
+```
+
+**Cause.** A name in `targets:` has no built-in driver, no `target_profiles` entry and no
+installed overlay, which is usually a typo. agentry stops before touching anything. Your
+installed files stay as they are, and a command that would edit `.agentry.yml` (`add`,
+`enable`, `keep`, …) doesn't save its change. Earlier versions treated the unknown name as an
+empty target and uninstalled the components of the target you meant.
+
+**Fix.** Correct the name in `targets:` (the message suggests the closest one), then re-run the
+command. If the name is a real tool agentry doesn't ship, define it under
+[`target_profiles`](config-reference.md#target_profiles) or install a catalog overlay with
+`agentry target add <name>`. `agentry catalog add` still works while the config is in this
+state. Removing the component whose `targets:` holds the typo also works.
+
+`agentry target use` gives the same kind of hint for a name that doesn't exist:
+
+```text
+'cursr' isn't a built-in target and has no target_profiles entry. Did you mean 'cursor'? Built-ins: claude, opencode, cursor, codex, gemini, windsurf, kimi, copilot, kiro, agents. For a community driver overlay, run `agentry target add cursr` first, then `agentry target use cursr`.
+```
+
 ## `--frozen` fails in CI
 
 `sync --frozen` installs strictly from `.agentry.lock` and refuses to resolve anything new.

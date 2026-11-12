@@ -4,7 +4,7 @@ from typer.testing import CliRunner
 
 from agentry.cli import app
 from agentry.config import DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL, ConfigStore
-from agentry.models import ProfileRule
+from agentry.models import Component, ComponentType, ProfileRule, Source, SourceType
 from conftest import make_source
 
 runner = CliRunner()
@@ -128,10 +128,17 @@ def test_target_add_installs_overlay_and_resolves_target(tmp_path, monkeypatch):
     _write_overlay_catalog(catalog)
     monkeypatch.chdir(project)
     runner.invoke(app, ["catalog", "add", "ov", str(catalog)])
-    runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
-    runner.invoke(app, ["add", "team/skill/code-reviewer"])
+    # T17: while `myide` is undefined, config edits that leave it broken are refused...
+    refused = runner.invoke(app, ["source", "add", "team", str(tmp_path / "team"), "--local"])
+    assert refused.exit_code == 1
+    assert "team" not in (project / ".agentry.yml").read_text(encoding="utf-8")
+    # ...so seed the source + component directly, as a hand-edited config would.
+    store = ConfigStore.load(project)
+    store.add_source(Source(name="team", type=SourceType.LOCAL, path=str(tmp_path / "team")))
+    store.add_component(Component(source="team", type=ComponentType.SKILL, name="code-reviewer"))
+    store.save()
 
-    # Before the overlay, the unresolved target warns and nothing lands under .myide.
+    # Before the overlay, nothing lands under .myide.
     assert not (project / ".myide/skills/code-reviewer").exists()
 
     out = runner.invoke(app, ["target", "add", "myide", "--yes"]).output

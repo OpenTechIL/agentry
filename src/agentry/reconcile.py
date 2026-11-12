@@ -56,7 +56,7 @@ from .naming import repo_basename
 from .progname import prog
 from .resolver import effective_root
 from .spec import LinkMergeDest, MergeDest, check_format
-from .targets import unresolved_targets
+from .targets import check_targets, unresolved_targets
 
 
 @dataclass
@@ -515,6 +515,9 @@ def sync(
 ) -> SyncResult:
     store = ConfigStore.load(root)
     config = store.parsed()
+    # 0. Validate targets — a pure config check, before any network call or write: a typo'd
+    #    target would otherwise resolve to nothing and uninstall the real one's components.
+    check_targets(config)
     result = SyncResult()
 
     # 1. Resolve sources + the transitive dependency closure into the store.
@@ -1297,6 +1300,7 @@ class DriftedEntry:
 def status(root: Path) -> tuple[list[StatusRow], list[str]]:
     store = ConfigStore.load(root)
     config = store.parsed()
+    check_targets(config)  # same fail-fast as sync: a table missing a typo'd target misleads
     warnings: list[str] = []
     graph, _ = deps.resolve_graph(root, config, load_lock(root))
     warnings.extend(graph.warnings)

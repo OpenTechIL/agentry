@@ -16,6 +16,8 @@ A component type absent from a target's map is *unsupported* — reconcile skips
 
 from __future__ import annotations
 
+import difflib
+
 from .drivers import BUILTIN_DRIVERS
 from .drivers.claude import CLAUDE_HOOK_EVENTS
 from .models import (
@@ -26,6 +28,8 @@ from .models import (
     ProfileRule,
     Strategy,
 )
+from .progname import prog
+from .resolver import ResolveError
 from .spec import FormatExpectation, LinkMergeDest, MergeDest, TargetSpec
 
 __all__ = [
@@ -37,6 +41,10 @@ __all__ = [
     "filter_claude_hook_events",
     "is_builtin",
     "resolve_targets",
+    "UnresolvedTargetError",
+    "check_targets",
+    "describe_unresolved",
+    "suggest_target",
     "unresolved_targets",
 ]
 
@@ -132,6 +140,58 @@ def unresolved_targets(config: Config, specs: dict[str, TargetSpec] | None = Non
     """Active targets that have neither a built-in nor a profile definition."""
     specs = specs if specs is not None else resolve_targets(config)
     return sorted(t for t in config.active_targets() if t not in specs)
+
+
+class UnresolvedTargetError(ResolveError):
+    """A target in ``.agentry.yml`` has no built-in, profile, or overlay definition.
+
+    Raised by sync/status *before* anything is resolved or written: syncing with a typo'd
+    target (``clade``) would otherwise compute nothing for the real one and uninstall it.
+    A :class:`~agentry.resolver.ResolveError`, so the CLI's existing handler exits 1.
+    """
+
+
+def suggest_target(name: str, config: Config) -> str | None:
+    """The closest defined target name to ``name`` (built-ins + target_profiles), if any."""
+    known = sorted(set(BUILTIN_TARGET_NAMES) | set(config.target_profiles))
+    matches = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
+    return matches[0] if matches else None
+
+
+def describe_unresolved(name: str, config: Config) -> str:
+    """``target 'clade' is not defined — did you mean 'claude'?`` (no clause without a match)."""
+    guess = suggest_target(name, config)
+    return f"target '{name}' is not defined" + (f" — did you mean '{guess}'?" if guess else "")
+
+
+def check_targets(config: Config) -> None:
+    """Fail fast (before any network call or write) if any active target is undefined.
+
+    Checks the declared config: project ``targets:`` and each declared component's
+    ``targets:``. A name is fatal when it is neither built-in nor in ``target_profiles`` —
+    a catalog overlay that hasn't been ``target add``-ed yet included (sync can't resolve
+    it; the hint points at ``target list`` / ``target add``). No catalog lookup: offline.
+    """
+    missing = unresolved_targets(config)
+    if not missing:
+        return
+    parts = []
+    for t in missing:
+        part = describe_unresolved(t, config)
+        users = [c.ref for c in config.components if c.targets and t in c.targets]
+        if t not in config.targets and users:
+            part = f"{', '.join(users)}: {part}"  # point at the component(s) to fix
+        parts.append(part if part.endswith("?") else part + ".")
+    add = (
+        f"`{prog()} target add {missing[0]}`"
+        if len(missing) == 1
+        else f"`{prog()} target add <name>`"
+    )
+    raise UnresolvedTargetError(
+        f"{' '.join(parts)} Nothing was changed. Fix `targets:` in .agentry.yml, define it "
+        f"under target_profiles, or install a driver overlay (`{prog()} target list`, then "
+        f"{add})."
+    )
 
 
 def is_builtin(name: str) -> bool:

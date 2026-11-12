@@ -384,6 +384,17 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
 ## 6. The reconcile flow (`agentry sync`)
 
 ```
+0. Validate targets (fail fast)          targets.unresolved_targets(config)
+   every active target (project `targets:` + declared components' `targets:`) must be
+   built-in or defined in target_profiles; otherwise raise UnresolvedTargetError (exit 1)
+   naming each one with an offline did-you-mean (targets.suggest_target). Runs before any
+   network, lock write, or orphan removal — a typo like `clade` changes nothing. A catalog
+   overlay that is only *available* is still unresolved (hint: `agentry target add`).
+   `status` raises the same error (no table); `doctor` reports it as an error.
+   Config-editing commands (add/enable/disable/keep/…) validate the *edited* config in memory
+   before saving: an edit that leaves an unresolved target is not saved, so "Nothing was
+   changed" is literally true, while an edit that fixes the typo passes.
+
 1. Resolve sources + dependency closure   deps.resolve_graph(config, lock, update=…)
    ├─ resolve every config source         resolver.resolve(source, pinned=lock_sha or None)
    │    ├─ git:   clone once → fetch → checkout --detach <sha>  → resolved = SHA

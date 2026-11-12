@@ -33,6 +33,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agentry handles each entry independently.
 
 ### Changed
+- **Behavior change: an unknown target name is now an error, and nothing is changed.**
+  `sync`, `install`, `update`, `status`, and every command that edits `.agentry.yml` and syncs
+  refuse a target that has no built-in driver, `target_profiles` entry or overlay. That covers
+  `add`, `remove`, `enable`, `disable`, `keep`, `source add`/`remove`, `init`, `target use`,
+  `target add` and `import apm`. They exit 1, write nothing to disk or to `.agentry.yml`, and
+  suggest the closest name:
+
+  ```text
+  target 'cladue' is not defined — did you mean 'claude'? Nothing was changed. Fix `targets:` in .agentry.yml, define it under target_profiles, or install a driver overlay (`agentry target list`, then `agentry target add cladue`).
+  ```
+
+  The same applies to a typo in one component's `targets:`. A config with a typo that used to
+  run now fails on purpose: before, sync treated the typo as "no targets" and uninstalled the
+  components of the target you meant. Fix the name, or define the target. `catalog add` and
+  `catalog remove` still work, so you can install the overlay that defines it.
 - **Behavior change: agentry no longer overwrites config entries it didn't add.** Previously,
   when an `mcp` or `hook` component merged a key that already existed in the target file
   (`.mcp.json`, `.claude/settings.json`, `.vscode/mcp.json`, …), agentry overwrote your entry,
