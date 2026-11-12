@@ -497,7 +497,7 @@ gitignore.py    ensure .agentry/ is ignored
   `--allow-transform`, with a diff preview + confirmation (`--yes` to auto-apply in CI), and
   `--check` reserved for the reproducible deterministic mode. agentry embeds no model or key, in
   keeping with "nothing of it runs while your agents do." Per-component copy-with-rewrite has
-  since shipped too (`transform:` on a component, §3; `installers/transform.py`); what remains is
+  since shipped too (`transform:` on a component, §4; `installers/transform.py`); what remains is
   the driver-level `transform` seam for cross-agent format/field translation.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
 - **Hook array-merge** — richer merging for event-keyed hook arrays beyond the named-key contract.
