@@ -231,3 +231,25 @@ def test_keep_on_unknown_target_still_says_unknown(tmp_path: Path, monkeypatch):
     result = runner.invoke(app, ["keep", "s/mcp/gh", "nope:gh"])
     assert result.exit_code == 1
     assert "Unknown target 'nope' for s/mcp/gh" in " ".join((result.output + result.stderr).split())
+
+
+@pytest.mark.parametrize(
+    "n, expected",
+    [
+        (
+            1,
+            "1 component target isn't active in this project and was skipped — run "
+            "`agentry doctor` for the list",
+        ),
+        (
+            3,
+            "3 component targets aren't active in this project and were skipped — run "
+            "`agentry doctor` for the list",
+        ),
+    ],
+)
+def test_inactive_summary_wording_singular_and_plural(n, expected):
+    """The singular is unreachable from the CLI (summaries need N >= 2), so pin the helper."""
+    from agentry.cli import _summary_line
+
+    assert _summary_line("inactive", n) == expected
