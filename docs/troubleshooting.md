@@ -556,6 +556,10 @@ doesn't list) are summarized too:
 
 See [`target '<name>' is not in the project's targets — skipped`](#target-name-is-not-in-the-projects-targets-skipped).
 
+**Kept keys with no entry on a target** are summarized too, as
+`2 keys in keep: have no entry on one or more targets and were not installed — …`. See
+[`kept, but no entry on <target>`](#kept-but-no-entry-on-target).
+
 **Format mismatches** have their own summary:
 
 ```text
@@ -582,34 +586,15 @@ on warnings too — which makes it a good CI gate.
 
 | Category | Level | Meaning |
 |---|---|---|
-| `target` | error | A target in `targets:` has no built-in driver, no `target_profiles` entry, and no installed overlay. |
+| `target` | error | A target in `targets:` has no built-in driver, no `target_profiles` entry, and no installed overlay. See [not defined](#target-name-is-not-defined-nothing-was-changed). |
+| `target` | warn | A component's `targets:` names a target the project doesn't list, so it's skipped there. See [not in the project's targets](#target-name-is-not-in-the-projects-targets-skipped). |
 | `resolve` | error | A source or dependency couldn't be resolved: git failed or timed out, a ref doesn't exist, a local source path is missing, or a dependency conflicts. The remaining checks are skipped until this is fixed. |
 | `component` | error | A component references a source that isn't declared (`unknown source`), or the source doesn't actually provide it (`not provided by source`). Run `agentry list` for the real names. |
 | `support` | warn | No active target installs this component type, so it goes nowhere. |
 | `env` | warn | A merge fragment references `${VAR}`, which is unset. agentry ships the placeholder; your agent resolves it at runtime. |
-| `drift` | warn | On-disk state doesn't match config/lock. Run `agentry sync`. |
+| `drift` | warn | On-disk state doesn't match config/lock. The line says why and what to do: usually `agentry sync`, but for an entry you edited by hand or a merge agentry refused, follow the fix it names. |
+| `format` | warn | A component's content visibly won't work in that target. It's installed as-is. See [format warnings](#a-component-may-not-work-on-its-target-format-warnings). |
 | `command` | warn | The `agy` alias on `PATH` belongs to another tool (see above). |
-
-## An undefined target during `sync`
-
-**Symptom.**
-
-```text
-target 'foo' is undefined — define it under target_profiles in .agentry.yml, or install a shared driver overlay (`agentry target list`)
-```
-
-**Fix.** Either write the target yourself (`target_profiles` in `.agentry.yml` — see the
-[configuration reference](config-reference.md#target_profiles)), or install an overlay a
-catalog publishes:
-
-```bash
-agentry target list          # what overlays are available
-agentry target add foo       # shows the destinations, then asks before applying
-```
-
-`target add` prints every destination the overlay will write to and prompts for
-confirmation, because an overlay arrives over the network and dictates where files land.
-Pass `--yes` in CI once you've reviewed it.
 
 ## `target '<name>' is not defined` — nothing was changed
 
@@ -636,6 +621,17 @@ command. If the name is a real tool agentry doesn't ship, define it under
 [`target_profiles`](config-reference.md#target_profiles) or install a catalog overlay with
 `agentry target add <name>`. `agentry catalog add` still works while the config is in this
 state. Removing the component whose `targets:` holds the typo also works.
+
+To install a catalog overlay:
+
+```bash
+agentry target list          # what overlays are available
+agentry target add foo       # shows the destinations, then asks before applying
+```
+
+`target add` prints every destination the overlay will write to and prompts for
+confirmation, because an overlay arrives over the network and dictates where files land.
+Pass `--yes` in CI once you've reviewed it.
 
 `agentry target use` gives the same kind of hint for a name that doesn't exist:
 
