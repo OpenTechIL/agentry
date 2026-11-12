@@ -597,6 +597,120 @@ alongside `docs`:
 {"docs": {"httpUrl": "https://example.com/mcp"}}
 ```
 
+## A Claude plugin source reports `plugin.json` warnings
+
+When a source is a Claude Code plugin, agentry reads its `.claude-plugin/plugin.json` (see
+[authoring](authoring.md#claude-code-plugins-claude-pluginpluginjson)) and tells you about
+anything it couldn't follow. Each warning names the source. `sync` still exits 0, and
+`agentry doctor` lists them under the `plugin` category, so `doctor --strict` fails. They come
+from the plugin's files, so the lasting fix is usually the plugin author's.
+
+### A key agentry has no equivalent for
+
+```text
+source 'plug': plugin.json `outputStyles` and `lspServers` have no agentry equivalent — skipped. They still work when the plugin is installed in Claude Code itself.
+```
+
+agentry has no component type for `outputStyles`, `workflows`, `themes`, `lspServers`,
+`monitors`, `userConfig`, `channels` or `bin`. It prints one line per source, listing that
+source's keys. Everything else in the plugin still installs. Install the plugin in Claude Code
+itself if you need those parts. When two or more sources have such keys, sync folds them into
+one line, and `-v` shows each source:
+
+```text
+2 plugin sources use features agentry doesn't install — run with --verbose for the list
+```
+
+### A path that doesn't exist, or leaves the plugin
+
+```text
+source 'plug': plugin.json 'commands' path './missing' does not exist — skipped it. Fix the path in plugin.json.
+source 'plug': plugin.json 'mcpServers' path '../outside.json' leaves the plugin (..) — skipped it. Use a relative path inside the plugin, e.g. './.mcp.json'.
+```
+
+agentry only reads files inside the source. Fix the path in plugin.json (or ask the author to).
+Paths that do resolve are still used.
+
+### A `hooks` or `mcpServers` value agentry can't use
+
+```text
+source 'p': plugin.json 'mcpServers' value 42 is neither a path nor an object — skipped it. Use a relative path inside the plugin (e.g. './.mcp.json') or an inline object.
+source 'p': plugin.json 'hooks' value 7 is neither a path nor an object — skipped it. Use a relative path inside the plugin (e.g. './hooks/hooks.json') or an inline object.
+```
+
+`hooks` and `mcpServers` can each be a path, an inline object, or a list of those. A number, or a
+list item that's neither a path nor an object, can't be used, so agentry skips just that value
+and merges nothing from it. The rest of the list still counts. A list of objects merges all of
+its items into one component (`plugin-hooks` or `plugin-mcp`). For example, two inline
+`mcpServers` objects installed both servers. Fix the value in plugin.json, or ask the plugin
+author to.
+
+For `commands`, `agents` and `skills`, which take only paths, the message ends at the path
+example (for instance `… 'agents' value "" is neither a path nor an object — skipped it. Use a
+relative path inside the plugin (e.g. './agents').`).
+
+### Inline commands or agents
+
+```text
+source 'plug': plugin.json agents 'inline-agent' is inline content, which agentry can't install as a file — skipped it. Ship it as the file agents/inline-agent.md instead.
+```
+
+agentry installs commands and agents as files. Move the inline content into a file in the
+plugin, or ask the author to.
+
+### An MCP bundle
+
+```text
+source 'plug': plugin.json mcpServers './server.mcpb' is an MCP bundle, which agentry can't install — skipped it. Ask the plugin author for a JSON mcpServers entry.
+```
+
+`.mcpb` and `.dxt` bundles aren't supported. A plain JSON `mcpServers` entry installs normally.
+
+### The same component from a file and from plugin.json
+
+```text
+source 'clash': plugin.json would add skill 'a', but skills/a already provides it — installed the file one; the plugin.json one is not installed. Rename the file to install both.
+```
+
+Both define a skill named `a`. agentry installs the file-based one. Rename one of them in the
+plugin to get both.
+
+### An invalid plugin.json
+
+```text
+source 'bad': .claude-plugin/plugin.json is not valid (Expecting property name enclosed in double quotes: line 2 column 1 (char 17)) — ignored it and used the convention layout (skills/, commands/, agents/, hooks/, .mcp.json). Fix the file, or ask the plugin author to.
+```
+
+### An inline plugin hook that runs `${CLAUDE_PLUGIN_ROOT}/…`
+
+```text
+p/hook/plugin-hooks: hook event 'Stop' in .claude-plugin/plugin.json runs '${CLAUDE_PLUGIN_ROOT}/run.sh', and agentry doesn't support ${CLAUDE_PLUGIN_ROOT} paths in inline plugin hooks yet — skipped it on claude. Install the plugin in Claude Code itself to use this hook.
+```
+
+The plugin defines its hooks inline in plugin.json, and one of them calls a script by its
+`${CLAUDE_PLUGIN_ROOT}` path. agentry can't rewrite that path for inline hooks yet, so it skips
+that event and installs the plugin's other hook events normally (here `PreToolUse` merged and
+`Stop` was skipped). `agentry why <ref>` shows where the component is defined:
+
+```text
+p/hook/plugin-hooks
+├── source: p git file:///…/p @ 21b10170e89b (ref main)
+├── defined in: .claude-plugin/plugin.json (hooks)
+└── installs to
+    └── claude  .claude/settings.json:hooks  ok
+```
+
+To use the skipped hook, install the plugin in Claude Code itself.
+
+### `${CLAUDE_PLUGIN_DATA}` in a hook or MCP entry
+
+```text
+plug/hook/hooks: references ${CLAUDE_PLUGIN_DATA}, which only exists inside an installed Claude plugin — installed as-is, but it won't resolve. Set CLAUDE_PLUGIN_DATA in your environment, or ask the plugin author for a fallback.
+```
+
+Claude Code sets `CLAUDE_PLUGIN_DATA` only for plugins it installed itself. Installed through
+agentry, the entry still lands, but the variable is empty unless you set it.
+
 ## A summary line instead of individual warnings
 
 To keep output readable, `sync`, `install`, `update` and `add` collapse a warning that occurs two
@@ -665,6 +779,7 @@ on warnings too — which makes it a good CI gate.
 | `resolve` | error | A source or dependency couldn't be resolved: git failed or timed out, a ref doesn't exist, a local source path is missing, or a dependency conflicts. The remaining checks are skipped until this is fixed. |
 | `component` | error | A component references a source that isn't declared (`unknown source`), or the source doesn't actually provide it (`not provided by source`). Run `agentry list` for the real names. |
 | `support` | warn | No active target installs this component type, so it goes nowhere. |
+| `plugin` | warn | A Claude plugin source's `plugin.json` has something agentry couldn't install or follow. See [plugin.json warnings](#a-claude-plugin-source-reports-pluginjson-warnings). |
 | `env` | warn | A merge fragment references `${VAR}`, which is unset. agentry ships the placeholder; your agent resolves it at runtime. |
 | `drift` | warn | On-disk state doesn't match config/lock. The line says why and what to do: usually `agentry sync`, but for an entry you edited by hand or a merge agentry refused, follow the fix it names. |
 | `format` | warn | A component's content visibly won't work in that target. It's installed as-is. See [format warnings](#a-component-may-not-work-on-its-target-format-warnings). |

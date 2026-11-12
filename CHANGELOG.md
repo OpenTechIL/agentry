@@ -33,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agentry handles each entry independently.
 
 ### Changed
+- **Behavior change: Claude Code plugin sources now follow their `.claude-plugin/plugin.json`.**
+  For a source with a plugin.json and no `agentry.yaml`, `commands`/`agents` paths replace the
+  default `commands/`/`agents/` scan, `skills` paths add to `skills/`, and `hooks`/`mcpServers`
+  (paths or inline objects) add to `hooks/hooks.json`/`.mcp.json`. Inline objects become
+  components named `plugin-hooks`/`plugin-mcp`. Previously agentry ignored plugin.json, so it
+  could install files the author had excluded and miss ones they pointed elsewhere. Parts agentry
+  can't install are skipped with a warning naming the source: unsupported keys such as
+  `outputStyles`, missing or out-of-tree paths, inline commands/agents, and MCP bundles.
+  `agentry doctor` lists these under `plugin`. Newly discovered components aren't enabled
+  automatically, and an enabled component that's no longer provided is reported and removed as
+  before. An `agentry.yaml` descriptor still takes precedence. **After upgrading, check
+  `agentry list` and `agentry doctor`.**
 - **Behavior change: when two components install the same entry or file, the one listed first
   in `.agentry.yml` now wins on every machine.** Previously the outcome depended on install
   order, and for files the later one silently overwrote the earlier. The other component is
