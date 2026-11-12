@@ -10,6 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Format warnings for known cross-target mismatches.** agentry still installs components
+  as-is. It now warns when the content visibly won't work in a target, and `agentry doctor`
+  reports each case under a new `format` category, so `doctor --strict` fails on it. Built-in
+  checks cover OpenCode MCP entries in Claude's shape (`args`/`env`, a string `command`, no
+  `type`), Gemini commands that aren't `.toml`, Gemini hooks under Claude event names, and Gemini
+  MCP entries with `type: "http"` + `url`, which Gemini reads as SSE (use `httpUrl`). Two or more
+  warnings collapse into one summary line. `-v` prints them all.
+- **`expect:` on `target_profiles` rules** sets the format check for one (tool, type) rule. If
+  omitted, the built-in check is inherited, so a strategy-only override such as `copy` keeps the
+  warnings. `expect: {}` drops it, and `expect: {…}` replaces it. Fields: `extension`, `events`,
+  `require`, `types`, `forbid`, `values`, `reject`, `reject_hint`, `expects`.
 - **`agentry keep <ref> [<target>:]<key>` and a per-component `keep:` list.** Use these to own
   a merged `mcp` or `hook` entry yourself, for example an MCP server you've customized. agentry
   stops writing, updating or removing that entry, and `status` shows it as `ok (kept)` instead

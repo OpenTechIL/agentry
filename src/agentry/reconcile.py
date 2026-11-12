@@ -55,7 +55,7 @@ from .models import (
 from .naming import repo_basename
 from .progname import prog
 from .resolver import effective_root
-from .spec import LinkMergeDest, MergeDest
+from .spec import LinkMergeDest, MergeDest, check_format
 from .targets import unresolved_targets
 
 
@@ -151,6 +151,9 @@ class DesiredPlan:
     #: "target does not support <type> — skipped" warnings (also in the caller's warnings),
     #: kept apart so the CLI can summarize them.
     skipped: list[str] = field(default_factory=list)
+    #: Cross-target format mismatches (phase A, also in the caller's warnings): one message
+    #: per (component, target) whose content the target's ``expect`` says won't work there.
+    format_issues: list[str] = field(default_factory=list)
 
 
 def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredPlan:
@@ -272,6 +275,10 @@ def _desired_for_target(
         warnings.append(msg)
         plan.skipped.append(msg)
         return
+    if comp.type not in MERGE_TYPES and comp.transform is None:
+        # A transformed component installs the rewritten output, not this artifact, so
+        # the source file's format says nothing about what lands.
+        _check_format(comp, tname, driver, plan, warnings, artifact=artifact)
     if comp.transform is not None:
         # Copy-with-rewrite: a transformed file replaces the live symlink. Only
         # single-file link types qualify; anything else installs normally with a note.
@@ -304,6 +311,7 @@ def _desired_for_target(
             comp, src, tname, driver.link_merge_dest(comp.type), artifact, warnings
         )
         if lm is not None:
+            _check_format(comp, tname, driver, plan, warnings, entries=lm.fragment)
             plan.link_merges.append(lm)
     else:
         dest = driver.merge_dest(comp.type)
@@ -335,11 +343,44 @@ def _desired_for_target(
                     f"hook profile under target_profiles for this repo (see the "
                     f"superpowers/arckit catalog entries)."
                 )
+        _check_format(comp, tname, driver, plan, warnings, entries=entries)
         # Seam: a driver.transform (currently always None) would reshape `entries`
         # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
         plan.merges.append(
             DesiredMerge(comp.ref, tname, dest, entries, list(entries), comp.kept_keys(tname))
         )
+
+
+def _check_format(
+    comp: Component,
+    tname: str,
+    driver: Driver,
+    plan: DesiredPlan,
+    warnings: list[str],
+    *,
+    artifact: Path | None = None,
+    entries: dict | None = None,
+) -> None:
+    """Warn (once per component/target) when content won't work in the target (phase A).
+
+    The bytes still install unchanged; the expectation is driver/profile data
+    (:class:`~agentry.spec.FormatExpectation`), so no tool name is special-cased here.
+    """
+    exp = driver.spec.expect.get(comp.type)
+    if exp is None:
+        return
+    problems = check_format(exp, artifact=artifact, entries=entries)
+    if not problems:
+        return
+    wants = f" (expects {exp.expects})" if exp.expects else ""
+    msg = (
+        f"{comp.ref}: may not work in {tname}{wants}: {'; '.join(problems)} — installed as-is. "
+        f"Ship {'an' if tname[:1] in 'aeiou' else 'a'} {tname}-specific {comp.type.value}, "
+        f"or override {comp.type.value} for "
+        f"{tname} under target_profiles"
+    )
+    warnings.append(msg)
+    plan.format_issues.append(msg)
 
 
 def _link_merge_vars(comp: Component, src: Source) -> dict[str, str]:
@@ -449,6 +490,7 @@ def sync(
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
     plan = compute_desired(root, augmented, result.warnings)
     result.summarized["unsupported"] = list(plan.skipped)
+    result.summarized["format"] = list(plan.format_issues)
     links, copies, merges = plan.links, plan.copies, plan.merges
     generates, link_merges, transforms = plan.generates, plan.link_merges, plan.transforms
     manifest = load_manifest(root)

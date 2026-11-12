@@ -160,6 +160,7 @@ for that tool. Two uses:
 | `file` | str | `merge`, `link+merge` | Config file to merge into. JSON or TOML, by extension. Must be relative and inside the project. |
 | `pointer` | str | `merge`, `link+merge` | Top-level key in that file that agentry owns. |
 | `rewrite_from` / `rewrite_to` | str | optional, `link+merge` | Rewrite a command-path prefix in the merged fragment so symlinked scripts resolve. Set both or neither. |
+| `expect` | [ExpectRule](#expect) | optional | What this tool needs from the component's *content*. Omitted inherits the built-in check. See [expect](#expect). |
 
 `dest` and `file` are validated as project-relative on load and re-checked when they are
 joined onto the project root, because a catalog can publish them.
@@ -180,6 +181,53 @@ ref — `.claude/hooks/agentry/{repo}@{ref}/{name}` — rather than colliding on
 `rewrite_to` expands the same set, and substitution is literal replacement (not
 `str.format`), so a template may safely contain `${SHELL_STYLE}` variables for the agent to
 resolve at runtime.
+
+### `expect`
+
+Some tools need a different *format*, not just a different place. Examples: OpenCode's MCP
+entries, Gemini's TOML commands, Gemini's hook event names. agentry installs the bytes as they
+are, but warns when content visibly won't work in the target. `agentry doctor` reports each
+case under the `format` category, and `doctor --strict` fails. The built-in drivers ship these
+checks. `expect:` lets you change them for one (tool, type) rule:
+
+| `expect` on the rule | Effect |
+|---|---|
+| omitted | Inherit the built-in check. An override that only changes `strategy` (for example `copy` on Windows) still gets the warnings. |
+| `expect: {}` | Drop the check. Use this when your override changes the format the tool reads. |
+| `expect: {…}` | Replace the check with your own fields. |
+
+A tool you define only in `target_profiles` has no built-in check to inherit.
+
+| Field | Type | Checks |
+|---|---|---|
+| `extension` | str | The artifact file has this suffix, e.g. `".toml"`. Directories are skipped. |
+| `events` | list of str | Every merged key is one of these, such as a tool's hook event names. |
+| `require` | list of str | Every merged entry has these fields. |
+| `types` | map field → `array` \| `object` \| `string` \| `number` \| `boolean` | A field, when present, has this JSON type. |
+| `forbid` | list of str | Fields a merged entry must not carry. |
+| `values` | map field → list | A field, when present, is one of these values. |
+| `reject` | map field → list | Values the tool misreads. Flagged with `reject_hint`. |
+| `reject_hint` | str | Why a `reject` value is wrong and what to use instead. Appended to the warning. |
+| `expects` | str | A human summary of what the tool wants, quoted in the warning. |
+
+```yaml
+target_profiles:
+  gemini:
+    command:
+      strategy: copy
+      dest: ".gemini/commands/{name}.toml"
+      expect: {}          # my source already ships TOML commands for Gemini
+  mytool:
+    mcp:
+      strategy: merge
+      file: .mytool/mcp.json
+      pointer: servers
+      expect:
+        require: [transport]
+        reject: {transport: [sse]}
+        reject_hint: "mytool dropped SSE; use stdio"
+        expects: "a `transport` of stdio"
+```
 
 ## `transform`
 

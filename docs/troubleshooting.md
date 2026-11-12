@@ -81,6 +81,11 @@ target_profiles:
       dest: .claude/agents/{name}.md
 ```
 
+Overriding only `strategy` keeps the target's built-in [format checks](config-reference.md#expect).
+If you switch an OpenCode or Gemini type to `copy`, you still get its
+[format warnings](#a-component-may-not-work-on-its-target-format-warnings). Add `expect: {}` to
+the rule only if your override also changes the format the tool reads.
+
 ## `<path> already exists and is not managed by agentry`
 
 **Cause.** Working as intended: agentry refuses to overwrite anything it did not install.
@@ -371,6 +376,90 @@ agentry can check the entry, and it removes a matching one cleanly without this 
 **Fix.** Open `<file>` and delete the hook entries under `<pointer>.<key>` that reference
 `<link path>`. Keep any hook commands you added yourself.
 
+## A component may not work on its target (format warnings)
+
+agentry puts a component where each tool looks for it, but it doesn't translate the content.
+Some tools expect a different format, so agentry checks for known mismatches. It still installs
+the component as-is, prints a `may not work in <target>` warning, and `agentry doctor` lists it
+under the `format` category (`doctor --strict` fails). Each warning names what the target expects
+and what's wrong.
+
+The general fixes:
+- **Ship a target-specific copy, limited with `targets:`.** Restrict the original component to
+  the targets it works on, and add a second component that only installs into the problem
+  target ([`targets`](config-reference.md#components) on each entry). Note that a
+  `-<target>` variant file (for example `mcp/github-opencode.json`) is routed only to its own
+  target, but the original file is still installed there too, so you need `targets:` either way.
+- **Override the rule** under [`target_profiles`](config-reference.md#target_profiles). If your
+  override changes the format the tool reads, add `expect: {}` to drop the check.
+
+### OpenCode: an MCP server in Claude's shape
+
+```text
+demo/mcp/github: may not work in opencode (expects `type: "local"` with `command` as one array and `environment`): 'github' has no 'type'; 'github'.command is a string, not an array; 'github' uses 'args', which is not accepted; 'github' uses 'env', which is not accepted — installed as-is. Ship an opencode-specific mcp, or override mcp for opencode under target_profiles
+```
+
+**Cause.** OpenCode's `opencode.json` wants `type: "local"` (or `"remote"`), `command` as one
+array with the arguments included, and `environment` instead of `env`. It rejects unknown fields
+such as `args`. A Claude-style `{"command": "npx", "args": [...], "env": {...}}` entry doesn't
+start. A `type: "http"` entry gets the same warning (`'docs'.type is 'http', not one of local,
+remote`).
+
+**Fix.** Ship an OpenCode version of the server and limit each copy with `targets:`:
+
+```json
+{"github": {"type": "local", "command": ["npx", "-y", "gh-mcp"], "environment": {"TOKEN": "x"}}}
+```
+
+```yaml
+components:
+  - {source: demo, type: mcp, name: github, targets: [claude, gemini]}
+  - {source: demo, type: mcp, name: github-opencode, targets: [opencode]}
+```
+
+### Gemini: a command that isn't a `.toml` file
+
+```text
+demo/command/review: may not work in gemini (expects a TOML command file with a `prompt` field): 'review.md' is not a .toml file — installed as-is. Ship a gemini-specific command, or override command for gemini under target_profiles
+```
+
+**Cause.** Gemini CLI reads custom commands from TOML files with a `prompt` field. A Markdown
+command is linked in under a `.toml` name, but its content is still Markdown, so Gemini can't
+load it.
+
+**Fix.** Ship a `review.toml` command (with `prompt = "…"`) as a separate component limited to
+`targets: [gemini]`, and limit the Markdown one to the other targets.
+
+### Gemini: hook events with Claude names
+
+```text
+demo/hook/guard: may not work in gemini (expects Gemini hook event names (BeforeTool, AfterTool, SessionStart, …)): unknown event(s) PreToolUse — installed as-is. Ship a gemini-specific hook, or override hook for gemini under target_profiles
+```
+
+**Cause.** Gemini names its hook events differently, for example `BeforeTool` and `AfterTool`
+instead of Claude's `PreToolUse` and `PostToolUse`. A hook under a Claude event name is merged
+but never fires.
+
+**Fix.** Ship a hook fragment with Gemini event names, for example
+`hooks/guard-gemini.json` with `{"BeforeTool": [...]}`, limited to `targets: [gemini]`. Then
+limit the Claude-named hook to the other targets.
+
+### Gemini: an HTTP MCP server read as SSE
+
+```text
+demo/mcp/docs: may not work in gemini (expects `httpUrl` for HTTP servers (`url` means SSE)): 'docs'.type is 'http' — Gemini reads `url` as SSE; use `httpUrl` for streamable HTTP — installed as-is. Ship a gemini-specific mcp, or override mcp for gemini under target_profiles
+```
+
+**Cause.** Gemini has no `type` field for MCP servers. It treats `url` as an SSE endpoint and
+`httpUrl` as streamable HTTP. A Claude-style `{"type": "http", "url": "…"}` entry (or
+`type: "streamable-http"`) quietly connects over SSE, which fails against an HTTP-only server.
+
+**Fix.** Ship a Gemini version that uses `httpUrl`, limited to `targets: [gemini]`:
+
+```json
+{"docs": {"httpUrl": "https://example.com/mcp"}}
+```
+
 ## A summary line instead of individual warnings
 
 To keep output readable, `sync`, `install`, `update` and `add` collapse a warning that occurs two
@@ -394,6 +483,16 @@ one, rerun with `-v`:
 `agentry target drivers` lists the built-in targets. The
 [capability table in the README](https://github.com/OpenTechIL/agentry/blob/main/README.md#supported-agents)
 shows which component types each target installs.
+
+**Format mismatches** have their own summary:
+
+```text
+! 4 components may not work on their target (format mismatch) — run `agentry doctor` for the list
+```
+
+It counts components, not warnings: one component that fails on two targets counts once.
+`agentry doctor` lists each (component, target) case under `format`. See
+[format warnings](#a-component-may-not-work-on-its-target-format-warnings).
 
 **Merged entries that differ** are entries you edited by hand, or entries an older agentry
 recorded that no longer match their source. `agentry doctor` lists each one with its file, key

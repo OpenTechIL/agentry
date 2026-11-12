@@ -24,7 +24,7 @@ from .envscan import unset_env_refs
 from .lockfile import load_lock
 from .models import MERGE_TYPES, Component, ComponentType, Config, Source
 from .progname import CANONICAL, prog
-from .reconcile import status
+from .reconcile import compute_desired, status
 from .resolver import ResolveError, effective_root
 from .targets import unresolved_targets
 
@@ -149,6 +149,11 @@ def run_checks(root: Path) -> list[Check]:
     for comp in augmented.components:
         if comp.enabled:
             checks.extend(_component_checks(root, comp, config, sources_by_name, drivers, indexes))
+
+    # Cross-target content mismatches (phase A): the same findings sync warns about, from
+    # the same read-only plan computation, reported as warnings so --strict fails on them.
+    for issue in compute_desired(root, augmented, []).format_issues:
+        checks.append(Check("warn", "format", issue))
 
     try:
         rows, _ = status(root)

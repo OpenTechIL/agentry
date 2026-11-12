@@ -281,6 +281,44 @@ dataclass that *composes* two things:
    - `transform` — a **reserved seam** for future *semantic translation* (e.g. rewriting a
      fragment between JSON/TOML/YAML, or between agent formats). Default `None` everywhere
      today: agentry maps **placement**, it does not yet translate component formats.
+3. Optional **format expectations** (`TargetSpec.expect`: component type →
+   `spec.FormatExpectation`). They describe what an agent needs a component's *content* to
+   look like, so agentry can **warn** when a correctly placed component won't actually work there.
+   - **Fields:**
+     - `extension`: the artifact's own suffix. It is checked for single-file artifacts only. It is
+       skipped for directories, and for components with `transform:`, because the transformed
+       output is what lands.
+     - `events`: allowed hook-event keys.
+     - `require`, `forbid`, `types`, `values`: per-entry field presence, absence, JSON type and
+       allowed values.
+     - `reject` and `reject_hint`: values the target accepts but misreads. Each one is reported
+       with the hint.
+     - `expects`: a human-readable description, used in the warning.
+   - **The check.** `spec.check_format` is a pure function. It runs once per (component,
+     target): on link, copy and transform artifacts after resolution, and on merge entries after
+     `select_entries` and the hook filter. For link+merge it runs on the **rewritten** fragment,
+     because that is what lands.
+   - **What happens on a violation.** All of a pair's violations are collected into one warning,
+     which names the workaround: ship a target-specific artifact, or override the type in
+     `target_profiles`. The warning is also recorded in `DesiredPlan.format_issues`, and `doctor`
+     reports it as a `format` warning, so `--strict` fails. Nothing on disk changes.
+   - **Built-ins.**
+     - opencode MCP requires `type` (`local`/`remote`) and an array `command`, and forbids
+       Claude's `args`/`env`.
+     - gemini commands must be `.toml`.
+     - gemini MCP rejects `type: http`/`streamable-http`. Gemini reads `url` as SSE, so streamable
+       HTTP servers need `httpUrl`.
+     - gemini hooks must use `GEMINI_HOOK_EVENTS`. The same set also backs a *disabled*
+       `HookEventPolicy`, so dropping unknown events later is a single flag flip.
+   - **Profiles.** A `target_profiles` rule may carry `expect:` (`models.ExpectRule`, same keys).
+     Unlike `dest`/`file`/`pointer`, which an override fully replaces, `expect` is **inherited**:
+     - omitted: keep the built-in expectation;
+     - `expect: {}`: drop it;
+     - `expect: {…}`: replace it.
+
+     The reason is that `expect` describes the tool's *content* schema, not placement. A
+     placement-only override (for example `strategy: copy` on Windows) must not silently lose the
+     check. This follows the same precedent as `memory_file`, which also survives an override.
 
 `resolve_drivers(config)` is the effective map. It reuses `resolve_targets(config)` — the
 single place that deep-merges the project's `target_profiles` over the built-in capability
@@ -335,7 +373,8 @@ by the destination's extension — Codex's MCP servers merge into `.codex/config
 the snake_case `[mcp_servers]` table (written with `tomlkit`, preserving the rest of the
 file), while the source fragment stays JSON. Still unmapped: per-tool **agent/command
 definition formats** agentry doesn't translate (e.g. Gemini's TOML commands install via
-`link` only when authored in that format), and **array-of-tables hooks** (Codex
+`link` only when authored in that format; a Markdown one now draws a format warning, see
+*format expectations* above), and **array-of-tables hooks** (Codex
 `[[hooks.Event]]`, Kimi `[[hooks]]`) which don't fit the named-entry merge contract.
 
 ## 6. The reconcile flow (`agentry sync`)

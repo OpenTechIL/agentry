@@ -316,6 +316,29 @@ class Component(BaseModel):
         return self.targets if self.targets is not None else project_targets
 
 
+class ExpectRule(BaseModel):
+    """``target_profiles[tool][type].expect`` — content rules for that type on that tool.
+
+    Same fields as :class:`agentry.spec.FormatExpectation`. Omitting ``expect`` on a profile
+    rule inherits the built-in expectation (a strategy-only override, e.g. ``copy`` on
+    Windows, still gets the warnings); ``expect: {}`` drops it; ``expect: {…}`` replaces it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    extension: str | None = None
+    events: list[str] | None = None
+    require: list[str] = Field(default_factory=list)
+    types: dict[str, Literal["array", "object", "string", "number", "boolean"]] = Field(
+        default_factory=dict
+    )
+    forbid: list[str] = Field(default_factory=list)
+    values: dict[str, list[str]] = Field(default_factory=dict)
+    reject: dict[str, list[str]] = Field(default_factory=dict)
+    reject_hint: str = ""
+    expects: str = ""
+
+
 class ProfileRule(BaseModel):
     """One ``target_profiles[tool][type]`` rule: where/how a type installs."""
 
@@ -328,6 +351,8 @@ class ProfileRule(BaseModel):
     # "${CLAUDE_PROJECT_DIR}/.claude/hooks/{name}"). Both optional; {name} expands.
     rewrite_from: str | None = None
     rewrite_to: str | None = None
+    # Optional content expectations for this type on this tool (see ExpectRule).
+    expect: ExpectRule | None = None
 
     @model_validator(mode="after")
     def _check(self) -> ProfileRule:

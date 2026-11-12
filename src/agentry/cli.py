@@ -235,7 +235,20 @@ def _plural(n: int, one: str, many: str) -> str:
 _SUMMARY_MIN = 2
 
 
+def _summary_count(kind: str, msgs: list[str]) -> int:
+    """How many things a summary line counts. Format warnings are one per (component,
+    target), but the line says "{N} components", so count distinct components."""
+    if kind == "format":
+        return len({m.split(": may not work in ", 1)[0] for m in msgs})
+    return len(msgs)
+
+
 def _summary_line(kind: str, n: int) -> str:
+    if kind == "format":
+        return (
+            f"{_plural(n, 'component', 'components')} may not work on their target "
+            f"(format mismatch) — run `{prog()} doctor` for the list"
+        )
     if kind == "kept":
         return (
             f"{_plural(n, 'key in keep: has', 'keys in keep: have')} no entry on one or more "
@@ -273,7 +286,7 @@ def _print_result(res: SyncResult, *, verbose: bool = False) -> None:
         for kind, msgs in res.summarized.items():
             if len(msgs) >= _SUMMARY_MIN:
                 hidden.update(msgs)
-                summaries.append(_summary_line(kind, len(msgs)))
+                summaries.append(_summary_line(kind, _summary_count(kind, msgs)))
     for w in res.warnings:
         if hidden[w] > 0:
             hidden[w] -= 1

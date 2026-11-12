@@ -22,10 +22,11 @@ from .models import (
     BUILTIN_TARGET_NAMES,
     ComponentType,
     Config,
+    ExpectRule,
     ProfileRule,
     Strategy,
 )
-from .spec import LinkMergeDest, MergeDest, TargetSpec
+from .spec import FormatExpectation, LinkMergeDest, MergeDest, TargetSpec
 
 __all__ = [
     "BUILTIN_TARGETS",
@@ -61,6 +62,7 @@ def _apply_profile(
     copy = dict(base.copy) if base else {}
     merge = dict(base.merge) if base else {}
     link_merge = dict(base.link_merge) if base else {}
+    expect = dict(base.expect) if base else {}
 
     def _clear(ctype: ComponentType, *, keep: dict) -> None:
         for d in (link, copy, merge, link_merge):
@@ -68,6 +70,14 @@ def _apply_profile(
                 d.pop(ctype, None)
 
     for ctype, rule in rules.items():
+        # Content expectations: omitted ⇒ inherit the built-in; `expect: {}` ⇒ drop it;
+        # anything else ⇒ replace it.
+        if rule.expect is not None:
+            exp = _to_expectation(rule.expect)
+            if exp == FormatExpectation():
+                expect.pop(ctype, None)
+            else:
+                expect[ctype] = exp
         if rule.strategy is Strategy.LINK:
             link[ctype] = rule.dest  # type: ignore[assignment]
             _clear(ctype, keep=link)
@@ -92,6 +102,21 @@ def _apply_profile(
         merge=merge,
         link_merge=link_merge,
         memory_file=base.memory_file if base else None,
+        expect=expect,
+    )
+
+
+def _to_expectation(rule: ExpectRule) -> FormatExpectation:
+    return FormatExpectation(
+        extension=rule.extension,
+        events=frozenset(rule.events) if rule.events is not None else None,
+        require=tuple(rule.require),
+        types=dict(rule.types),
+        forbid=tuple(rule.forbid),
+        values={k: tuple(v) for k, v in rule.values.items()},
+        reject={k: tuple(v) for k, v in rule.reject.items()},
+        reject_hint=rule.reject_hint,
+        expects=rule.expects,
     )
 
 
