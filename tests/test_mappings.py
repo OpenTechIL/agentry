@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from agentry import discovery
 from agentry.config import ConfigStore
 from agentry.models import (
@@ -18,7 +20,7 @@ from agentry.models import (
     Target,
 )
 from agentry.reconcile import sync
-from agentry.targets import resolve_targets, unresolved_targets
+from agentry.targets import UnresolvedTargetError, resolve_targets, unresolved_targets
 
 # -- source descriptor ---------------------------------------------------
 
@@ -132,7 +134,8 @@ def test_unresolved_target_detected():
     assert unresolved_targets(cfg) == ["ghostide"]
 
 
-def test_unresolved_target_warns_on_sync(tmp_path: Path, local_source: Path):
+def test_unresolved_target_fails_sync(tmp_path: Path, local_source: Path):
+    """PM ruling (T17): an undefined target is an error, not a warning."""
     proj = tmp_path / "proj"
     proj.mkdir()
     ConfigStore.create(proj, [Target.CLAUDE]).save()
@@ -140,5 +143,5 @@ def test_unresolved_target_warns_on_sync(tmp_path: Path, local_source: Path):
     store.doc["targets"].append("ghostide")
     store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(local_source)))
     store.save()
-    res = sync(proj)
-    assert any("ghostide" in w for w in res.warnings)
+    with pytest.raises(UnresolvedTargetError, match="ghostide"):
+        sync(proj)

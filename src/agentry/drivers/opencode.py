@@ -8,7 +8,7 @@ policy — plain placement.
 from __future__ import annotations
 
 from ..models import ComponentType as _C
-from ..spec import MergeDest, TargetSpec
+from ..spec import FormatExpectation, MergeDest, TargetSpec
 from .base import Driver
 
 DRIVER = Driver(
@@ -24,5 +24,16 @@ DRIVER = Driver(
             _C.MCP: MergeDest("opencode.json", "mcp", aliases=("mcpServers",)),
         },
         memory_file="AGENTS.md",
+        # opencode.ai/config.json: local/remote MCP entries need `type`, take `command` as one
+        # array and `environment` (not Claude's `args` / `env`), and reject unknown fields.
+        expect={
+            _C.MCP: FormatExpectation(
+                require=("type",),
+                types={"command": "array"},
+                forbid=("args", "env"),
+                values={"type": ("local", "remote")},
+                expects='`type: "local"` with `command` as one array and `environment`',
+            ),
+        },
     ),
 )

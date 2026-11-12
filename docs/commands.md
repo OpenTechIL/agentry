@@ -15,13 +15,15 @@ behind these commands.
 | `agentry add <source>/<type>/<name> [--path P]` | Enable a component and install it (`--path` = explicit artifact location) |
 | `agentry add <repo>[@name[,name]] [--type T]...` | Resolve a catalog repo and install all / selected / by-type components |
 | `agentry add <ref> --generate-setup CMD --generate-command CMD --produces PATH [--allow-run]` | Install a self-installing tool via its own CLI |
+| `agentry sync` / `install` / `update` / `add` `… -v` | `-v`/`--verbose` prints every warning in full instead of summarizing repeated ones |
 | `agentry remove <source>/<type>/<name>` | Remove a component and uninstall it |
 | `agentry enable <ref>` / `agentry disable <ref>` | Toggle a component's `enabled` flag, then sync |
 | `agentry sync [--allow-run] [--frozen] [--allow-transform]` / `agentry install …` | Reconcile on-disk state to config + lock (idempotent). `--allow-run` permits `generate` installers; `--frozen` installs strictly from `.agentry.lock` and fails if any source is unpinned or has drifted (CI); `--allow-transform` permits `agent` transforms to run |
-| `agentry update [SOURCE]` | Re-resolve refs to latest, rewrite `.agentry.lock`, reinstall |
+| `agentry update [SOURCES]...` | Re-resolve refs to latest, rewrite `.agentry.lock`, reinstall. With no names, every source. With names, only those sources: the rest keep their lock pins (and trust), and only the named sources' generators re-run. A dependency source the new revision adds, one with no lock entry yet, is resolved and installed too. Names are sources in `.agentry.yml`, or transitive `url` dependencies that exist only in the lock. An unknown name exits 1 and changes nothing |
 | `agentry status` | Report drift between config and what's installed |
 | `agentry doctor [--strict]` | Preflight: undefined targets, unprovided components, unset `${VARs}`, unsupported combos, drift. Exits 1 on errors (or warnings with `--strict`) |
 | `agentry why <ref>` | Explain a component: its source + pinned revision and exactly which targets it installs to |
+| `agentry keep <ref> [<target>:]<key>` | Keep your own value for a merged `mcp`/`hook` entry: adds it to the component's [`keep:`](config-reference.md#keep) list, then syncs. agentry stops writing or removing it. `<target>:<key>` keeps it on one target, a bare `<key>` on every target. An unknown target is rejected |
 | `agentry trust <source>` | Consent for a source to run code at install (generators), pinned to its SHA in the lock. Trusted sources run without `--allow-run`; trust drops if the source moves |
 | `agentry deps` | Show the resolved dependency map (transitive closure of enabled components) |
 

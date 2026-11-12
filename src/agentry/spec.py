@@ -13,6 +13,7 @@ without an import cycle. :mod:`agentry.targets` re-exports them for backward com
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .models import ComponentType, Strategy
 
@@ -53,6 +54,109 @@ class LinkMergeDest:
 
 
 @dataclass(frozen=True)
+class FormatExpectation:
+    """What a target needs from one component type's *content* (not just its placement).
+
+    Phase A of the cross-target format check: agentry still installs the bytes as-is, but
+    warns (and ``doctor --strict`` fails) when an artifact or merged entry visibly won't work
+    in the target — so the mismatch is reported at install time instead of silently. All
+    rules are data, declared on a driver's :class:`TargetSpec` or a ``target_profiles``
+    rule's ``expect:``; the engine never branches on a tool name.
+    """
+
+    #: The artifact file must have this suffix (e.g. ``".toml"``). Directories are skipped.
+    extension: str | None = None
+    #: Merged keys must be one of these (e.g. a tool's hook event names).
+    events: frozenset[str] | None = None
+    #: Every merged entry must have these fields.
+    require: tuple[str, ...] = ()
+    #: field -> JSON type a merged entry's field must have when present
+    #: (``"array"``, ``"object"``, ``"string"``, ``"number"``, ``"boolean"``).
+    types: dict[str, str] = field(default_factory=dict)
+    #: Fields a merged entry must not carry (keys the target's schema rejects).
+    forbid: tuple[str, ...] = ()
+    #: field -> allowed values for a merged entry's field when present.
+    values: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: field -> values the target misreads (e.g. Gemini treats ``type: "http"`` + ``url`` as
+    #: SSE); flagged with ``reject_hint``.
+    reject: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    #: Why a ``reject`` value is wrong and what to use instead (appended to the problem).
+    reject_hint: str = ""
+    #: Human summary of what the target wants, quoted in the warning.
+    expects: str = ""
+
+
+_JSON_TYPES = {
+    "array": list,
+    "object": dict,
+    "string": str,
+    "boolean": bool,
+}
+
+
+def _json_type_of(value: object) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    for name, py in _JSON_TYPES.items():
+        if isinstance(value, py):
+            return name
+    return "null" if value is None else type(value).__name__
+
+
+def _a(word: str) -> str:
+    return f"{'an' if word[:1] in 'aeiou' else 'a'} {word}"
+
+
+def _entry_problems(exp: FormatExpectation, name: str, entry: dict) -> list[str]:
+    """Field-level mismatches of one merged entry against ``exp``."""
+    problems: list[str] = []
+    for f in exp.require:
+        if f not in entry:
+            problems.append(f"'{name}' has no '{f}'")
+    for f, want in exp.types.items():
+        if f in entry and _json_type_of(entry[f]) != want:
+            have = _json_type_of(entry[f])
+            problems.append(f"'{name}'.{f} is {_a(have)}, not {_a(want)}")
+    for f in exp.forbid:
+        if f in entry:
+            problems.append(f"'{name}' uses '{f}', which is not accepted")
+    for f, allowed in exp.values.items():
+        if f in entry and entry[f] not in allowed:
+            problems.append(f"'{name}'.{f} is {entry[f]!r}, not one of {', '.join(allowed)}")
+    for f, bad in exp.reject.items():
+        if f in entry and entry[f] in bad:
+            why = f" — {exp.reject_hint}" if exp.reject_hint else ""
+            problems.append(f"'{name}'.{f} is {entry[f]!r}{why}")
+    return problems
+
+
+def check_format(
+    exp: FormatExpectation, *, artifact: Path | None = None, entries: dict | None = None
+) -> list[str]:
+    """Every way ``artifact`` / merged ``entries`` miss ``exp`` (empty = compatible)."""
+    problems: list[str] = []
+    if (
+        exp.extension
+        and artifact is not None
+        and artifact.is_file()
+        and artifact.suffix != exp.extension
+    ):
+        problems.append(f"'{artifact.name}' is not a {exp.extension} file")
+    if entries is None:
+        return problems
+    if exp.events is not None:
+        unknown = sorted(k for k in entries if k not in exp.events)
+        if unknown:
+            problems.append(f"unknown event(s) {', '.join(unknown)}")
+    for name, entry in entries.items():
+        if isinstance(entry, dict):
+            problems.extend(_entry_problems(exp, name, entry))
+    return problems
+
+
+@dataclass(frozen=True)
 class TargetSpec:
     name: str
     #: component type -> symlink destination template (``{name}`` placeholder)
@@ -67,6 +171,8 @@ class TargetSpec:
     #: root), e.g. ``.claude/CLAUDE.md`` or ``AGENTS.md``. ``agentry emit triggers`` registers a
     #: managed block of skill triggers here. ``None`` means the tool has no such concept.
     memory_file: str | None = None
+    #: component type -> content expectations (phase A: warn on mismatch, install as-is)
+    expect: dict[ComponentType, FormatExpectation] = field(default_factory=dict)
 
     def supports(self, ctype: ComponentType) -> bool:
         return (

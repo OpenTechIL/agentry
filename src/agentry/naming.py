@@ -8,7 +8,9 @@ means a fix to the locator shapes it handles lands everywhere at once.
 
 from __future__ import annotations
 
+import difflib
 import re
+from collections.abc import Iterable
 
 #: Split on either separator. A locator can be a URL (always ``/``) *or* a local filesystem
 #: path, and on Windows a local path uses ``\``. Handling only ``/`` meant a Windows local
@@ -33,3 +35,13 @@ def repo_basename(locator: str, fallback: str = "") -> str:
     if tail.endswith(".git"):
         tail = tail[: -len(".git")]
     return tail or fallback
+
+
+def closest(name: str, candidates: Iterable[str], cutoff: float = 0.6) -> str | None:
+    """The candidate most similar to ``name`` (a did-you-mean suggestion), or ``None``.
+
+    Shared by every "unknown <thing>" error (targets, sources) so suggestions behave
+    the same everywhere. Offline and deterministic: candidates are sorted first.
+    """
+    matches = difflib.get_close_matches(name, sorted(set(candidates)), n=1, cutoff=cutoff)
+    return matches[0] if matches else None

@@ -9,14 +9,86 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Format warnings for known cross-target mismatches.** agentry still installs components
+  as-is. It now warns when the content visibly won't work in a target, and `agentry doctor`
+  reports each case under a new `format` category, so `doctor --strict` fails on it. Built-in
+  checks cover OpenCode MCP entries in Claude's shape (`args`/`env`, a string `command`, no
+  `type`), Gemini commands that aren't `.toml`, Gemini hooks under Claude event names, and Gemini
+  MCP entries with `type: "http"` + `url`, which Gemini reads as SSE (use `httpUrl`). Two or more
+  warnings collapse into one summary line. `-v` prints them all.
+- **`expect:` on `target_profiles` rules** sets the format check for one (tool, type) rule. If
+  omitted, the built-in check is inherited, so a strategy-only override such as `copy` keeps the
+  warnings. `expect: {}` drops it, and `expect: {…}` replaces it. Fields: `extension`, `events`,
+  `require`, `types`, `forbid`, `values`, `reject`, `reject_hint`, `expects`.
+- **`agentry keep <ref> [<target>:]<key>` and a per-component `keep:` list.** Use these to own
+  a merged `mcp` or `hook` entry yourself, for example an MCP server you've customized. agentry
+  stops writing, updating or removing that entry, and `status` shows it as `ok (kept)` instead
+  of `drift`. The "edited" and "left in place" warnings, the upgrade warning and `agentry doctor`
+  now suggest the exact `agentry keep …` command. It names only the targets where the entry
+  drifted (`claude:github`), and uses the bare key only when the entry drifted on every target. A
+  bare key also covers targets you add later, and agentry won't create the entry there. Disabling or removing the
+  component leaves kept entries in place. To hand an entry back, remove it from `keep:` and
+  delete your entry. If a hook pack's events depend on each other, keep or delete them together;
+  agentry handles each entry independently.
+
 ### Changed
-- **Behavior change: agentry no longer overwrites config entries it didn't add.** Previously,
-  when an `mcp` or `hook` component merged a key that already existed in the target file
-  (`.mcp.json`, `.claude/settings.json`, `.vscode/mcp.json`, …), agentry overwrote your entry,
-  and removing the component later deleted it. Now sync leaves your entry unchanged, does not
-  merge that component into that file, and warns. `agentry status` shows the component as
-  `missing` with the reason, and `agentry doctor --strict` fails. If your entry is identical to
-  the one the component ships, agentry uses yours and never removes it.
+- **Behavior change: `agentry update <source>` now updates only the named sources.** It used to
+  ignore its argument and update everything. Now `agentry update a b` re-resolves `a` and `b`
+  only. Every other source keeps its pinned revision in `.agentry.lock` and its trust, and only
+  the named sources' generators re-run. Bare `agentry update` still updates every source. A name
+  can be a source in `.agentry.yml` or a transitive `url` dependency recorded only in the lock.
+  There's one exception to "only the named sources": if a named source's new revision adds a
+  dependency source that isn't in the lock yet, that source is resolved and installed too,
+  because otherwise the update couldn't complete. An unknown name exits 1 and changes nothing (`unknown source 'aa' — did you mean 'a'? …`). If a
+  named source's new revision needs a component that a still-pinned dependency doesn't provide,
+  the update also exits 1 and changes nothing, and the message names the command to update both
+  (`agentry update a b`).
+- **Behavior change: a component's `targets:` now only narrows the project's `targets:`.** A
+  target that is valid but not in the project's list is skipped with a warning that suggests
+  `agentry target use <name>`. Earlier versions installed there anyway. If one did, the next
+  sync removes that install and prints each removal. Only agentry's own entries are removed,
+  and entries you added by hand stay. Related changes:
+  `agentry emit triggers` writes no memory file for a target that isn't active, `agentry add`
+  ignores inactive targets, and `agentry target list` shows a **Referenced but not active**
+  group naming the components that point at each such target. A `generate` component whose
+  targets are all inactive is skipped and its generator doesn't run. If one was installed into
+  such a target before, the files it produced are deleted on the next sync. That's intended: it's
+  the same removal as any other uninstall. And
+  `agentry keep <ref> <target>:<key>` refuses an inactive target with exit 1. Two or more skips
+  collapse into one summary line that points to `agentry doctor`.
+- **Behavior change: an unknown target name is now an error, and nothing is changed.**
+  `sync`, `install`, `update`, `status`, and every command that edits `.agentry.yml` and syncs
+  refuse a target that has no built-in driver, `target_profiles` entry or overlay. That covers
+  `add`, `remove`, `enable`, `disable`, `keep`, `source add`/`remove`, `init`, `target use`,
+  `target add` and `import apm`. They exit 1, write nothing to disk or to `.agentry.yml`, and
+  suggest the closest name:
+
+  ```text
+  target 'cladue' is not defined — did you mean 'claude'? Nothing was changed. Fix `targets:` in .agentry.yml, define it under target_profiles, or install a driver overlay (`agentry target list`, then `agentry target add cladue`).
+  ```
+
+  The same applies to a typo in one component's `targets:`. A config with a typo that used to
+  run now fails on purpose: before, sync treated the typo as "no targets" and uninstalled the
+  components of the target you meant. Fix the name, or define the target. `catalog add` and
+  `catalog remove` still work, so you can install the overlay that defines it.
+- **agentry's hooks now append to your own hooks on the same event; previously one could
+  silently replace the other.** When a hook pack ships an event you already use, such as
+  `PreToolUse` in `.claude/settings.json`, agentry adds its hook groups after yours. Your groups
+  and their order are never touched. Removing or disabling a pack removes only its own groups.
+  An identical group shipped by two packs is stored once and stays until the last of them is
+  removed. If you edit or delete one of agentry's groups, sync reports it as `drift` and doesn't
+  re-add it.
+- **Behavior change: agentry no longer overwrites named config entries it didn't add.** This
+  covers named entries such as MCP servers. Previously, when an `mcp` or `hook` component merged
+  a key that already existed in the target file (`.mcp.json`, `.vscode/mcp.json`, …), agentry
+  overwrote your entry, and removing the component later deleted it. Now sync leaves your entry
+  unchanged and warns.
+  On first install, the component is not merged into that file at all, so nothing is
+  half-installed. Once a component is installed, a conflict holds back only that entry, and the
+  component's other entries keep updating. `agentry status` shows the reason and
+  `agentry doctor --strict` fails. If your entry is identical to the one the component ships,
+  agentry uses yours and never removes it.
 - **Hand edits to entries agentry installed are kept.** If you edit an entry agentry merged,
   sync keeps your version instead of reverting it, and reports it as `drift` in `status` and
   `doctor`. To get agentry's version back, delete the entry and run `agentry sync`.
@@ -33,6 +105,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from the old upstream version no longer match and can't be verified. Delete stale entries by
   hand.
 
+- **CLI output change: repeated warnings are summarized.** When `sync`, `install`, `update` or
+  `add` would print the same kind of warning two or more times, they now print one summary line
+  instead. This affects:
+  - components skipped on targets that don't support their type;
+  - merged entries that differ from their source and were kept.
+
+  A warning that occurs only once still prints in full. Every other warning still prints
+  individually: refused merges, unparseable files, the trust gate, and unset `${VAR}`s. **To
+  restore the previous full output, pass `--verbose` / `-v`.** If a script parses agentry's
+  warnings, add `-v`.
+- Warning lines from `sync`, `add` and `update` are no longer broken at the terminal width when
+  output goes to a log or pipe. Each warning is one line, so it's easy to grep. In a terminal,
+  long lines still wrap on screen.
+
 ### Removed
 - Releases no longer publish the duplicate `agy-<version>-<target>` binaries, which 0.1.4 and
   0.1.5 shipped alongside `agentry-*` for compatibility. `install.sh` and `install.ps1` from
@@ -41,6 +127,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unaffected, because it was never a release asset. Python installs get it from
   `[project.scripts]`, and the installers and packages create it as a link (or `.cmd` shim) to
   `agentry`.
+
+### Fixed
+- **Per-harness variants now replace the canonical fragment on their target, as documented.**
+  This applies when an `mcp` or `hook` component has an enabled `<base>-<target>.json` variant
+  from the same source, such as `mcp/github-opencode.json` next to `mcp/github.json`.
+  Previously both installed into that target, so the variant collided with the canonical entry
+  or the hook ran twice. Now only the variant installs there, and the other targets keep the
+  canonical file. **Compatibility:** install results change if you use variants. The next sync
+  removes the canonical entry agentry had added on that target and installs the variant, in a
+  single sync. Entries you added by hand are left untouched. `agentry why <ref>` shows the
+  routing, for example `opencode ← github-opencode.json (variant; replaces github.json)`.
+- A component's `transform:` was dropped from `.agentry.yml` when the component was added through
+  the Python config API (`ConfigStore.add_component`). A `transform:` you write by hand in
+  `.agentry.yml` was not affected, and is kept when agentry commands rewrite the file.
 
 ## [0.1.5] — 2026-09-09
 

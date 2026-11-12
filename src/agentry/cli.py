@@ -9,10 +9,12 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+from collections import Counter
 from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.tree import Tree
@@ -23,6 +25,7 @@ from .deps import DependencyError
 from .drivers import BUILTIN_DRIVERS
 from .lockfile import load_lock, save_lock
 from .models import (
+    TYPE_EXT,
     Component,
     ComponentType,
     Config,
@@ -31,11 +34,20 @@ from .models import (
     Source,
     SourceType,
     Target,
+    parse_keep,
 )
+from .naming import closest
 from .progname import CANONICAL, prog
 from .reconcile import SyncResult, status, sync
 from .resolver import ResolveError, effective_root, resolve
-from .targets import BUILTIN_TARGETS, is_builtin
+from .targets import (
+    BUILTIN_TARGETS,
+    UnresolvedTargetError,
+    check_targets,
+    is_builtin,
+    resolve_targets,
+    suggest_target,
+)
 
 app = typer.Typer(
     add_completion=False,
@@ -63,8 +75,21 @@ emit_app = typer.Typer(
 )
 app.add_typer(emit_app, name="emit")
 
-console = Console()
-err = Console(stderr=True)
+# emoji=False: user-supplied names (keys, refs, paths) must print verbatim — with emoji on,
+# Rich turns e.g. a keep entry "a:b:c" into "a🅱c". agentry never prints emoji codes itself.
+console = Console(emoji=False)
+err = Console(stderr=True, emoji=False)
+
+
+def _e(value: object) -> str:
+    """Escape interpolated text for Rich markup, so names/paths/errors print verbatim.
+
+    Any value that reaches a ``print``/``Tree``/``Table`` cell can contain ``[`` (a ref, a
+    path, an exception message); unescaped, Rich would read it as markup and drop or
+    restyle it. Our own ``[red]…[/red]`` tags stay outside the escaped values.
+    """
+    return escape(str(value))
+
 
 #: Built-in driver names in a stable, canonical order (registration order in drivers/__init__.py).
 _BUILTIN_TARGET_ORDER: list[str] = list(BUILTIN_DRIVERS)
@@ -109,14 +134,14 @@ def _warn_if_shadowed() -> None:
     if other is None or not err.is_terminal:
         return
     err.print(
-        f"[yellow]note:[/yellow] `agy` on your PATH is [dim]{other}[/dim], not this one. "
-        f"Use [cyan]{CANONICAL}[/cyan] or [cyan]agyx[/cyan] to be unambiguous."
+        f"[yellow]note:[/yellow] `agy` on your PATH is [dim]{_e(other)}[/dim], not this one. "
+        f"Use [cyan]{_e(CANONICAL)}[/cyan] or [cyan]agyx[/cyan] to be unambiguous."
     )
 
 
 def _version_callback(value: bool) -> None:
     if value:
-        console.print(f"agentry {__version__}")
+        console.print(f"agentry {_e(__version__)}")
         raise typer.Exit()
 
 
@@ -146,7 +171,7 @@ def _load() -> ConfigStore:
     try:
         return ConfigStore.load(_root())
     except FileNotFoundError as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
 
 
@@ -158,8 +183,8 @@ def _parse_targets(values: list[str] | None) -> list[str]:
             continue
         if not is_builtin(name):
             err.print(
-                f"  [yellow]! '{name}' is a custom target — define it under "
-                f"target_profiles in .agentry.yml (built-ins: {', '.join(sorted(BUILTIN_TARGETS))}).[/yellow]"
+                f"  [yellow]! '{_e(name)}' is a custom target — define it under "
+                f"target_profiles in .agentry.yml (built-ins: {_e(', '.join(sorted(BUILTIN_TARGETS)))}).[/yellow]"
             )
         out.append(name)
     return out
@@ -168,14 +193,14 @@ def _parse_targets(values: list[str] | None) -> list[str]:
 def _parse_ref(ref: str) -> tuple[str, ComponentType, str]:
     parts = ref.split("/")
     if len(parts) != 3:
-        err.print(f"[red]Invalid component ref '{ref}'. Expected <source>/<type>/<name>.[/red]")
+        err.print(f"[red]Invalid component ref '{_e(ref)}'. Expected <source>/<type>/<name>.[/red]")
         raise typer.Exit(1)
     source, ctype_raw, name = parts
     try:
         ctype = ComponentType(ctype_raw)
     except ValueError:
         err.print(
-            f"[red]Unknown type '{ctype_raw}'. Choose from: {', '.join(t.value for t in ComponentType)}[/red]"
+            f"[red]Unknown type '{_e(ctype_raw)}'. Choose from: {_e(', '.join(t.value for t in ComponentType))}[/red]"
         )
         raise typer.Exit(1)
     return source, ctype, name
@@ -189,7 +214,7 @@ def _parse_types(values: list[str] | None) -> list[ComponentType]:
             out.append(ComponentType(v.strip()))
         except ValueError:
             err.print(
-                f"[red]Unknown type '{v}'. Choose from: {', '.join(t.value for t in ComponentType)}[/red]"
+                f"[red]Unknown type '{_e(v)}'. Choose from: {_e(', '.join(t.value for t in ComponentType))}[/red]"
             )
             raise typer.Exit(1)
     return out
@@ -210,28 +235,91 @@ def _print_unified_diff(before: str, after: str, label: str) -> None:
     for line in diff:
         any_line = True
         if line.startswith("+") and not line.startswith("+++"):
-            console.print(f"[green]{line}[/green]")
+            console.print(f"[green]{_e(line)}[/green]")
         elif line.startswith("-") and not line.startswith("---"):
-            console.print(f"[red]{line}[/red]")
+            console.print(f"[red]{_e(line)}[/red]")
         elif line.startswith("@@"):
-            console.print(f"[cyan]{line}[/cyan]")
+            console.print(f"[cyan]{_e(line)}[/cyan]")
         else:
-            console.print(f"[dim]{line}[/dim]")
+            console.print(f"[dim]{_e(line)}[/dim]")
     if not any_line:
         console.print("[dim](no changes)[/dim]")
 
 
-def _print_result(res: SyncResult) -> None:
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+#: Summary line per collapsible warning kind (see ``SyncResult.summarized``). A kind is
+#: summarized only when it occurs at least ``_SUMMARY_MIN`` times; fewer print in full.
+_SUMMARY_MIN = 2
+
+
+def _summary_count(kind: str, msgs: list[str]) -> int:
+    """How many things a summary line counts. Format warnings are one per (component,
+    target), but the line says "{N} components", so count distinct components."""
+    if kind == "format":
+        return len({m.split(": may not work in ", 1)[0] for m in msgs})
+    return len(msgs)
+
+
+def _summary_line(kind: str, n: int) -> str:
+    if kind == "format":
+        return (
+            f"{_plural(n, 'component', 'components')} may not work on their target "
+            f"(format mismatch) — run `{prog()} doctor` for the list"
+        )
+    if kind == "kept":
+        return (
+            f"{_plural(n, 'key in keep: has', 'keys in keep: have')} no entry on one or more "
+            f"targets and {'was' if n == 1 else 'were'} not installed — run `{prog()} doctor` "
+            "for the list"
+        )
+    if kind == "inactive":
+        return (
+            f"{_plural(n, 'component target', 'component targets')} "
+            f"{'isn' if n == 1 else 'aren'}'t active in this project and "
+            f"{'was' if n == 1 else 'were'} skipped — run `{prog()} doctor` for the list"
+        )
+    if kind == "unsupported":
+        return (
+            f"{_plural(n, 'component', 'components')} skipped on targets that don't support "
+            f"their type — run with `--verbose` for the list (expected; see "
+            f"`{prog()} target drivers`)"
+        )
+    verb = "differs" if n == 1 else "differ"
+    kept = "was" if n == 1 else "were"
+    return (
+        f"{_plural(n, 'merged entry', 'merged entries')} {verb} from their source and {kept} "
+        f"kept as-is — run `{prog()} doctor` for the list"
+    )
+
+
+def _print_result(res: SyncResult, *, verbose: bool = False) -> None:
     for name, sha in res.resolved.items():
-        console.print(f"  [dim]resolved[/dim] {name} → [cyan]{sha[:12]}[/cyan]")
+        console.print(f"  [dim]resolved[/dim] {_e(name)} → [cyan]{_e(sha[:12])}[/cyan]")
     for item in res.created:
-        console.print(f"  [green]+ {item}[/green]")
+        console.print(f"  [green]+ {_e(item)}[/green]")
     for item in res.updated:
-        console.print(f"  [yellow]~ {item}[/yellow]")
+        console.print(f"  [yellow]~ {_e(item)}[/yellow]")
     for item in res.removed:
-        console.print(f"  [red]- {item}[/red]")
+        console.print(f"  [red]- {_e(item)}[/red]")
+    # Repetitive kinds collapse to one line unless --verbose; everything else prints in
+    # full. soft_wrap keeps each warning on one line in logs, so it stays greppable.
+    hidden: Counter[str] = Counter()
+    summaries: list[str] = []
+    if not verbose:
+        for kind, msgs in res.summarized.items():
+            if len(msgs) >= _SUMMARY_MIN:
+                hidden.update(msgs)
+                summaries.append(_summary_line(kind, _summary_count(kind, msgs)))
     for w in res.warnings:
-        err.print(f"  [yellow]! {w}[/yellow]")
+        if hidden[w] > 0:
+            hidden[w] -= 1
+            continue
+        err.print(f"  [yellow]! {escape(w)}[/yellow]", soft_wrap=True)
+    for line in summaries:
+        err.print(f"  [yellow]! {_e(line)}[/yellow]", soft_wrap=True)
     if res.gitignore_changed:
         console.print("  [dim]added .agentry/ to .gitignore[/dim]")
     if not (res.created or res.updated or res.removed):
@@ -239,7 +327,12 @@ def _print_result(res: SyncResult) -> None:
 
 
 def _add_from_catalog(
-    repo: str, names: list[str], *, types: list[ComponentType], allow_run: bool
+    repo: str,
+    names: list[str],
+    *,
+    types: list[ComponentType],
+    allow_run: bool,
+    verbose: bool = False,
 ) -> None:
     """Resolve a repo name via the configured catalogs and install all/selected components.
 
@@ -255,11 +348,11 @@ def _add_from_catalog(
     try:
         match = reg.find_repo(_root(), config, repo) if config.repositories else None
     except reg.RegistryError as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
     if match is None:
         err.print(
-            f"[red]No catalog lists '{repo}'.[/red]\n"
+            f"[red]No catalog lists '{_e(repo)}'.[/red]\n"
             f"Add one with `{prog()} catalog add <name> <file-or-url>`, or use the full "
             "<source>/<type>/<name> form."
         )
@@ -277,7 +370,7 @@ def _add_from_catalog(
         store.add_source(src)
     elif (existing.url or existing.path) != (src.url or src.path):
         err.print(
-            f"[red]A different source named '{repo}' already exists; rename or remove it first.[/red]"
+            f"[red]A different source named '{_e(repo)}' already exists; rename or remove it first.[/red]"
         )
         raise typer.Exit(1)
 
@@ -285,7 +378,7 @@ def _add_from_catalog(
     try:
         resolve(_root(), src, pinned=None)
     except ResolveError as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
 
     # The repo's available components: the curated `expose` set if present (it also carries
@@ -306,7 +399,7 @@ def _add_from_catalog(
             if d.harness is None or d.harness in active
         ]
     if not available:
-        err.print(f"[yellow]Repository '{repo}' provided no installable components.[/yellow]")
+        err.print(f"[yellow]Repository '{_e(repo)}' provided no installable components.[/yellow]")
         raise typer.Exit(1)
 
     if names or types:
@@ -326,11 +419,11 @@ def _add_from_catalog(
         console.print(
             "  [dim]added target_profiles from catalog (install overrides for this repo)[/dim]"
         )
-    store.save()
+    _save_validated(store)
     console.print(
-        f"[green]Added[/green] {repo} [dim]({len(comps)} component(s) from catalog)[/dim]"
+        f"[green]Added[/green] {_e(repo)} [dim]({_e(len(comps))} component(s) from catalog)[/dim]"
     )
-    _do_sync(allow_run=allow_run)
+    _do_sync(allow_run=allow_run, verbose=verbose)
 
 
 def _select_components(
@@ -346,7 +439,7 @@ def _select_components(
     if missing:
         scope = f" of type {', '.join(t.value for t in types)}" if types else ""
         err.print(
-            f"[red]Repository '{repo}' has no component{scope} named: {', '.join(sorted(missing))}.[/red]"
+            f"[red]Repository '{_e(repo)}' has no component{_e(scope)} named: {_e(', '.join(sorted(missing)))}.[/red]"
         )
         raise typer.Exit(1)
     return selected
@@ -354,9 +447,9 @@ def _select_components(
 
 def _interactive_pick(available: list[Component]) -> list[Component]:
     """Prompt the user to pick from ``available``; default installs everything."""
-    console.print(f"[bold]{len(available)} component(s) available:[/bold]")
+    console.print(f"[bold]{_e(len(available))} component(s) available:[/bold]")
     for i, c in enumerate(available, 1):
-        console.print(f"  [cyan]{i:>2}[/cyan]  [magenta]{c.type.value}[/magenta]/{c.name}")
+        console.print(f"  [cyan]{i:>2}[/cyan]  [magenta]{_e(c.type.value)}[/magenta]/{_e(c.name)}")
     answer = (
         Prompt.ask(
             "Install which? [dim](numbers comma-separated, 'a' for all, or a type name)[/dim]",
@@ -389,10 +482,25 @@ def _interactive_trust(source: str, sha: str) -> bool:
     if not sys.stdin.isatty():
         return False
     console.print(
-        f"[yellow]Source '{source}' runs code at install (a generator)[/yellow], pinned at "
-        f"[cyan]{_short_sha(sha)}[/cyan]."
+        f"[yellow]Source '{_e(source)}' runs code at install (a generator)[/yellow], pinned at "
+        f"[cyan]{_e(_short_sha(sha))}[/cyan]."
     )
     return typer.confirm(f"Trust '{source}' to execute its installer?", default=False)
+
+
+def _save_validated(store: ConfigStore) -> None:
+    """Persist a config edit only if the edited config still resolves every target.
+
+    Every command that edits ``.agentry.yml`` and then syncs goes through here: the
+    post-edit config is checked in memory first, so a typo'd target refuses the command
+    with nothing written (an edit that *fixes* the typo passes). Exits 1 on refusal.
+    """
+    try:
+        check_targets(store.parsed())
+    except UnresolvedTargetError as exc:
+        err.print(_e(exc), style="red")
+        raise typer.Exit(1)
+    store.save()
 
 
 def _do_sync(
@@ -401,6 +509,8 @@ def _do_sync(
     allow_run: bool = False,
     frozen: bool = False,
     allow_transform: bool = False,
+    verbose: bool = False,
+    update_only: frozenset[str] | None = None,
 ) -> None:
     try:
         res = sync(
@@ -410,11 +520,12 @@ def _do_sync(
             frozen=frozen,
             allow_transform=allow_transform,
             trust_callback=_interactive_trust,
+            update_only=update_only,
         )
     except (ResolveError, DependencyError) as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
-    _print_result(res)
+    _print_result(res, verbose=verbose)
 
 
 def _add_targets_and_sync(
@@ -428,8 +539,8 @@ def _add_targets_and_sync(
     added = [n for n in names if store.add_target(n)]
     already = [n for n in names if n not in added]
     if added:
-        store.save()
-        console.print(f"[green]{verb}[/green] target(s): {', '.join(added)}")
+        _save_validated(store)
+        console.print(f"[green]{_e(verb)}[/green] target(s): {_e(', '.join(added))}")
         _do_sync()
     return added, already
 
@@ -446,6 +557,13 @@ _FROZEN = typer.Option(
     help="Install strictly from .agentry.lock; fail if any source is unpinned or has drifted.",
 )
 
+_VERBOSE = typer.Option(
+    False,
+    "--verbose",
+    "-v",
+    help="Print every warning in full instead of summarizing repeated ones.",
+)
+
 _ALLOW_TRANSFORM = typer.Option(
     False,
     "--allow-transform",
@@ -459,7 +577,7 @@ _ALLOW_TRANSFORM = typer.Option(
 @app.command()
 def version() -> None:
     """Print the agentry version."""
-    console.print(f"agentry {__version__}")
+    console.print(f"agentry {_e(__version__)}")
 
 
 @app.command()
@@ -493,18 +611,20 @@ def init(
         store = _load()
         added, already = _add_targets_and_sync(store, targets, verb="Added")
         if already:
-            console.print(f"[dim]Already active: {', '.join(already)}[/dim]")
+            console.print(f"[dim]Already active: {_e(', '.join(already))}[/dim]")
         raise typer.Exit(0)
 
     targets = targets or [Target.CLAUDE]
     store = ConfigStore.create(root, targets, default_catalog=default_catalog)
-    store.save()
+    _save_validated(store)
     from .gitignore import ensure_gitignore
 
     changed = ensure_gitignore(root)
-    console.print(f"[green]Initialized agentry[/green] for targets: {', '.join(targets)}")
+    console.print(f"[green]Initialized agentry[/green] for targets: {_e(', '.join(targets))}")
     if default_catalog:
-        console.print(f"  [dim]catalog '{DEFAULT_CATALOG_NAME}' → {DEFAULT_CATALOG_URL}[/dim]")
+        console.print(
+            f"  [dim]catalog '{_e(DEFAULT_CATALOG_NAME)}' → {_e(DEFAULT_CATALOG_URL)}[/dim]"
+        )
     if changed:
         console.print("  [dim]added .agentry/ to .gitignore[/dim]")
 
@@ -523,7 +643,7 @@ def list_components() -> None:
             entry = lock.entry(src.name)
             resolve(_root(), src, pinned=entry.resolved if entry else None)
         except ResolveError as exc:
-            err.print(f"  [yellow]! {src.name}: {exc}[/yellow]")
+            err.print(f"  [yellow]! {_e(src.name)}: {_e(exc)}[/yellow]")
             continue
 
         # One table per source (plugin), sorted by type then name.
@@ -534,7 +654,9 @@ def list_components() -> None:
         if not found:
             continue
         any_rows = True
-        table = Table(title=f"{src.name}  ([dim]{len(found)} components[/dim])", show_lines=False)
+        table = Table(
+            title=f"{_e(src.name)}  ([dim]{_e(len(found))} components[/dim])", show_lines=False
+        )
         table.add_column("type", style="magenta")
         table.add_column("name", style="cyan")
         table.add_column("state")
@@ -546,7 +668,7 @@ def list_components() -> None:
                 state = "[green]enabled[/green]"
             else:
                 state = "[yellow]disabled[/yellow]"
-            table.add_row(d.type.value, d.name, state)
+            table.add_row(_e(d.type.value), _e(d.name), state)
         console.print(table)
 
     if not any_rows:
@@ -568,7 +690,7 @@ def search_components(
         try:
             repos = reg.list_repos(_root(), config)
         except reg.RegistryError as exc:
-            err.print(f"[yellow]! {exc}[/yellow]")
+            err.print(f"[yellow]! {_e(exc)}[/yellow]")
             repos = []
         rows = [
             (rname, cname, entry)
@@ -584,14 +706,14 @@ def search_components(
             table.add_column("summary", style="dim")
             for rname, cname, entry in rows:
                 scope = f"{len(entry.expose)} curated" if entry.expose else "whole repo"
-                table.add_row(rname, cname, scope, entry.summary or "")
+                table.add_row(_e(rname), _e(cname), _e(scope), _e(entry.summary or ""))
             console.print(table)
             console.print(f"  [dim]install with `{prog()} add <repo>`[/dim]")
     if not query:
         # No filter: also fall back to the local component listing.
         list_components()
     elif not matched:
-        console.print(f"[dim]No catalog repos match '{query}'.[/dim]")
+        console.print(f"[dim]No catalog repos match '{_e(query)}'.[/dim]")
 
 
 @app.command()
@@ -629,6 +751,7 @@ def add(
         help="Path(s) the generate command creates; agentry tracks + cleans exactly these. Repeatable.",
     ),
     allow_run: bool = _ALLOW_RUN,
+    verbose: bool = _VERBOSE,
 ) -> None:
     """Enable a component and install it.
 
@@ -642,7 +765,9 @@ def add(
     if "/" not in ref:
         repo, _, names_raw = ref.partition("@")
         names = [n.strip() for n in names_raw.split(",") if n.strip()] if names_raw else []
-        _add_from_catalog(repo, names, types=_parse_types(type_), allow_run=allow_run)
+        _add_from_catalog(
+            repo, names, types=_parse_types(type_), allow_run=allow_run, verbose=verbose
+        )
         return
 
     if type_:
@@ -653,7 +778,9 @@ def add(
     source, ctype, name = _parse_ref(ref)
     store = _load()
     if store.parsed().source(source) is None:
-        err.print(f"[red]Unknown source '{source}'. Add it first with `{prog()} source add`.[/red]")
+        err.print(
+            f"[red]Unknown source '{_e(source)}'. Add it first with `{prog()} source add`.[/red]"
+        )
         raise typer.Exit(1)
 
     try:
@@ -668,12 +795,12 @@ def add(
             source=source, type=ctype, name=name, enabled=True, path=path, generate=generate
         )
     except ValueError as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
     store.add_component(comp)
-    store.save()
-    console.print(f"[green]Added[/green] {ref}")
-    _do_sync(allow_run=allow_run)
+    _save_validated(store)
+    console.print(f"[green]Added[/green] {_e(ref)}")
+    _do_sync(allow_run=allow_run, verbose=verbose)
 
 
 @app.command()
@@ -681,10 +808,10 @@ def remove(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/<
     """Remove a component from the config and uninstall it."""
     store = _load()
     if not store.remove_component(ref):
-        err.print(f"[yellow]No such component: {ref}[/yellow]")
+        err.print(f"[yellow]No such component: {_e(ref)}[/yellow]")
         raise typer.Exit(1)
-    store.save()
-    console.print(f"[red]Removed[/red] {ref}")
+    _save_validated(store)
+    console.print(f"[red]Removed[/red] {_e(ref)}")
     _do_sync()
 
 
@@ -703,37 +830,65 @@ def disable(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/
 def _set_enabled(ref: str, enabled: bool) -> None:
     store = _load()
     if not store.set_enabled(ref, enabled):
-        err.print(f"[yellow]No such component: {ref}[/yellow]")
+        err.print(f"[yellow]No such component: {_e(ref)}[/yellow]")
         raise typer.Exit(1)
-    store.save()
-    console.print(f"[green]{'Enabled' if enabled else 'Disabled'}[/green] {ref}")
+    _save_validated(store)
+    console.print(f"[green]{_e('Enabled' if enabled else 'Disabled')}[/green] {_e(ref)}")
     _do_sync()
 
 
 @app.command(name="sync")
 def sync_command(
-    allow_run: bool = _ALLOW_RUN, frozen: bool = _FROZEN, allow_transform: bool = _ALLOW_TRANSFORM
+    allow_run: bool = _ALLOW_RUN,
+    frozen: bool = _FROZEN,
+    allow_transform: bool = _ALLOW_TRANSFORM,
+    verbose: bool = _VERBOSE,
 ) -> None:
     """Install everything per .agentry.yml + .agentry.lock (idempotent)."""
-    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform)
+    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform, verbose=verbose)
 
 
 @app.command(name="install")
 def install_command(
-    allow_run: bool = _ALLOW_RUN, frozen: bool = _FROZEN, allow_transform: bool = _ALLOW_TRANSFORM
+    allow_run: bool = _ALLOW_RUN,
+    frozen: bool = _FROZEN,
+    allow_transform: bool = _ALLOW_TRANSFORM,
+    verbose: bool = _VERBOSE,
 ) -> None:
     """Alias for `sync`."""
-    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform)
+    _do_sync(allow_run=allow_run, frozen=frozen, allow_transform=allow_transform, verbose=verbose)
 
 
 @app.command()
 def update(
-    source: str = typer.Argument(None, help="Only update this source (default: all)."),
+    sources: list[str] = typer.Argument(
+        None, help="Only update these sources (default: all). Others keep their lock pins."
+    ),
+    verbose: bool = _VERBOSE,
 ) -> None:
-    """Re-resolve refs to latest, rewrite .agentry.lock, and reinstall."""
-    # `source` is accepted for forward-compat; v1 re-resolves all sources.
-    _ = source
-    _do_sync(update=True)
+    """Re-resolve refs to latest, rewrite .agentry.lock, and reinstall.
+
+    With SOURCES, only those sources move; every other source keeps its pinned revision.
+    """
+    if not sources:
+        _do_sync(update=True, verbose=verbose)
+        return
+    config = _load().parsed()
+    known = {s.name for s in config.sources} | {e.name for e in load_lock(_root()).sources}
+    unknown = [n for n in sources if n not in known]
+    if unknown:
+        parts = []
+        for n in unknown:
+            guess = closest(n, known)
+            parts.append(
+                f"unknown source '{n}'" + (f" — did you mean '{guess}'?" if guess else ".")
+            )
+        err.print(
+            _e(" ".join(parts) + f" Nothing was changed. See `{prog()} source list`."),
+            style="red",
+        )
+        raise typer.Exit(1)
+    _do_sync(update=True, verbose=verbose, update_only=frozenset(sources))
 
 
 @app.command(name="deps")
@@ -744,7 +899,7 @@ def deps_cmd() -> None:
     try:
         graph, _ = deps.resolve_graph(_root(), config, load_lock(_root()))
     except (ResolveError, DependencyError) as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
 
     roots = [c.ref for c in config.components if c.enabled]
@@ -760,11 +915,13 @@ def deps_cmd() -> None:
     path: set[str] = set()
 
     def add(ref: str, branch: Tree) -> None:
-        label = f"[cyan]{ref}[/cyan]" + (" [blue](dep)[/blue]" if ref in graph.transitive else "")
+        label = f"[cyan]{_e(ref)}[/cyan]" + (
+            " [blue](dep)[/blue]" if ref in graph.transitive else ""
+        )
         node = branch.add(label)
         for child in children.get(ref, []):
             if child in path:
-                node.add(f"[cyan]{child}[/cyan] [yellow](cycle)[/yellow]")
+                node.add(f"[cyan]{_e(child)}[/cyan] [yellow](cycle)[/yellow]")
                 continue
             path.add(child)
             add(child, node)
@@ -776,7 +933,7 @@ def deps_cmd() -> None:
         path.discard(r)
     console.print(tree)
     for w in graph.warnings:
-        err.print(f"[yellow]! {w}[/yellow]")
+        err.print(f"[yellow]! {_e(w)}[/yellow]")
 
 
 @app.command(name="status")
@@ -785,25 +942,27 @@ def status_cmd() -> None:
     try:
         rows, warnings = status(_root())
     except (ResolveError, DependencyError) as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
     table = Table(title="Install status")
     table.add_column("ref", style="cyan")
     table.add_column("target")
     table.add_column("where", style="dim")
     table.add_column("state")
-    style = {"ok": "green", "missing": "red", "drift": "yellow"}
+    style = {"ok": "green", "ok (kept)": "green", "missing": "red", "drift": "yellow"}
     for r in rows:
-        table.add_row(r.ref, r.target, r.where, f"[{style.get(r.state, 'white')}]{r.state}[/]")
+        table.add_row(
+            _e(r.ref), _e(r.target), _e(r.where), f"[{style.get(r.state, 'white')}]{_e(r.state)}[/]"
+        )
     if rows:
         console.print(table)
         for r in rows:
             if r.note:
-                console.print(f"[yellow]  {r.ref} → {r.target}: {r.note}[/yellow]")
+                console.print(f"[yellow]  {escape(f'{r.ref} → {r.target}: {r.note}')}[/yellow]")
     else:
         console.print("[dim]Nothing installed yet.[/dim]")
     for w in warnings:
-        err.print(f"[yellow]! {w}[/yellow]")
+        err.print(f"[yellow]! {_e(w)}[/yellow]")
 
 
 @app.command(name="doctor")
@@ -822,27 +981,27 @@ def doctor_cmd(
     try:
         checks = run_checks(_root())
     except FileNotFoundError as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
     except (ResolveError, DependencyError) as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
 
     mark = {"error": "[red]✗[/red]", "warn": "[yellow]![/yellow]", "ok": "[green]✓[/green]"}
     for c in checks:
         out = err if c.level == "error" else console
-        out.print(f"  {mark.get(c.level, '?')} [dim]{c.category}[/dim]  {c.message}")
+        out.print(f"  {mark.get(c.level, '?')} [dim]{c.category}[/dim]  {escape(c.message)}")
     errors = sum(c.level == "error" for c in checks)
     warns = sum(c.level == "warn" for c in checks)
     if errors:
-        err.print(f"[red]doctor: {errors} error(s), {warns} warning(s).[/red]")
+        err.print(f"[red]doctor: {_e(errors)} error(s), {_e(warns)} warning(s).[/red]")
         raise typer.Exit(1)
     if warns:
         msg = f"doctor: 0 errors, {warns} warning(s)."
         if strict:
-            err.print(f"[red]{msg} (--strict)[/red]")
+            err.print(f"[red]{_e(msg)} (--strict)[/red]")
             raise typer.Exit(1)
-        console.print(f"[yellow]{msg}[/yellow]")
+        console.print(f"[yellow]{_e(msg)}[/yellow]")
         return
     console.print("[green]doctor: all checks passed.[/green]")
 
@@ -853,7 +1012,7 @@ def _source_provenance(store: ConfigStore, source_name: str) -> str:
     entry = lock.entry(source_name)
     src = next((s for s in store.parsed().sources if s.name == source_name), None)
     if entry is None:
-        return f"{source_name} [dim](unresolved — run `{prog()} sync`)[/dim]"
+        return f"{_e(source_name)} [dim](unresolved — run `{prog()} sync`)[/dim]"
     resolved = entry.resolved
     short = (
         resolved[len("sha256:") : len("sha256:") + 12]
@@ -862,9 +1021,15 @@ def _source_provenance(store: ConfigStore, source_name: str) -> str:
     )
     if entry.type is SourceType.GIT:
         where = entry.url or (src.url if src else "?")
-        return f"{source_name} [dim]git[/dim] {where} @ [cyan]{short}[/cyan] (ref {entry.ref or (src.ref if src else '?')})"
+        return f"{_e(source_name)} [dim]git[/dim] {_e(where)} @ [cyan]{_e(short)}[/cyan] (ref {_e(entry.ref or (src.ref if src else '?'))})"
     where = entry.path or (src.path if src else "?")
-    return f"{source_name} [dim]local[/dim] {where} @ [cyan]{short}[/cyan]"
+    return f"{_e(source_name)} [dim]local[/dim] {_e(where)} @ [cyan]{_e(short)}[/cyan]"
+
+
+def _fragment_file(ref: str) -> str:
+    """``s/hook/hooks-cursor`` -> ``hooks-cursor.json`` (merge fragments are JSON files)."""
+    _, ctype, name = ref.split("/", 2)
+    return f"{name}{TYPE_EXT.get(ComponentType(ctype), '')}"
 
 
 @app.command(name="why")
@@ -876,31 +1041,102 @@ def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/
     store = _load()
     component = store.parsed().find_component(ref)
     if component is None:
-        err.print(f"[red]No such component in config: {ref}[/red]")
+        err.print(f"[red]No such component in config: {_e(ref)}[/red]")
         raise typer.Exit(1)
     try:
         rows, warnings = status(_root())
     except (ResolveError, DependencyError) as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
 
     tree = Tree(
-        f"[cyan]{ref}[/cyan]" + ("" if component.enabled else " [yellow](disabled)[/yellow]")
+        f"[cyan]{_e(ref)}[/cyan]" + ("" if component.enabled else " [yellow](disabled)[/yellow]")
     )
     tree.add(f"source: {_source_provenance(store, component.source)}")
     targets = tree.add("installs to")
-    style = {"ok": "green", "missing": "red", "drift": "yellow"}
+    style = {"ok": "green", "ok (kept)": "green", "missing": "red", "drift": "yellow"}
     mine = [r for r in rows if r.ref == ref]
-    if mine:
+    # Targets where a same-source per-harness variant installs instead of this component.
+    replaced_by = [r for r in rows if r.replaces == ref]
+    if mine or replaced_by:
         for r in mine:
+            via = ""
+            if r.replaces is not None:
+                via = (
+                    f" ← {_e(_fragment_file(r.ref))} (variant; replaces "
+                    f"{_e(_fragment_file(r.replaces))})"
+                )
             targets.add(
-                f"[bold]{r.target}[/bold]  [dim]{r.where}[/dim]  [{style.get(r.state, 'white')}]{r.state}[/]"
+                f"[bold]{_e(r.target)}[/bold]{via}  [dim]{_e(r.where)}[/dim]  "
+                f"[{style.get(r.state, 'white')}]{_e(r.state)}[/]"
             )
+        for r in replaced_by:
+            targets.add(f"[bold]{_e(r.target)}[/bold]  [dim]replaced by {_e(r.ref)}[/dim]")
     else:
         targets.add("[dim]no target resolves this component[/dim]")
+    if component.keep:
+        kept = tree.add("keeps (yours, never written or removed by agentry)")
+        for entry in component.keep:
+            kept.add(entry)
     console.print(tree)
     for w in warnings:
-        err.print(f"[yellow]! {w}[/yellow]")
+        err.print(f"[yellow]! {_e(w)}[/yellow]")
+
+
+@app.command(
+    name="keep",
+    help=(
+        "Keep your own value for a merged entry: agentry stops writing or removing it.\n\n"
+        "Adds KEY to the component's keep: list in .agentry.yml, then syncs. "
+        "To hand the entry back, remove it from keep: and delete your entry; "
+        "the next sync re-creates agentry's."
+    ),
+)
+def keep_cmd(
+    ref: str = typer.Argument(..., help="Component ref: <source>/<type>/<name>."),
+    key: str = typer.Argument(
+        ..., help="Merged entry to keep as yours: '<key>' (all targets) or '<target>:<key>'."
+    ),
+) -> None:
+    try:
+        scope, _ = parse_keep(key, ref)
+    except ValueError as exc:
+        err.print(escape(str(exc)), style="red")
+        raise typer.Exit(1)
+    store = _load()
+    config = store.parsed()
+    component = config.find_component(ref)
+    if component is None:
+        err.print(escape(f"No such component in config: {ref}"), style="red")
+        raise typer.Exit(1)
+    if scope is not None:
+        installs_into = component.applies_to(config.targets)
+        if scope in component.inactive_targets(config.targets) and scope in resolve_targets(config):
+            err.print(
+                escape(
+                    f"target '{scope}' isn't in the project's targets — add it with "
+                    f"`{prog()} target use {scope}`, or keep the bare '<key>' for the targets "
+                    f"{ref} does install into."
+                ),
+                style="red",
+            )
+            raise typer.Exit(1)
+        if scope not in installs_into:
+            err.print(
+                escape(
+                    f"Unknown target '{scope}' for {ref} — it installs into: "
+                    f"{', '.join(installs_into) or '(no targets)'}. Use '<target>:<key>' with "
+                    "one of those, or a bare '<key>' for all of them."
+                ),
+                style="red",
+            )
+            raise typer.Exit(1)
+    if not store.add_keep(ref, key):
+        console.print(escape(f"{ref} already keeps {key}"), style="dim")
+        return
+    _save_validated(store)
+    console.print(f"[green]Keeping[/green] {escape(key)} for {escape(ref)}")
+    _do_sync()
 
 
 @app.command(name="trust")
@@ -917,19 +1153,19 @@ def trust_cmd(
     entry = lock.entry(source)
     if entry is None:
         err.print(
-            f"[red]No resolved source '{source}' in {LOCK_NAME} — run `{prog()} sync` first.[/red]"
+            f"[red]No resolved source '{_e(source)}' in {_e(LOCK_NAME)} — run `{prog()} sync` first.[/red]"
         )
         raise typer.Exit(1)
     if entry.trusted:
         console.print(
-            f"[green]Source '{source}' is already trusted[/green] @ "
-            f"[cyan]{_short_sha(entry.resolved)}[/cyan]"
+            f"[green]Source '{_e(source)}' is already trusted[/green] @ "
+            f"[cyan]{_e(_short_sha(entry.resolved))}[/cyan]"
         )
         return
     entry.trusted = True
     save_lock(root, lock)
     console.print(
-        f"[green]Trusted source[/green] {source} @ [cyan]{_short_sha(entry.resolved)}[/cyan]"
+        f"[green]Trusted source[/green] {_e(source)} @ [cyan]{_e(_short_sha(entry.resolved))}[/cyan]"
     )
 
 
@@ -958,10 +1194,10 @@ def source_add(
     try:
         store.add_source(src)
     except ValueError as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
-    store.save()
-    console.print(f"[green]Added source[/green] {name}")
+    _save_validated(store)
+    console.print(f"[green]Added source[/green] {_e(name)}")
     _do_sync()
     # Provenance at first install: show exactly what was pinned (URL/path + resolved SHA),
     # so a new source's origin is visible up front rather than only via a later `agentry why`.
@@ -973,10 +1209,10 @@ def source_remove(name: str = typer.Argument(..., help="Source name to remove.")
     """Remove a source and uninstall its components."""
     store = _load()
     if not store.remove_source(name):
-        err.print(f"[yellow]No such source: {name}[/yellow]")
+        err.print(f"[yellow]No such source: {_e(name)}[/yellow]")
         raise typer.Exit(1)
-    store.save()
-    console.print(f"[red]Removed source[/red] {name}")
+    _save_validated(store)
+    console.print(f"[red]Removed source[/red] {_e(name)}")
     _do_sync()
 
 
@@ -994,12 +1230,12 @@ def source_list() -> None:
     table.add_column("locked")
     for s in config.sources:
         entry = lock.entry(s.name)
-        locked = entry.resolved[:12] if entry else "[dim]—[/dim]"
+        locked = _e(entry.resolved[:12]) if entry else "[dim]—[/dim]"
         table.add_row(
-            s.name,
-            s.type.value,
-            s.url or s.path or "",
-            s.ref if s.type is SourceType.GIT else "—",
+            _e(s.name),
+            _e(s.type.value),
+            _e(s.url or s.path or ""),
+            _e(s.ref) if s.type is SourceType.GIT else "—",
             locked,
         )
     if config.sources:
@@ -1025,10 +1261,10 @@ def catalog_add(
     try:
         store.add_repository(Registry(name=name, location=location))
     except ValueError as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
-    store.save()
-    console.print(f"[green]Added catalog[/green] {name} → [dim]{location}[/dim]")
+    store.save()  # no sync: catalogs are how a missing target gets fixed
+    console.print(f"[green]Added catalog[/green] {_e(name)} → [dim]{_e(location)}[/dim]")
 
 
 @catalog_app.command("remove")
@@ -1036,10 +1272,10 @@ def catalog_remove(name: str = typer.Argument(..., help="Catalog name to remove.
     """Remove a catalog (does not uninstall repos already added from it)."""
     store = _load()
     if not store.remove_repository(name):
-        err.print(f"[yellow]No such catalog: {name}[/yellow]")
+        err.print(f"[yellow]No such catalog: {_e(name)}[/yellow]")
         raise typer.Exit(1)
-    store.save()
-    console.print(f"[red]Removed catalog[/red] {name}")
+    store.save()  # no sync: catalogs are how a missing target gets fixed
+    console.print(f"[red]Removed catalog[/red] {_e(name)}")
 
 
 @catalog_app.command("list")
@@ -1056,12 +1292,12 @@ def catalog_list() -> None:
     table.add_column("catalog", style="cyan")
     table.add_column("location", style="dim")
     for r in config.repositories:
-        table.add_row(r.name, r.location)
+        table.add_row(_e(r.name), _e(r.location))
     console.print(table)
     try:
         repos = reg.list_repos(_root(), config)
     except reg.RegistryError as exc:
-        err.print(f"[yellow]! {exc}[/yellow]")
+        err.print(f"[yellow]! {_e(exc)}[/yellow]")
         return
     if repos:
         rt = Table(title="Available repositories")
@@ -1071,7 +1307,7 @@ def catalog_list() -> None:
         rt.add_column("summary", style="dim")
         for cname, rname, entry in repos:
             scope = f"{len(entry.expose)} curated" if entry.expose else "whole repo"
-            rt.add_row(rname, cname, scope, entry.summary or "")
+            rt.add_row(_e(rname), _e(cname), _e(scope), _e(entry.summary or ""))
         console.print(rt)
 
 
@@ -1129,10 +1365,10 @@ def catalog_add_repo(
             resolve(_root(), source, pinned=None)
             found = discovery.discover(effective_root(_root(), source))
         except (ResolveError, OSError) as exc:
-            err.print(f"[red]discover failed: {exc}[/red]")
+            err.print(f"[red]discover failed: {_e(exc)}[/red]")
             raise typer.Exit(1)
         expose = [ExposeEntry(type=d.type, name=d.name) for d in found]
-        console.print(f"  [dim]discovered {len(expose)} component(s)[/dim]")
+        console.print(f"  [dim]discovered {_e(len(expose))} component(s)[/dim]")
 
     try:
         entry = RepositoryEntry(
@@ -1144,11 +1380,13 @@ def catalog_add_repo(
         )
         reg.add_entry(file, entry_name, entry, force=force)
     except (reg.RegistryError, ValueError) as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
 
     scope = f"{len(expose)} curated" if expose else "whole repo"
-    console.print(f"[green]Added[/green] {entry_name} → [dim]{file}[/dim] ([cyan]{scope}[/cyan])")
+    console.print(
+        f"[green]Added[/green] {_e(entry_name)} → [dim]{_e(file)}[/dim] ([cyan]{_e(scope)}[/cyan])"
+    )
 
 
 # -- target sub-commands -------------------------------------------------
@@ -1190,12 +1428,12 @@ def target_add(
     try:
         match = reg.find_target(_root(), config, name, catalog=catalog)
     except reg.RegistryError as exc:
-        err.print(f"[red]{exc}[/red]")
+        err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
     if match is None:
         where = f" in catalog '{catalog}'" if catalog else ""
         err.print(
-            f"[red]No driver overlay named '{name}'{where}.[/red] "
+            f"[red]No driver overlay named '{_e(name)}'{_e(where)}.[/red] "
             f"Run `{prog()} target list` to see what's available."
         )
         raise typer.Exit(1)
@@ -1204,15 +1442,15 @@ def target_add(
     # and it arrives over the network from a third-party catalog. Show the destinations and
     # get consent before merging it in and syncing — the same posture as the generator gate.
     console.print(
-        f"Driver overlay [cyan]{name}[/cyan] [dim](from catalog '{registry.name}')[/dim] "
+        f"Driver overlay [cyan]{_e(name)}[/cyan] [dim](from catalog '{_e(registry.name)}')[/dim] "
         "will install components to:"
     )
     for line in _describe_overlay(profile):
-        console.print(f"[dim]{line}[/dim]")
+        console.print(f"[dim]{_e(line)}[/dim]")
     if not yes:
         if not sys.stdin.isatty():
             err.print(
-                f"[red]Refusing to add overlay '{name}' without confirmation.[/red] "
+                f"[red]Refusing to add overlay '{_e(name)}' without confirmation.[/red] "
                 "Re-run with `--yes` to accept these destinations non-interactively."
             )
             raise typer.Exit(1)
@@ -1220,13 +1458,13 @@ def target_add(
             console.print("[dim]Aborted — nothing was written.[/dim]")
             raise typer.Exit(1)
     if store.merge_target_profiles({name: profile}):
-        store.save()
+        _save_validated(store)
         console.print(
-            f"[green]Added[/green] driver overlay [cyan]{name}[/cyan] [dim](from {registry.name})[/dim]"
+            f"[green]Added[/green] driver overlay [cyan]{_e(name)}[/cyan] [dim](from {_e(registry.name)})[/dim]"
         )
     else:
         console.print(
-            f"[dim]Target '{name}' already has profile rules in .agentry.yml — left as-is.[/dim]"
+            f"[dim]Target '{_e(name)}' already has profile rules in .agentry.yml — left as-is.[/dim]"
         )
     _do_sync()
 
@@ -1248,15 +1486,18 @@ def target_use(
     store = _load()
     config = store.parsed()
     if not is_builtin(name) and name not in config.target_profiles:
+        guess = suggest_target(name, config)
+        hint = f" — did you mean '{_e(guess)}'?" if guess else "."
         err.print(
-            f"[red]'{name}' isn't a built-in target and has no target_profiles entry.[/red] "
-            f"Built-ins: {', '.join(_BUILTIN_TARGET_ORDER)}. "
-            f"For a community driver overlay, run `{prog()} target add {name}` first, "
-            f"then `{prog()} target use {name}`."
+            f"[red]'{_e(name)}' isn't a built-in target and has no target_profiles entry"
+            f"{hint}[/red] "
+            f"Built-ins: {_e(', '.join(_BUILTIN_TARGET_ORDER))}. "
+            f"For a community driver overlay, run `{prog()} target add {_e(name)}` first, "
+            f"then `{prog()} target use {_e(name)}`."
         )
         raise typer.Exit(1)
     if name in config.targets:
-        console.print(f"[dim]Target '{name}' is already active.[/dim]")
+        console.print(f"[dim]Target '{_e(name)}' is already active.[/dim]")
         raise typer.Exit(0)
     _add_targets_and_sync(store, [name])
 
@@ -1281,7 +1522,7 @@ def target_list() -> None:
         for cat, tname, _ in reg.list_targets(_root(), config):
             available.setdefault(tname, cat)
     except reg.RegistryError as exc:
-        err.print(f"[yellow]! {exc}[/yellow]")
+        err.print(f"[yellow]! {_e(exc)}[/yellow]")
 
     table = Table(title="Targets in use")
     table.add_column("target", style="cyan")
@@ -1289,26 +1530,37 @@ def target_list() -> None:
     table.add_column("source", style="dim")
     for t in sorted(active):
         if is_builtin(t):
-            table.add_row(t, "[green]resolved[/green]", "built-in")
+            table.add_row(_e(t), "[green]resolved[/green]", "built-in")
         elif t in config.target_profiles:
-            table.add_row(t, "[green]resolved[/green]", ".agentry.yml profile")
+            table.add_row(_e(t), "[green]resolved[/green]", ".agentry.yml profile")
         elif t in available:
             table.add_row(
-                t,
+                _e(t),
                 "[yellow]overlay available[/yellow]",
-                f"`{prog()} target add {t}` (from {available[t]})",
+                f"`{prog()} target add {_e(t)}` (from {_e(available[t])})",
             )
         else:
-            table.add_row(t, "[red]unresolved[/red]", "no built-in, profile, or overlay")
+            table.add_row(_e(t), "[red]unresolved[/red]", "no built-in, profile, or overlay")
     if active:
         console.print(table)
     else:
         console.print("[dim]No targets configured.[/dim]")
+    # Named in some component's `targets:` but not switched on project-wide: those
+    # components skip it (component targets only narrow the project's list).
+    referenced = sorted(config.referenced_targets() - active)
+    if referenced:
+        console.print("\n[bold]Referenced but not active[/bold] [dim](components skip these)[/dim]")
+        for t in referenced:
+            users = ", ".join(c.ref for c in config.components if c.targets and t in c.targets)
+            console.print(
+                f"  [cyan]{_e(t)}[/cyan] [dim]← {_e(users)}[/dim] — activate with "
+                f"`{prog()} target use {_e(t)}`"
+            )
     extras = sorted((t, c) for t, c in available.items() if t not in active)
     if extras:
         console.print(
             "\n[dim]Other installable overlays:[/dim] "
-            + ", ".join(f"[cyan]{t}[/cyan] [dim]({c})[/dim]" for t, c in extras)
+            + ", ".join(f"[cyan]{_e(t)}[/cyan] [dim]({_e(c)})[/dim]" for t, c in extras)
         )
 
 
@@ -1336,28 +1588,32 @@ def import_apm(
 
     path = file if file.is_absolute() else _root() / file
     if not path.is_file():
-        err.print(f"[red]No apm manifest at {path}.[/red] Point at one with `--file`.")
+        err.print(f"[red]No apm manifest at {_e(path)}.[/red] Point at one with `--file`.")
         raise typer.Exit(1)
     try:
         doc = YAML(typ="safe").load(path.read_text(encoding="utf-8"))
     except Exception as exc:  # noqa: BLE001 — surface any parse error as a clean CLI message
-        err.print(f"[red]Could not parse {path}: {exc}[/red]")
+        err.print(f"[red]Could not parse {_e(path)}: {_e(exc)}[/red]")
         raise typer.Exit(1)
 
     result = translate_apm(doc)
     mcp_source = "apm-import"
 
     # Summary of the planned import.
-    console.print(f"[bold]Importing[/bold] {path}")
+    console.print(f"[bold]Importing[/bold] {_e(path)}")
     for s in result.sources:
         where = s.url or s.path
-        console.print(f"  [green]source[/green] {s.name} [dim]({s.type.value} {where})[/dim]")
+        console.print(
+            f"  [green]source[/green] {_e(s.name)} [dim]({_e(s.type.value)} {_e(where)})[/dim]"
+        )
     for c in result.components:
-        console.print(f"  [green]component[/green] {c.ref}")
+        console.print(f"  [green]component[/green] {_e(c.ref)}")
     for name in result.mcp_fragments:
-        console.print(f"  [green]mcp[/green] {name} [dim](→ {mcp_source}/mcp/{name}.json)[/dim]")
+        console.print(
+            f"  [green]mcp[/green] {_e(name)} [dim](→ {_e(mcp_source)}/mcp/{_e(name)}.json)[/dim]"
+        )
     for w in result.warnings:
-        err.print(f"  [yellow]! {w}[/yellow]")
+        err.print(f"  [yellow]! {_e(w)}[/yellow]")
 
     if dry_run:
         console.print("[dim]--dry-run: nothing written.[/dim]")
@@ -1385,7 +1641,7 @@ def import_apm(
         if result.targets and set(result.targets) - set(store.parsed().targets):
             err.print(
                 "  [yellow]! apm targets "
-                f"{result.targets} not added — edit `targets` in .agentry.yml if you want them[/yellow]"
+                f"{_e(result.targets)} not added — edit `targets` in .agentry.yml if you want them[/yellow]"
             )
     else:
         store = ConfigStore.create(_root(), result.targets or [Target.CLAUDE], default_catalog=True)
@@ -1393,11 +1649,11 @@ def import_apm(
         store.add_source(s)
     for c in result.components:
         store.add_component(c)
-    store.save()
+    _save_validated(store)
 
     console.print(
-        f"[green]Imported[/green] {len(result.sources)} source(s), "
-        f"{len(result.components)} component(s) into .agentry.yml. "
+        f"[green]Imported[/green] {_e(len(result.sources))} source(s), "
+        f"{_e(len(result.components))} component(s) into .agentry.yml. "
         f"Review it, then run [bold]{prog()} sync[/bold]."
     )
 
@@ -1463,18 +1719,18 @@ def emit_agents_md(
         if not allow_transform:
             err.print(
                 "[red]--agent needs --allow-transform[/red] (it runs your configured agent "
-                f"command: [dim]{' '.join(command)}[/dim])."
+                f"command: [dim]{_e(' '.join(command))}[/dim])."
             )
             raise typer.Exit(1)
-        console.print(f"  [dim]synthesizing via[/dim] {' '.join(command)} …")
+        console.print(f"  [dim]synthesizing via[/dim] {_e(' '.join(command))} …")
         try:
             content = run_agent(command, build_synthesis_prompt(items))
         except TransformError as exc:
-            err.print(f"[red]{exc}[/red]")
+            err.print(f"[red]{_e(exc)}[/red]")
             raise typer.Exit(1)
         current = target.read_text(encoding="utf-8") if target.is_file() else ""
         if current == content:
-            console.print(f"[green]{output} already matches the synthesized output.[/green]")
+            console.print(f"[green]{_e(output)} already matches the synthesized output.[/green]")
             return
         _print_unified_diff(current, content, str(output))
         if not yes and not typer.confirm(f"Write {output}?"):
@@ -1486,15 +1742,19 @@ def emit_agents_md(
             current = target.read_text(encoding="utf-8") if target.is_file() else ""
             if current != content:
                 err.print(
-                    f"[red]{output} is out of date.[/red] Run `{prog()} emit agents-md` to refresh."
+                    f"[red]{_e(output)} is out of date.[/red] Run `{prog()} emit agents-md` to refresh."
                 )
                 raise typer.Exit(1)
-            console.print(f"[green]{output} is up to date[/green] ({len(items)} component(s)).")
+            console.print(
+                f"[green]{_e(output)} is up to date[/green] ({_e(len(items))} component(s))."
+            )
             return
 
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-    console.print(f"[green]Wrote[/green] {output} [dim]from {len(items)} component(s)[/dim].")
+    console.print(
+        f"[green]Wrote[/green] {_e(output)} [dim]from {_e(len(items))} component(s)[/dim]."
+    )
 
 
 def _trigger_memory_files(config: Config, root: Path) -> list[Path]:
@@ -1560,7 +1820,7 @@ def emit_triggers(
         try:
             desired = merge_managed_block(current, block)
         except ValueError as exc:
-            err.print(f"[red]{path}: {exc}[/red]")
+            err.print(f"[red]{_e(path)}: {_e(exc)}[/red]")
             raise typer.Exit(1)
         rel = path.relative_to(root) if path.is_relative_to(root) else path
         if check:
@@ -1568,18 +1828,22 @@ def emit_triggers(
                 stale.append(rel)
             continue
         if current == desired:
-            console.print(f"[dim]{rel} already up to date.[/dim]")
+            console.print(f"[dim]{_e(rel)} already up to date.[/dim]")
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(desired, encoding="utf-8")
-        console.print(f"[green]Registered[/green] {rel} [dim]({len(items)} skill(s))[/dim].")
+        console.print(
+            f"[green]Registered[/green] {_e(rel)} [dim]({_e(len(items))} skill(s))[/dim]."
+        )
 
     if check:
         if stale:
             listed = ", ".join(str(p) for p in stale)
-            err.print(f"[red]Out of date:[/red] {listed}. Run `{prog()} emit triggers` to refresh.")
+            err.print(
+                f"[red]Out of date:[/red] {_e(listed)}. Run `{prog()} emit triggers` to refresh."
+            )
             raise typer.Exit(1)
-        console.print(f"[green]Triggers up to date[/green] ({len(items)} skill(s)).")
+        console.print(f"[green]Triggers up to date[/green] ({_e(len(items))} skill(s)).")
 
 
 if __name__ == "__main__":

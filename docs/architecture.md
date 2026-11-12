@@ -222,7 +222,10 @@ Only descriptor sources can declare dependencies (the convention scan carries no
 **Merge fragment contract.** A `hooks/*.json` or `mcp/*.json` file is a JSON **object of
 named entries**. Each top-level key is merged under the target's pointer. Agentry records
 each key together with a **fingerprint** of the value it wrote: `sha256` of the canonical JSON,
-from `merge.fingerprint`. Ownership is proven by content, not by name (see §7). Example
+from `merge.fingerprint`. Ownership is proven by content, not by name (see §7). A key whose
+value is a JSON **list** (an event-keyed hook array such as `PreToolUse: [ … ]`) is merged
+**per element** instead: agentry appends its elements to the user's list and owns only those
+(see §7, "Event-keyed hook arrays"). Example
 `mcp/github.json`:
 
 ```json
@@ -242,7 +245,11 @@ is used unchanged, so both shapes work.
 side — e.g. `hooks/hooks.json` (canonical), `hooks/hooks-cursor.json`, `hooks/hooks-codex.json`.
 agentry reads the `-<harness>` suffix and routes each variant **only** to its matching target, so
 a Cursor or Codex fragment never lands in Claude's `settings.json`. The canonical, suffix-less
-file applies to every target that supports the type. As a final guard, a hook event Claude Code
+file applies to every target that supports the type **and has no enabled variant for it**; on a
+target with an enabled `<base>-<target>` variant from the same source, the variant installs
+*instead of* the canonical (resolved in `reconcile.compute_desired` via `_enabled_variants` /
+`_routes_to`, since it depends on which components are enabled; `agentry why` shows which
+fragment each target gets). As a final guard, a hook event Claude Code
 doesn't recognize is dropped from `.claude/settings.json` with a warning rather than written out.
 
 **Importing an apm-format project (`agentry import apm`, `apm_import.py`).** It's the same category
@@ -281,6 +288,44 @@ dataclass that *composes* two things:
    - `transform` — a **reserved seam** for future *semantic translation* (e.g. rewriting a
      fragment between JSON/TOML/YAML, or between agent formats). Default `None` everywhere
      today: agentry maps **placement**, it does not yet translate component formats.
+3. Optional **format expectations** (`TargetSpec.expect`: component type →
+   `spec.FormatExpectation`). They describe what an agent needs a component's *content* to
+   look like, so agentry can **warn** when a correctly placed component won't actually work there.
+   - **Fields:**
+     - `extension`: the artifact's own suffix. It is checked for single-file artifacts only. It is
+       skipped for directories, and for components with `transform:`, because the transformed
+       output is what lands.
+     - `events`: allowed hook-event keys.
+     - `require`, `forbid`, `types`, `values`: per-entry field presence, absence, JSON type and
+       allowed values.
+     - `reject` and `reject_hint`: values the target accepts but misreads. Each one is reported
+       with the hint.
+     - `expects`: a human-readable description, used in the warning.
+   - **The check.** `spec.check_format` is a pure function. It runs once per (component,
+     target): on link, copy and transform artifacts after resolution, and on merge entries after
+     `select_entries` and the hook filter. For link+merge it runs on the **rewritten** fragment,
+     because that is what lands.
+   - **What happens on a violation.** All of a pair's violations are collected into one warning,
+     which names the workaround: ship a target-specific artifact, or override the type in
+     `target_profiles`. The warning is also recorded in `DesiredPlan.format_issues`, and `doctor`
+     reports it as a `format` warning, so `--strict` fails. Nothing on disk changes.
+   - **Built-ins.**
+     - opencode MCP requires `type` (`local`/`remote`) and an array `command`, and forbids
+       Claude's `args`/`env`.
+     - gemini commands must be `.toml`.
+     - gemini MCP rejects `type: http`/`streamable-http`. Gemini reads `url` as SSE, so streamable
+       HTTP servers need `httpUrl`.
+     - gemini hooks must use `GEMINI_HOOK_EVENTS`. The same set also backs a *disabled*
+       `HookEventPolicy`, so dropping unknown events later is a single flag flip.
+   - **Profiles.** A `target_profiles` rule may carry `expect:` (`models.ExpectRule`, same keys).
+     Unlike `dest`/`file`/`pointer`, which an override fully replaces, `expect` is **inherited**:
+     - omitted: keep the built-in expectation;
+     - `expect: {}`: drop it;
+     - `expect: {…}`: replace it.
+
+     The reason is that `expect` describes the tool's *content* schema, not placement. A
+     placement-only override (for example `strategy: copy` on Windows) must not silently lose the
+     check. This follows the same precedent as `memory_file`, which also survives an override.
 
 `resolve_drivers(config)` is the effective map. It reuses `resolve_targets(config)` — the
 single place that deep-merges the project's `target_profiles` over the built-in capability
@@ -301,7 +346,19 @@ target_profiles:
 
 > YAML note: a `dest` containing `{name}` must be **quoted**, or YAML reads `{…}` as a flow mapping.
 
-An active target with neither a built-in driver nor a profile is reported via `unresolved_targets`.
+A referenced target (project or component) with neither a built-in driver nor a profile is reported via `unresolved_targets`, which is fatal for sync (§6 step 0).
+
+**Active vs. referenced targets.** The project's `targets:` is the **single switch**
+(`Config.active_targets()`): agentry installs only into those. A component's own `targets:`
+can only **narrow** that list, never switch a target on. `Component.applies_to` returns the
+*intersection*. A component target that resolves but isn't active is skipped, with a warning
+(`agentry target use <t>` to activate it). `doctor` reports it under `target`, sync summarises
+the warnings, and `target list` shows it as "referenced but not active". A `generate`
+component with no active target in common is skipped, and its generator does not run.
+`Config.referenced_targets()`, the union of project and component lists, is used **only** for
+the resolvability check (§6 step 0), so a typo in a component's list is still fatal. Dropping a
+target from the project removes it everywhere: the next sync uninstalls those components
+through the normal orphan path. Transitive dependencies inherit their root's narrowed set.
 
 Adding an agent is **data, not a code change** — `target_profiles` deep-merges over the
 built-ins to override paths or introduce an entirely new tool:
@@ -335,12 +392,25 @@ by the destination's extension — Codex's MCP servers merge into `.codex/config
 the snake_case `[mcp_servers]` table (written with `tomlkit`, preserving the rest of the
 file), while the source fragment stays JSON. Still unmapped: per-tool **agent/command
 definition formats** agentry doesn't translate (e.g. Gemini's TOML commands install via
-`link` only when authored in that format), and **array-of-tables hooks** (Codex
+`link` only when authored in that format; a Markdown one now draws a format warning, see
+*format expectations* above), and **array-of-tables hooks** (Codex
 `[[hooks.Event]]`, Kimi `[[hooks]]`) which don't fit the named-entry merge contract.
 
 ## 6. The reconcile flow (`agentry sync`)
 
 ```
+0. Validate targets (fail fast)          targets.unresolved_targets(config)
+   every referenced target (project `targets:` + declared components' `targets:`, i.e.
+   `Config.referenced_targets()`) must be
+   built-in or defined in target_profiles; otherwise raise UnresolvedTargetError (exit 1)
+   naming each one with an offline did-you-mean (targets.suggest_target). Runs before any
+   network, lock write, or orphan removal — a typo like `clade` changes nothing. A catalog
+   overlay that is only *available* is still unresolved (hint: `agentry target add`).
+   `status` raises the same error (no table); `doctor` reports it as an error.
+   Config-editing commands (add/enable/disable/keep/…) validate the *edited* config in memory
+   before saving: an edit that leaves an unresolved target is not saved, so "Nothing was
+   changed" is literally true, while an edit that fixes the typo passes.
+
 1. Resolve sources + dependency closure   deps.resolve_graph(config, lock, update=…)
    ├─ resolve every config source         resolver.resolve(source, pinned=deps._choose_pin(…))
    │    ├─ pin:   reuse the lock SHA only while the lock entry's type/url/ref still match the
@@ -355,7 +425,8 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
    └─ emit an augmented (sources + components) graph; write .agentry.lock.
 
 2. Compute desired state          reconcile.compute_desired(augmented_config) → DesiredPlan
-   for each ENABLED component × each applicable target (driver.strategy picks one):
+   for each ENABLED component × each applicable target (project targets ∩ component targets;
+   driver.strategy picks one):
      LINK       → DesiredLink(dest path, store artifact)   [path: override skips discovery]
      COPY       → DesiredCopy(dest path, store artifact)
      MERGE      → DesiredMerge(config file, pointer, fragment keys)
@@ -384,9 +455,28 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
 4. Persist manifest (and the lock again if trust was granted); ensure .agentry/ is in .gitignore.
 ```
 
-`sync` is **idempotent**: a second run with the same inputs is a no-op. With
-`update=True` it ignores the locked SHA, re-resolves each ref to its tip, and rewrites
-the lock — the only operation that advances versions.
+`sync` is **idempotent**: a second run with the same inputs is a no-op. **`agentry update`** is
+the only operation that advances versions. It ignores the locked SHA, re-resolves each ref to its
+tip, and rewrites the lock. With no argument it does this for every source.
+`agentry update A [B…]` (`resolve_graph(update_only=…)`) scopes it to the named sources, which may be configured or synthesized
+lock entries:
+- **Validation.** Unknown names fail before any network call or write, with exit 1 and a
+  did-you-mean.
+- **Other sources.** Every other source keeps its pin, its trust and its lock bytes.
+- **Generators.** Only generators of the updated sources re-run.
+- **Transitive dependencies** of a named source are not re-pinned automatically. If the source's
+  new revision requires a dependency at a *different* ref, the pin-identity rule (step 1) re-pins
+  that dependency anyway; if it requires the same ref, its pin is kept. Two exceptions:
+  - A dependency the new revision **newly introduces** has no pin, so it resolves normally.
+  - If the new revision needs a component that the **pinned** dependency doesn't provide, a scoped
+    update **exits 1 before the lock is written**, suggesting `agentry update A <dep>`
+    (`deps._check_provided`, which runs inside `resolve_graph`). Plain `sync` keeps its existing
+    "not provided" warning in the same situation.
+- **A failed resolve changes nothing.** Link installs are live symlinks into the store, so if
+  `resolve_graph` fails part-way, every git source this run already moved is checked back out
+  at its locked SHA before the error propagates (`deps._restore_checkouts`). That covers a
+  refused scoped update and any failure in the middle of an unscoped `update`. The checkout is
+  local, with no network, and the lock is never written.
 
 ## 7. Safety model
 
@@ -406,11 +496,32 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
     and the component is not merged into that destination, with a warning. An identical value
     is recorded as `preexisting`: it satisfies the component, but is never removed. Install
     also refuses a pointer section that is not an object, and a key another component already
-    owns. A refused component is all-or-nothing for that destination. For link+merge, the
+    owns. Refusal is all-or-nothing only on **first install** in a destination (W3, the
+    non-object section, is always whole-destination). Once a component is installed there, a
+    conflicting key is refused **per key**: the warning names it, the status row shows `drift`,
+    and the component's other keys keep updating (ADR-001 rev 4). For link+merge, the
     script directory is not linked either.
   - **User edits win.** If the on-disk value no longer matches the recorded fingerprint, sync
     keeps the user's version. It warns, and `status` and `doctor` report `drift` with a note.
     Sync does not revert the edit.
+  - **Keeping your own value** (`keep:`). A component's `keep:` list in `.agentry.yml` names
+    merged keys the user takes over. A bare `key` applies to every target; `<target>:<key>` limits
+    it to one. `agentry keep <ref> [<target>:]<key>` appends to the list.
+    - **Effect.** Agentry records a kept key as `preexisting` and never writes or removes it
+      again. That holds on disable and removal too, because keep is read from the declared
+      config, including disabled components. No drift warning is emitted, and `status` shows
+      `ok (kept)`.
+    - **Kept but missing.** A kept key is never created. Where a target has no entry for it (a
+      target added after a bare keep, or the user deleted their entry), `status` reports
+      `missing` with a note, and sync and `doctor` warn. Nothing is written.
+    - **Typos.** A `keep` entry that matches no key the component merges gets one warning.
+    - **Hints.** Drift and refusal messages suggest `agentry keep`. They give the bare key only
+      when it drifted on every target the component writes it to; otherwise they give
+      `<target>:<key>`, so following the hint never freezes a healthy target.
+    - **No reclaim.** Removing a key from `keep:` takes nothing back. The entry stays the user's
+      until they delete it; the next sync then re-creates agentry's version and owns it.
+    - **Why config, not the manifest.** The decision lives in committed config so it is shared
+      and reviewable. The manifest is gitignored and per-machine.
   - **Removal** deletes only owned, non-preexisting keys whose fingerprint still matches. An
     edited entry is left in place, with a warning. A key whose ownership was never proven (no
     fingerprint) is never removed.
@@ -421,8 +532,37 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
     `drift`, with a note on how to take the current version. Run a plain
     `agentry sync` once after upgrading, before `agentry update`, so the comparison is made
     against the locked revision. `status` migrates in memory and never writes.
-  - **Scope.** Event-keyed hook arrays (Claude, Gemini, Windsurf) are still owned as a whole
-    value: a user's existing `PreToolUse` array is refused, not merged into.
+  - **Event-keyed hook arrays** (array mode; ADR-001 PR 2). This applies when the desired value
+    is a list, as in the Claude, Gemini and Windsurf hooks.
+    - **Ownership per element.** Ownership is per **element**, identified by its fingerprint.
+      The record's `items` is ordered and aligned with the fragment's list. A `None` slot means
+      the slot is satisfied by the user's identical element, which agentry doesn't own.
+    - **Installing.** Agentry appends its elements to the user's list. The user's elements and
+      their order are never touched.
+    - **Updating.** An update replaces agentry's own element **in place**, pairing positions
+      between the old record and the new fragment.
+    - **Shared elements.** Elements are reference-counted across components: an identical
+      element two components ship is shared, and kept or pre-existing records count as claims.
+      Removing a component deletes only elements no other live record claims. It deletes the
+      event key only if the key is empty and agentry created it.
+    - **Edited elements.** An element of ours that the user edited or removed is reported (W2)
+      and not re-appended.
+    - **The user's identical copy.** A `None` slot also records the user's element fingerprint
+      (`user_items`). If upstream later changes that element while the user's copy is still
+      there, agentry keeps the user's and does **not** append. Appending would run the hook
+      twice. It reports a per-element W1b with a `keep` hint that covers the whole event. Once
+      the user deletes their copy, the next sync installs ours.
+    - **`created_key` hand-over.** `created_key` passes from a leaving record to one that stays
+      on the same key (`_hand_over_created_keys`, a pre-pass before planning). This means the
+      last component deletes an event key it empties.
+    - **`keep:`** on an event key stops that component writing to it. Its elements still count
+      as claims.
+    - **Conflicts.** A list on one side and an object on the other is a conflict (W1/W5).
+    - **Older records.** PR 1 and v1 records for list keys convert in place. A proven record
+      converts exactly. An unproven one claims only elements identical to what the component
+      ships now, and never deletes the key. This includes records being disabled in the same
+      sync, whose fragment is re-read from the source. A record whose fragment can't be
+      re-derived stays named.
 
 ### `${VAR}` placeholders: ship verbatim, warn on dead refs
 
@@ -537,11 +677,6 @@ gitignore.py    ensure .agentry/ is ignored
   since shipped too (`transform:` on a component, §4; `installers/transform.py`); what remains is
   the driver-level `transform` seam for cross-agent format/field translation.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
-- **Hook array-merge** — per-element ownership for event-keyed hook arrays (ADR-001 PR 2). It
-  would append agentry's matcher groups to the user's event array, and remove only those
-  groups by fingerprint, shared between components. Until then, an event array is owned as a
-  whole value, and an existing user array for the same event is refused rather than merged into
-  (§7).
 - **Automatic copy fallback** — the **copy** strategy itself ships (a target's `copy` capability
   map, or `"copy": true` per catalog repo, installs real files tracked in the manifest), but it is
   opt-in. What remains is choosing it *automatically* when the filesystem refuses symlinks

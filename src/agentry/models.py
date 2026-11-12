@@ -248,6 +248,22 @@ class ComponentTransform(BaseModel):
         return self
 
 
+def parse_keep(entry: str, owner: str = "component") -> tuple[str | None, str]:
+    """Split a ``keep:`` entry into ``(target or None, key)``; raise on a malformed one.
+
+    ``key`` applies to every target; ``<target>:<key>`` to one. The first ``:`` separates
+    them, so a key that itself contains ``:`` must be target-qualified.
+    """
+    if not isinstance(entry, str) or not entry.strip() or entry != entry.strip():
+        raise ValueError(f"{owner}: keep entry {entry!r} must be a non-empty key")
+    target, sep, key = entry.partition(":")
+    if not sep:
+        return None, entry
+    if not target or not key:
+        raise ValueError(f"{owner}: keep entry {entry!r} must be '<key>' or '<target>:<key>'")
+    return target, key
+
+
 class Component(BaseModel):
     """A single installable component declared in the config."""
 
@@ -266,6 +282,9 @@ class Component(BaseModel):
     # If set, the component self-installs by running this spec's command (GENERATE strategy)
     # instead of linking/merging an artifact. Mutually exclusive with ``path``.
     generate: GeneratorSpec | None = None
+    # Merged keys the user keeps as their own (ADR-001 "keep"): agentry never writes or
+    # removes them again. A bare ``key`` applies to every target; ``<target>:<key>`` to one.
+    keep: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_path(self) -> Component:
@@ -275,6 +294,8 @@ class Component(BaseModel):
             raise ValueError(f"{self.ref}: 'generate' and 'transform' are mutually exclusive")
         if self.path:
             _check_rel(f"{self.ref}: path", self.path)
+        for entry in self.keep:
+            parse_keep(entry, self.ref)
         return self
 
     @property
@@ -282,8 +303,51 @@ class Component(BaseModel):
         """Stable identifier used on the CLI: ``<source>/<type>/<name>``."""
         return f"{self.source}/{self.type.value}/{self.name}"
 
+    def kept_keys(self, target: str) -> frozenset[str]:
+        """The merged keys this component keeps as the user's on ``target``."""
+        out = set()
+        for entry in self.keep:
+            scope, key = parse_keep(entry, self.ref)
+            if scope is None or scope == target:
+                out.add(key)
+        return frozenset(out)
+
     def applies_to(self, project_targets: list[str]) -> list[str]:
-        return self.targets if self.targets is not None else project_targets
+        """The targets this component installs into: the project's ``targets:``, narrowed to
+        the component's own ``targets:`` when set (intersection — a component can only
+        *restrict* where it goes, never switch a target on; that's the project's list)."""
+        if self.targets is None:
+            return list(project_targets)
+        return [t for t in self.targets if t in project_targets]
+
+    def inactive_targets(self, project_targets: list[str]) -> list[str]:
+        """Targets this component lists that the project hasn't activated (so it skips)."""
+        if self.targets is None:
+            return []
+        return [t for t in self.targets if t not in project_targets]
+
+
+class ExpectRule(BaseModel):
+    """``target_profiles[tool][type].expect`` — content rules for that type on that tool.
+
+    Same fields as :class:`agentry.spec.FormatExpectation`. Omitting ``expect`` on a profile
+    rule inherits the built-in expectation (a strategy-only override, e.g. ``copy`` on
+    Windows, still gets the warnings); ``expect: {}`` drops it; ``expect: {…}`` replaces it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    extension: str | None = None
+    events: list[str] | None = None
+    require: list[str] = Field(default_factory=list)
+    types: dict[str, Literal["array", "object", "string", "number", "boolean"]] = Field(
+        default_factory=dict
+    )
+    forbid: list[str] = Field(default_factory=list)
+    values: dict[str, list[str]] = Field(default_factory=dict)
+    reject: dict[str, list[str]] = Field(default_factory=dict)
+    reject_hint: str = ""
+    expects: str = ""
 
 
 class ProfileRule(BaseModel):
@@ -298,6 +362,8 @@ class ProfileRule(BaseModel):
     # "${CLAUDE_PROJECT_DIR}/.claude/hooks/{name}"). Both optional; {name} expands.
     rewrite_from: str | None = None
     rewrite_to: str | None = None
+    # Optional content expectations for this type on this tool (see ExpectRule).
+    expect: ExpectRule | None = None
 
     @model_validator(mode="after")
     def _check(self) -> ProfileRule:
@@ -379,12 +445,21 @@ class Config(BaseModel):
         return next((c for c in self.components if c.ref == ref), None)
 
     def active_targets(self) -> set[str]:
-        """Every target referenced by the project or any component."""
-        active = set(self.targets)
+        """The targets agentry installs into: the project's ``targets:`` (the switch).
+
+        A component's ``targets:`` only narrows within these — see
+        :meth:`Component.applies_to` and :meth:`referenced_targets`.
+        """
+        return set(self.targets)
+
+    def referenced_targets(self) -> set[str]:
+        """Every target named anywhere — project or component ``targets:``. Used only to
+        check resolvability, so a typo in a component's list is still fatal."""
+        named = set(self.targets)
         for c in self.components:
             if c.targets:
-                active.update(c.targets)
-        return active
+                named.update(c.targets)
+        return named
 
 
 # -- source descriptor (optional, lives in the source repo) ---------------
@@ -596,7 +671,13 @@ class OwnedEntry(BaseModel):
     mode: Literal["named", "array"] = "named"
     fingerprint: str | None = None  # named: fp of the value agentry wrote
     preexisting: bool = False  # named: identical user entry; never removed
-    items: list[str] = Field(default_factory=list)  # array: fps agentry appended, in order
+    kept: bool = False  # named, with preexisting: became the user's via the component's keep:
+    # array: one slot per desired element, in fragment order — the fp of the element this
+    # record claims, or None when the slot is satisfied by the user's identical element.
+    items: list[str | None] = Field(default_factory=list)
+    # array: for a None slot, the fp of the user's element that satisfies it (so an upstream
+    # change is reported instead of appending a second copy). Empty when there are none.
+    user_items: list[str | None] = Field(default_factory=list)
     created_key: bool = False  # array: agentry created the event key itself
 
 

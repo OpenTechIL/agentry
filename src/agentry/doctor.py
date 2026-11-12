@@ -24,9 +24,9 @@ from .envscan import unset_env_refs
 from .lockfile import load_lock
 from .models import MERGE_TYPES, Component, ComponentType, Config, Source
 from .progname import CANONICAL, prog
-from .reconcile import status
+from .reconcile import compute_desired, status
 from .resolver import ResolveError, effective_root
-from .targets import unresolved_targets
+from .targets import describe_unresolved, unresolved_targets
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,10 @@ def command_name_check() -> Check | None:
         f"`agy` on PATH is {found}, not this agentry (Google's Antigravity CLI also uses "
         f"the name) — invoke agentry as `{CANONICAL}` or `agyx` to be unambiguous",
     )
+
+
+def _sentence(text: str) -> str:
+    return text if text.endswith(("?", ".")) else text + "."
 
 
 def _component_checks(
@@ -127,7 +131,11 @@ def run_checks(root: Path) -> list[Check]:
     for t in unresolved_targets(config):
         checks.append(
             Check(
-                "error", "target", f"target '{t}' is undefined — no built-in, profile, or overlay"
+                "error",
+                "target",
+                f"{_sentence(describe_unresolved(t, config))} No built-in, profile, or overlay "
+                "defines it — "
+                f"fix `targets:`, define it under target_profiles, or `{prog()} target add {t}`",
             )
         )
 
@@ -150,6 +158,14 @@ def run_checks(root: Path) -> list[Check]:
         if comp.enabled:
             checks.extend(_component_checks(root, comp, config, sources_by_name, drivers, indexes))
 
+    # Cross-target content mismatches (phase A): the same findings sync warns about, from
+    # the same read-only plan computation, reported as warnings so --strict fails on them.
+    plan = compute_desired(root, augmented, [])
+    for issue in plan.format_issues:
+        checks.append(Check("warn", "format", issue))
+    for issue in plan.inactive:  # component targets the project hasn't activated
+        checks.append(Check("warn", "target", issue))
+
     try:
         rows, _ = status(root)
         for r in rows:
@@ -168,11 +184,11 @@ def run_checks(root: Path) -> list[Check]:
                             "drift",
                             f"{e.file}: '{e.pointer}.{e.key}' (from {r.ref} → {r.target}) {why}"
                             f" — delete it and run `{prog()} sync` to get the current version, "
-                            f"or disable {r.ref} to keep yours",
+                            f"or run `{prog()} keep {r.ref} {e.keep_arg or e.key}` to keep yours",
                         )
                     )
                 continue
-            if r.state != "ok":
+            if not r.state.startswith("ok"):  # "ok (kept)" is healthy: the user's choice
                 # A row with a note can't be fixed by sync (a refused merge, a hand edit):
                 # say why instead of the generic hint (ADR-001, PM C2).
                 hint = r.note or f"run `{prog()} sync`"

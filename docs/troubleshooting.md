@@ -81,6 +81,11 @@ target_profiles:
       dest: .claude/agents/{name}.md
 ```
 
+Overriding only `strategy` keeps the target's built-in [format checks](config-reference.md#expect).
+If you switch an OpenCode or Gemini type to `copy`, you still get its
+[format warnings](#a-component-may-not-work-on-its-target-format-warnings). Add `expect: {}` to
+the rule only if your override also changes the format the tool reads.
+
 ## `<path> already exists and is not managed by agentry`
 
 **Cause.** Working as intended: agentry refuses to overwrite anything it did not install.
@@ -137,8 +142,29 @@ file removes it.
 `mcp` and `hook` components add named entries to a shared config file such as `.mcp.json`,
 `.claude/settings.json` or `.vscode/mcp.json`. agentry only changes entries it added itself, and
 it can tell whether an entry on disk is still the one it wrote. When it can't merge safely, it
-leaves the file alone, skips that component **for that file only**, and prints one of the
-warnings below. `sync` still exits 0.
+leaves your entry alone and prints one of the warnings below. `sync` still exits 0.
+
+**Hook events are shared, not refused.** A hook event such as `PreToolUse` holds a list of hook
+groups. If you already have that event, agentry appends its groups after yours, keeps your
+groups and their order, and removes only its own groups on uninstall. So the "already has …"
+refusal below applies to named entries such as MCP servers. For hooks, it applies only when the
+event exists but isn't a list:
+
+```text
+demo/hook/c: .claude/settings.json already has 'hooks.Stop' (not added by agentry) as an object, not a list — left unchanged; demo/hook/c was not merged into claude. Fix or remove your entry, or disable demo/hook/c, then re-run sync.
+```
+
+Fix that event so it holds a list (or remove it), then re-run sync. Hook-specific warnings are
+under [hook groups](#hook-groups-edited-or-removed).
+- **On first install,** a conflict skips the whole component for that file, so nothing is
+  half-installed.
+- **Once the component is installed,** only the conflicting entry is skipped. The component's
+  other entries keep updating.
+
+Where a warning suggests `agentry keep`, it names the exact command, scoped as narrowly as
+possible. It names only the targets where the entry drifted (for example `claude:github`). It
+uses the bare `<key>` only when the entry drifted on every target the component writes it to,
+which includes a component with a single target.
 
 To find these later:
 - `agentry status` shows the row as `missing` (or `drift`) and prints the reason under the table.
@@ -154,7 +180,9 @@ Running `agentry sync` again does not fix these. Apply the fix first.
 
 **Cause.** The file already has an entry with that name, for example an MCP server called
 `github` that you added by hand, and it differs from the component's entry. agentry won't
-overwrite something it didn't create.
+overwrite something it didn't create. If the component was already installed and the entry is a
+new one from upstream, the message says `'<key>' was not merged into <target>`. Only that entry is
+skipped in that case.
 
 **Fix.** Choose one, then run `agentry sync`:
 - **Keep both.** Rename your entry.
@@ -178,14 +206,91 @@ creates and owns it.
 ### `is your entry (it matched <ref> earlier, but upstream has changed)`
 
 ```text
-<ref>: '<pointer>.<key>' in <file> is your entry (it matched <ref> earlier, but upstream has changed) — keeping yours. Delete it and re-run sync to take <ref>'s version.
+<ref>: '<pointer>.<key>' in <file> is your entry (it matched <ref> earlier, but upstream has changed) — keeping yours. Delete it to take <ref>'s version, or run `agentry keep <ref> [<target>:]<key>` to keep it.
 ```
 
 **Cause.** This follows the previous case. The source has since updated the entry, and yours no
-longer matches it. agentry still won't change your entry.
+longer matches it. agentry still won't change your entry. Only this entry is held back, and the
+component's other entries keep updating. `status` shows the row as `drift`.
 
-**Fix.** To take the new version, delete your entry and run `agentry sync`. To keep yours, run
-`agentry disable <ref>`.
+**Fix.** To take the new version, delete your entry and run `agentry sync`. To keep yours and
+stop the warning, run the `agentry keep …` command from the message.
+
+### `kept, but no entry on <target>`
+
+```text
+demo/mcp/servers: 'mcpServers.github' in .cursor/mcp.json — kept, but no entry on cursor; nothing installed. Add yours, remove it from `keep:` to let agentry install it, or narrow keep to `<target>:<key>`.
+```
+
+When this happens for two or more keys, sync prints one summary line instead, and
+`agentry doctor` lists each one:
+
+```text
+2 keys in keep: have no entry on one or more targets and were not installed — run `agentry doctor` for the list
+```
+
+**Cause.** The component's [`keep:`](config-reference.md#keep) list has a bare key such as
+`github`, which applies to every target, including targets you added later. On this target
+there's no entry with that name, and agentry never creates a kept entry. The usual causes are a
+target you added after keeping the key, or a kept entry you deleted. `status` shows the row as
+`missing`, and `doctor --strict` fails on it.
+
+**Fix.** Choose one:
+- **Add your own entry** to that file.
+- **Let agentry install it.** Remove the key from `keep:`.
+- **Scope the keep.** Change it to `<target>:<key>` (for example `claude:github`) so it covers
+  only the targets where you want your own value.
+
+### `is your entry (no longer in keep:)`
+
+```text
+demo/mcp/servers: 'mcpServers.github' in .mcp.json is your entry (no longer in keep:) — left unchanged. Delete it and re-run sync to take demo/mcp/servers's version.
+```
+
+**Cause.** You removed this entry from the component's [`keep:`](config-reference.md#keep) list,
+but your own value is still in the file. agentry still treats it as yours and leaves it alone.
+The component's other entries keep updating.
+
+**Fix.** To hand it back to agentry, delete the entry and run `agentry sync`. To keep it after
+all, add it back with `agentry keep <ref> [<target>:]<key>`.
+
+### Hook groups edited or removed
+
+```text
+demo/hook/a: 1 hook group of 'hooks.PreToolUse' in .claude/settings.json no longer matches what agentry installed (edited or removed) — left as is. To reinstall, disable demo/hook/a, sync, then re-enable it; or run `agentry keep demo/hook/a PreToolUse` to keep yours.
+```
+
+With several, it reads `2 hook groups of … no longer match …`.
+
+**Cause.** You edited or deleted a hook group that agentry added to an event. agentry can't tell
+an edit from a deletion here. Re-adding the original could make the same hook run twice, so it
+leaves the event as it is. `status` shows the row as `drift`. The component's other events, and
+other packs' groups on the same event, keep updating.
+
+**Fix.** Choose one:
+- **Keep your version.** Run `agentry keep <ref> <event>` (the message gives the exact
+  command). This hands that component's groups on that event over to you. agentry stops writing
+  to that event for that component, and other packs are unaffected.
+- **Reinstall agentry's version.** Run `agentry disable <ref>`, `agentry sync`, then
+  `agentry enable <ref>`.
+
+### `your copy of <ref>'s '<event>' hook group … differs from upstream`
+
+```text
+demo/hook/a: your copy of demo/hook/a's 'hooks.PreToolUse' hook group in .claude/settings.json differs from upstream — keeping yours; delete it to take demo/hook/a's version, or run `agentry keep demo/hook/a PreToolUse` to keep yours (this stops demo/hook/a adding hooks to PreToolUse).
+```
+
+**Cause.** You already had a hook group identical to one a pack ships, so agentry used yours
+instead of adding a duplicate. The pack's version has since changed upstream. Your group is
+still yours, so agentry leaves it alone. It also doesn't add the new version next to it, because
+the hook would then run twice. `status` shows the row as `drift`. With several groups, it reads
+`your copies of 2 of <ref>'s '<event>' hook groups … differ from upstream`.
+
+**Fix.** Choose one:
+- **Take the pack's version.** Delete your group and run `agentry sync`. agentry installs the
+  new version and manages it from then on.
+- **Keep yours.** Run the `agentry keep …` command from the message. This also stops that pack
+  adding any hooks to that event.
 
 ### `'<pointer>' in <file> is a <type>, not an object`
 
@@ -207,7 +312,7 @@ anything you need from the old value. Then run `agentry sync`.
 ```
 
 **Cause.** Two enabled components ship an entry with the same name for the same file. Only one
-of them can have it.
+of them can have it. Only that entry is skipped. The component's other entries still install.
 
 **Fix.** Run `agentry disable` on whichever component you don't want. If you need both, rename
 the entry in one of the sources, or ask its author to.
@@ -215,7 +320,20 @@ the entry in one of the sources, or ask its author to.
 ### `was edited after agentry installed it` (status shows `drift`)
 
 ```text
-<ref>: '<pointer>.<key>' in <file> was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's.
+<ref>: '<pointer>.<key>' in <file> was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's, or run `agentry keep <ref> [<target>:]<key>` to keep yours.
+```
+
+For example, with `claude` and `copilot` as targets and the entry edited only in `.mcp.json`:
+
+```text
+demo/mcp/servers: 'mcpServers.github' in .mcp.json was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's, or run `agentry keep demo/mcp/servers claude:github` to keep yours.
+```
+
+If you edited it in both `.mcp.json` and `.vscode/mcp.json`, each warning suggests the bare key:
+
+```text
+demo/mcp/servers: 'mcpServers.github' in .mcp.json was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's, or run `agentry keep demo/mcp/servers github` to keep yours.
+demo/mcp/servers: 'servers.github' in .vscode/mcp.json was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's, or run `agentry keep demo/mcp/servers github` to keep yours.
 ```
 
 **Cause.** You changed an entry that agentry installed. agentry keeps your edit and stops
@@ -223,14 +341,20 @@ updating that entry from upstream. The warning repeats on every sync until you r
 `agentry doctor` lists every such entry with its file and component (see the
 [example below](#was-recorded-by-an-older-agentry-and-differs-from-the-current-source)).
 
-**Fix.** To keep your edit, leave it. agentry won't delete it on removal either (see the next
-entry). To go back to agentry's version and receive upstream updates again, delete the entry and
-run `agentry sync`.
+**Fix.** Choose one:
+- **Keep your edit.** Run the `agentry keep …` command from the message. This adds the key to
+  the component's [`keep:`](config-reference.md#keep) list, so agentry stops warning and never
+  writes or removes the entry. `status` shows it as `ok (kept)`.
+- **Go back to agentry's version** and receive upstream updates again. Delete the entry and run
+  `agentry sync`.
+
+If a hook pack's events depend on each other (for example `PreToolUse` and `PostToolUse` scripts
+sharing state), keep or delete them together. agentry handles each entry independently.
 
 ### `was recorded by an older agentry and differs from the current source`
 
 ```text
-demo/mcp/github: 'mcpServers.github' in .mcp.json was recorded by an older agentry and differs from the current source — keeping it. If you didn't edit it, delete it and re-run sync to get the current version.
+demo/mcp/github: 'mcpServers.github' in .mcp.json was recorded by an older agentry and differs from the current source — keeping it. If you didn't edit it, delete it and re-run sync to get the current version, or run `agentry keep demo/mcp/github github` to keep yours.
 ```
 
 `agentry status` shows the row as `drift`. To get the full list of affected entries, run
@@ -239,8 +363,8 @@ component that installed it, and the fix. It also lists entries you edited by ha
 format, and `--strict` fails on any of them:
 
 ```text
-! drift  .mcp.json: 'mcpServers.github' (from demo/mcp/github → claude) was recorded by an older agentry and differs from the current source — delete it and run `agentry sync` to get the current version, or disable demo/mcp/github to keep yours
-! drift  .mcp.json: 'mcpServers.slack' (from demo/mcp/slack → claude) was edited by hand — delete it and run `agentry sync` to get the current version, or disable demo/mcp/slack to keep yours
+! drift  .mcp.json: 'mcpServers.github' (from demo/mcp/github → claude) was recorded by an older agentry and differs from the current source — delete it and run `agentry sync` to get the current version, or run `agentry keep demo/mcp/github github` to keep yours
+! drift  .mcp.json: 'mcpServers.slack' (from demo/mcp/slack → claude) was edited by hand — delete it and run `agentry sync` to get the current version, or run `agentry keep demo/mcp/slack slack` to keep yours
 ```
 
 **Cause.** You upgraded from an agentry version that didn't record what it wrote into config
@@ -256,27 +380,32 @@ in place, agentry reminds you:
 manifest from an older agentry: run `agentry sync` before `agentry update` so installed entries can be verified
 ```
 
-**Fix.** Go through `agentry doctor`'s list. For each entry you edited and want to keep, leave
-it, or run `agentry disable <ref>` to stop the warning. Delete every other entry and run
-`agentry sync`. agentry then installs the current version and manages it from then on.
+**Fix.** Go through `agentry doctor`'s list:
+- **For each entry you edited and want to keep,** run the `agentry keep …` command doctor prints.
+  agentry then stops warning about it and never touches it.
+- **Delete every other entry** and run `agentry sync`. agentry installs the current version and
+  manages it from then on.
 
 ### `was edited after install — left in place on removal`
 
 ```text
-<ref>: '<pointer>.<key>' in <file> was edited after install — left in place on removal; delete it by hand if unused.
+<ref>: '<pointer>.<key>' in <file> was edited after install — left in place on removal; delete it by hand if unused, or run `agentry keep <ref> [<target>:]<key>` to keep it as yours.
 ```
 
 **Cause.** You removed or disabled a component whose entry you had edited. agentry treats the
 edited entry as yours, so it doesn't delete it.
 
-**Fix.** If you no longer need the entry, delete it from the file by hand.
+**Fix.** If you no longer need the entry, delete it from the file by hand. If you want it, leave
+it. This warning appears only once, when the component is removed. To record the entry as yours
+in `.agentry.yml`, in case you enable the component again later, run the `agentry keep …` command
+from the message.
 
 If you remove a component whose entry agentry couldn't verify after an upgrade (see
 [the previous entry](#was-recorded-by-an-older-agentry-and-differs-from-the-current-source)),
 you get a variant of this warning:
 
 ```text
-<ref>: '<pointer>.<key>' in <file> could not be verified as agentry's (recorded by an older agentry) — left in place on removal; delete it by hand if unused.
+<ref>: '<pointer>.<key>' in <file> could not be verified as agentry's (recorded by an older agentry) — left in place on removal; delete it by hand if unused, or run `agentry keep <ref> [<target>:]<key>` to keep it as yours.
 ```
 
 The fix is the same.
@@ -297,6 +426,154 @@ agentry can check the entry, and it removes a matching one cleanly without this 
 
 **Fix.** Open `<file>` and delete the hook entries under `<pointer>.<key>` that reference
 `<link path>`. Keep any hook commands you added yourself.
+
+## A component may not work on its target (format warnings)
+
+agentry puts a component where each tool looks for it, but it doesn't translate the content.
+Some tools expect a different format, so agentry checks for known mismatches. It still installs
+the component as-is, prints a `may not work in <target>` warning, and `agentry doctor` lists it
+under the `format` category (`doctor --strict` fails). Each warning names what the target expects
+and what's wrong.
+
+The general fixes:
+- **For `mcp` and `hook` components, ship a per-target variant.** Put a
+  `<base>-<target>.json` file next to the original in the same source, for example
+  `mcp/github-opencode.json` next to `mcp/github.json`, and enable both. On that target only the
+  variant installs, and every other target keeps the original. `agentry why <ref>` shows which
+  file each target gets:
+
+  ```text
+  demo/mcp/github
+  └── installs to
+      ├── claude  .mcp.json:mcpServers  ok
+      └── opencode  replaced by demo/mcp/github-opencode
+  demo/mcp/github-opencode
+  └── installs to
+      └── opencode ← github-opencode.json (variant; replaces github.json)  opencode.json:mcp  ok
+  ```
+
+- **For other types (such as commands), ship a second component limited with `targets:`.**
+  Restrict the original to the targets it works on, and limit the target-specific copy to the
+  problem target ([`targets`](config-reference.md#components) on each entry).
+- **Override the rule** under [`target_profiles`](config-reference.md#target_profiles). If your
+  override changes the format the tool reads, add `expect: {}` to drop the check.
+
+### OpenCode: an MCP server in Claude's shape
+
+```text
+demo/mcp/github: may not work in opencode (expects `type: "local"` with `command` as one array and `environment`): 'github' has no 'type'; 'github'.command is a string, not an array; 'github' uses 'args', which is not accepted; 'github' uses 'env', which is not accepted — installed as-is. Ship an opencode-specific mcp, or override mcp for opencode under target_profiles
+```
+
+**Cause.** OpenCode's `opencode.json` wants `type: "local"` (or `"remote"`), `command` as one
+array with the arguments included, and `environment` instead of `env`. It rejects unknown fields
+such as `args`. A Claude-style `{"command": "npx", "args": [...], "env": {...}}` entry doesn't
+start. A `type: "http"` entry gets the same warning (`'docs'.type is 'http', not one of local,
+remote`).
+
+**Fix.** Ship an OpenCode variant, `mcp/github-opencode.json`, in the same source and enable
+it alongside `github`:
+
+```json
+{"github": {"type": "local", "command": ["npx", "-y", "gh-mcp"], "environment": {"TOKEN": "x"}}}
+```
+
+OpenCode then gets only the variant, and the other targets keep `mcp/github.json`.
+
+### Gemini: a command that isn't a `.toml` file
+
+```text
+demo/command/review: may not work in gemini (expects a TOML command file with a `prompt` field): 'review.md' is not a .toml file — installed as-is. Ship a gemini-specific command, or override command for gemini under target_profiles
+```
+
+**Cause.** Gemini CLI reads custom commands from TOML files with a `prompt` field. A Markdown
+command is linked in under a `.toml` name, but its content is still Markdown, so Gemini can't
+load it.
+
+**Fix.** Ship a `review.toml` command (with `prompt = "…"`) as a separate component limited to
+`targets: [gemini]`, and limit the Markdown one to the other targets.
+
+### Gemini: hook events with Claude names
+
+```text
+demo/hook/guard: may not work in gemini (expects Gemini hook event names (BeforeTool, AfterTool, SessionStart, …)): unknown event(s) PreToolUse — installed as-is. Ship a gemini-specific hook, or override hook for gemini under target_profiles
+```
+
+**Cause.** Gemini names its hook events differently, for example `BeforeTool` and `AfterTool`
+instead of Claude's `PreToolUse` and `PostToolUse`. A hook under a Claude event name is merged
+but never fires.
+
+**Fix.** Ship a Gemini variant with Gemini event names, for example `hooks/guard-gemini.json`
+with `{"BeforeTool": [...]}`, in the same source, and enable it alongside `guard`. Gemini then
+gets only `BeforeTool`, and Claude keeps `PreToolUse`.
+
+### Gemini: an HTTP MCP server read as SSE
+
+```text
+demo/mcp/docs: may not work in gemini (expects `httpUrl` for HTTP servers (`url` means SSE)): 'docs'.type is 'http' — Gemini reads `url` as SSE; use `httpUrl` for streamable HTTP — installed as-is. Ship a gemini-specific mcp, or override mcp for gemini under target_profiles
+```
+
+**Cause.** Gemini has no `type` field for MCP servers. It treats `url` as an SSE endpoint and
+`httpUrl` as streamable HTTP. A Claude-style `{"type": "http", "url": "…"}` entry (or
+`type: "streamable-http"`) quietly connects over SSE, which fails against an HTTP-only server.
+
+**Fix.** Ship a Gemini variant, `mcp/docs-gemini.json`, that uses `httpUrl`, and enable it
+alongside `docs`:
+
+```json
+{"docs": {"httpUrl": "https://example.com/mcp"}}
+```
+
+## A summary line instead of individual warnings
+
+To keep output readable, `sync`, `install`, `update` and `add` collapse a warning that occurs two
+or more times into one line:
+
+```text
+! 2 components skipped on targets that don't support their type — run with `--verbose` for the list (expected; see `agentry target drivers`)
+! 2 merged entries differ from their source and were kept as-is — run `agentry doctor` for the list
+```
+
+**Skipped components** are normal when your targets have different capabilities. Cursor has no
+skills, for example, so with `claude` and `cursor` as targets every skill is skipped for Cursor.
+`agentry doctor` doesn't list these skips and `doctor --strict` doesn't fail on them. To see each
+one, rerun with `-v`:
+
+```text
+! demo/skill/a: target 'cursor' does not support skill — skipped
+! demo/skill/b: target 'cursor' does not support skill — skipped
+```
+
+`agentry target drivers` lists the built-in targets. The
+[capability table in the README](https://github.com/OpenTechIL/agentry/blob/main/README.md#supported-agents)
+shows which component types each target installs.
+
+**Component targets that aren't active** (a component's `targets:` names a target the project
+doesn't list) are summarized too:
+
+```text
+! 2 component targets aren't active in this project and were skipped — run `agentry doctor` for the list
+```
+
+See [`target '<name>' is not in the project's targets — skipped`](#target-name-is-not-in-the-projects-targets-skipped).
+
+**Format mismatches** have their own summary:
+
+```text
+! 4 components may not work on their target (format mismatch) — run `agentry doctor` for the list
+```
+
+It counts components, not warnings: one component that fails on two targets counts once.
+`agentry doctor` lists each (component, target) case under `format`. See
+[format warnings](#a-component-may-not-work-on-its-target-format-warnings).
+
+**Merged entries that differ** are entries you edited by hand, or entries an older agentry
+recorded that no longer match their source. `agentry doctor` lists each one with its file, key
+and fix. See
+[`was recorded by an older agentry and differs from the current source`](#was-recorded-by-an-older-agentry-and-differs-from-the-current-source).
+
+To print every warning in full, as earlier versions did, pass `-v` / `--verbose` to any of those
+commands. Warnings that need action always print individually: refused merges, unparseable
+files, the trust gate, and unset `${VAR}`s.
 
 ## Reading `agentry doctor`
 
@@ -333,6 +610,98 @@ agentry target add foo       # shows the destinations, then asks before applying
 `target add` prints every destination the overlay will write to and prompts for
 confirmation, because an overlay arrives over the network and dictates where files land.
 Pass `--yes` in CI once you've reviewed it.
+
+## `target '<name>' is not defined` — nothing was changed
+
+**Symptom.** A command exits 1 with:
+
+```text
+target 'cladue' is not defined — did you mean 'claude'? Nothing was changed. Fix `targets:` in .agentry.yml, define it under target_profiles, or install a driver overlay (`agentry target list`, then `agentry target add cladue`).
+```
+
+If the typo is in one component's `targets:` list, the message starts with that component:
+
+```text
+demo/skill/a: target 'claud' is not defined — did you mean 'claude'? Nothing was changed. Fix `targets:` in .agentry.yml, define it under target_profiles, or install a driver overlay (`agentry target list`, then `agentry target add claud`).
+```
+
+**Cause.** A name in `targets:` has no built-in driver, no `target_profiles` entry and no
+installed overlay, which is usually a typo. agentry stops before touching anything. Your
+installed files stay as they are, and a command that would edit `.agentry.yml` (`add`,
+`enable`, `keep`, …) doesn't save its change. Earlier versions treated the unknown name as an
+empty target and uninstalled the components of the target you meant.
+
+**Fix.** Correct the name in `targets:` (the message suggests the closest one), then re-run the
+command. If the name is a real tool agentry doesn't ship, define it under
+[`target_profiles`](config-reference.md#target_profiles) or install a catalog overlay with
+`agentry target add <name>`. `agentry catalog add` still works while the config is in this
+state. Removing the component whose `targets:` holds the typo also works.
+
+`agentry target use` gives the same kind of hint for a name that doesn't exist:
+
+```text
+'cursr' isn't a built-in target and has no target_profiles entry. Did you mean 'cursor'? Built-ins: claude, opencode, cursor, codex, gemini, windsurf, kimi, copilot, kiro, agents. For a community driver overlay, run `agentry target add cursr` first, then `agentry target use cursr`.
+```
+
+## `target '<name>' is not in the project's targets — skipped`
+
+**Symptom.** sync, status or doctor prints:
+
+```text
+! demo/skill/a: target 'opencode' is not in the project's targets — skipped. Add it with `agentry target use opencode`, or remove it from this component.
+```
+
+**Cause.** The component's own `targets:` lists a target that the project's `targets:` doesn't.
+A component's `targets:` can only narrow the project's list, so agentry skips that target. If
+an earlier agentry version had installed the component there, the next sync removes it and
+prints each removal (`- link …`, `- merge …`). Only agentry's own entries are removed: entries
+you added by hand to that tool's config stay. `agentry doctor` reports it as a `target`
+warning, so `doctor --strict` fails. `agentry target list` shows these under **Referenced but
+not active**:
+
+```text
+Referenced but not active (components skip these)
+  opencode ← demo/skill/a, demo/mcp/github — activate with `agentry target use opencode`
+```
+
+When two or more are skipped, sync prints one summary line instead, and `agentry doctor` lists
+each one:
+
+```text
+! 2 component targets aren't active in this project and were skipped — run `agentry doctor` for the list
+```
+
+A `generate` component whose targets are all inactive is skipped the same way, and its
+generator doesn't run. `agentry keep <ref> <target>:<key>` also refuses an inactive target:
+
+```text
+target 'opencode' isn't in the project's targets — add it with `agentry target use opencode`, or keep the bare '<key>' for the targets demo/mcp/github does install into.
+```
+
+**Fix.** If you do want that tool, activate it for the project with
+`agentry target use <name>`. Otherwise remove the name from the component's `targets:`.
+
+## `agentry update <source>` fails: `now requires … but the pinned source … doesn't provide`
+
+**Symptom.**
+
+```text
+a/skill/ra now requires b/skill/newthing, but the pinned source 'b' doesn't provide 'newthing'. Nothing was changed. Update both: `agentry update a b`
+```
+
+**Cause.** `agentry update a` updates only source `a`. Every other source keeps the revision
+pinned in `.agentry.lock`. The new revision of `a` depends on a component that the pinned
+revision of `b` doesn't have yet. Rather than install half of it, agentry stops before writing
+anything.
+
+**Fix.** Update both sources together, as the message says (`agentry update a b`), or run a bare
+`agentry update` to update everything.
+
+A misspelled name fails the same way, without changes:
+
+```text
+unknown source 'aa' — did you mean 'a'? Nothing was changed. See `agentry source list`.
+```
 
 ## `--frozen` fails in CI
 

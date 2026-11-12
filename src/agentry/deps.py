@@ -21,6 +21,7 @@ set exactly like a hand-written config, so installation is unchanged downstream.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 from collections import deque
 from collections.abc import Callable
@@ -120,8 +121,91 @@ def _choose_pin(
     return None if (update or changed) else existing.resolved
 
 
+def _check_provided(
+    root: Path,
+    comp: Component,
+    dep: Dependency,
+    dep_src: Source,
+    dep_ref: str,
+    update_only: frozenset[str] | None,
+    warnings: list[str],
+) -> None:
+    """Warn when ``dep_src`` doesn't provide the required component — or, in a scoped
+    update that moved ``comp``'s source but not ``dep_src``, refuse before anything is
+    written (the new revision needs a component the pinned dependency lacks)."""
+    idx = discovery.index(effective_root(root, dep_src))
+    if (dep.type, dep.name) in idx:
+        return
+    if update_only is not None and comp.source in update_only and dep_src.name not in update_only:
+        raise DependencyError(
+            f"{comp.ref} now requires {dep_ref}, but the pinned source '{dep_src.name}' "
+            f"doesn't provide '{dep.name}'. Nothing was changed. Update both: "
+            f"`{prog()} update {comp.source} {dep_src.name}`"
+        )
+    warnings.append(
+        f"{comp.ref} requires {dep_ref}, but '{dep.name}' is not provided by "
+        f"source '{dep_src.name}'"
+    )
+
+
+def _restore_checkouts(root: Path, moved: list[tuple[Source, str]], *, normalize: bool) -> None:
+    """Put store clones back at their locked revisions after a failed resolve.
+
+    Link installs are live symlinks into the store, so a source left checked out at a new
+    revision would change what's installed even though the lock (never written) still pins
+    the old one. The old SHA is already in the clone, so this is a local checkout. Best
+    effort: the original error is what the user needs to see.
+    """
+    for src, sha in reversed(moved):
+        if src.type is not SourceType.GIT:
+            continue  # local sources are a symlink to the user's dir; nothing to restore
+        with contextlib.suppress(ResolveError):
+            resolve(root, src, pinned=sha, normalize=normalize)
+
+
 def resolve_graph(
-    root: Path, config: Config, lock: Lock, *, update: bool = False, frozen: bool = False
+    root: Path,
+    config: Config,
+    lock: Lock,
+    *,
+    update: bool = False,
+    frozen: bool = False,
+    update_only: frozenset[str] | None = None,
+) -> tuple[DepGraph, Lock]:
+    """Resolve every source and the transitive component closure (see :func:`_resolve_graph`).
+
+    If resolution fails part-way (a refused scoped update, an unreachable dependency), every
+    source this run already checked out at a new revision is put back at its locked one
+    before the error propagates — the lock is never written on failure, and link installs
+    are live symlinks into the store, so the store must keep matching the lock.
+    """
+    moved: list[tuple[Source, str]] = []
+    try:
+        return _resolve_graph(
+            root,
+            config,
+            lock,
+            update=update,
+            frozen=frozen,
+            update_only=update_only,
+            moved=moved,
+        )
+    except BaseException:
+        # Any failure — a refused update, an unreachable dependency, or Ctrl-C mid-walk —
+        # leaves the lock unwritten, so the store must go back to matching it.
+        _restore_checkouts(root, moved, normalize=config.hashing.normalize_line_endings)
+        raise
+
+
+def _resolve_graph(
+    root: Path,
+    config: Config,
+    lock: Lock,
+    *,
+    update: bool = False,
+    frozen: bool = False,
+    update_only: frozenset[str] | None = None,
+    moved: list[tuple[Source, str]],
 ) -> tuple[DepGraph, Lock]:
     """Resolve every source and the transitive component closure.
 
@@ -148,7 +232,10 @@ def resolve_graph(
         if src.name in graph.resolved:
             return
         existing = lock.entry(src.name)
-        pinned = _choose_pin(existing, src, update=update, frozen=frozen)
+        # `update` re-resolves every source, or — with `update_only` (`agentry update A B`) —
+        # just the named ones; every other source keeps its lock pin (and so its trust).
+        updating = update and (update_only is None or src.name in update_only)
+        pinned = _choose_pin(existing, src, update=updating, frozen=frozen)
         entry = resolve(root, src, pinned=pinned, normalize=config.hashing.normalize_line_endings)
         if frozen and existing is not None and entry.resolved != existing.resolved:
             raise ResolveError(
@@ -169,6 +256,8 @@ def resolve_graph(
         )
         upsert_entry(new_lock, entry)
         graph.resolved[src.name] = entry.resolved
+        if existing is not None and entry.resolved != existing.resolved:
+            moved.append((src, existing.resolved))
 
     # 1. Resolve every configured source up front. Failures here abort (as before).
     for s in config.sources:
@@ -209,12 +298,7 @@ def resolve_graph(
             graph.edges.append(DepEdge(comp.ref, dep_ref))
 
             if dep_src.name in graph.resolved:
-                idx = discovery.index(effective_root(root, dep_src))
-                if (dep.type, dep.name) not in idx:
-                    graph.warnings.append(
-                        f"{comp.ref} requires {dep_ref}, but '{dep.name}' is not provided by "
-                        f"source '{dep_src.name}'"
-                    )
+                _check_provided(root, comp, dep, dep_src, dep_ref, update_only, graph.warnings)
 
             if dep_ref in roots:
                 continue  # already declared and managed explicitly
@@ -232,7 +316,6 @@ def resolve_graph(
                 )
                 trans[dep_ref] = (dep_comp, child_targets)
                 work.append(_Node(dep_comp, tuple(sorted(child_targets))))
-
     # 3. Assemble the augmented graph.
     graph.components = list(roots.values())
     for ref, (comp, targets) in trans.items():
