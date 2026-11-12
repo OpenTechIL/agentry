@@ -64,13 +64,30 @@ jobs:
   # Mode — yet the release workflow ships Windows and macOS binaries while tests ran on
   # Ubuntu only. One job per OS on a single Python version: enough to catch a
   # path/symlink/line-ending regression without quadrupling the matrix.
-  test-os:
-    name: Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
+  # Split into two jobs (not a matrix) because a job-level `if` cannot read `matrix`.
+  # The macOS runner pool is small, and dependabot bumps were starving it: jobs queued
+  # for 15+ minutes and were then cancelled unacquired. So macOS skips dependabot PRs
+  # (a skipped job counts as passing for required checks); pushes to main and every
+  # human PR still run it. timeout-minutes caps a hung run well under the 6h default.
+  test-macos:
+    name: Test (macos-latest)
+    if: github.event_name == 'push' || github.actor != 'dependabot[bot]'
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          enable-cache: true
+          python-version: "3.12"
+      - name: Run tests
+        run: uv run --locked --extra dev pytest -q
+
+  test-windows:
+    name: Test (windows-latest)
+    runs-on: windows-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install uv
