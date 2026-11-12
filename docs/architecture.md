@@ -220,8 +220,9 @@ writes it into `.agentry.yml`. Intent stays minimal; the lock captures the full 
 Only descriptor sources can declare dependencies (the convention scan carries none).
 
 **Merge fragment contract.** A `hooks/*.json` or `mcp/*.json` file is a JSON **object of
-named entries**. Each top-level key is merged under the target's pointer, and agentry
-records exactly those keys so removal never disturbs hand-added entries. Example
+named entries**. Each top-level key is merged under the target's pointer. Agentry records
+each key together with a **fingerprint** of the value it wrote: `sha256` of the canonical JSON,
+from `merge.fingerprint`. Ownership is proven by content, not by name (see §7). Example
 `mcp/github.json`:
 
 ```json
@@ -360,6 +361,7 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
    links:     remove manifest links not desired (safe-remove) → create/refresh desired
    merges:    remove manifest merges not desired (strip keys) → inject desired keys
    generated: remove orphans (delete produced paths) → run (only with --allow-run), record produced paths
+   (merges and link+merges run as one file-grouped pass after generated — see §7 Merges)
 
 4. Persist manifest; ensure .agentry/ is in .gitignore.
 ```
@@ -377,8 +379,32 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
   symlink at the same path is left alone (and overwrite raises rather than clobbers).
   The check is lexical (`abspath`, not `resolve`) so a local source — itself a symlink
   in the store — is still recognized as managed.
-- **Merges** — `merge.remove_merge` only deletes the specific keys recorded in the
-  manifest. Hand-added entries under the same pointer survive.
+- **Merges** — ownership is proven by content (ADR-001; manifest v2 records an `OwnedEntry`
+  per key):
+  - **One pass.** All merge and link+merge destinations are reconciled in a single pass that
+    runs after generators (`reconcile._reconcile_merge_targets`). Each file is parsed once and
+    written once, and only if it changed.
+  - **Install refuses** a key agentry did not create. A differing value is left byte-identical
+    and the component is not merged into that destination, with a warning. An identical value
+    is recorded as `preexisting`: it satisfies the component, but is never removed. Install
+    also refuses a pointer section that is not an object, and a key another component already
+    owns. A refused component is all-or-nothing for that destination. For link+merge, the
+    script directory is not linked either.
+  - **User edits win.** If the on-disk value no longer matches the recorded fingerprint, sync
+    keeps the user's version. It warns, and `status` and `doctor` report `drift` with a note.
+    Sync does not revert the edit.
+  - **Removal** deletes only owned, non-preexisting keys whose fingerprint still matches. An
+    edited entry is left in place, with a warning. A key whose ownership was never proven (no
+    fingerprint) is never removed.
+  - **Old manifests.** A v1 manifest (keys only) loads unchanged and is migrated on the next
+    sync. A recorded key becomes owned only if its on-disk value equals what the component
+    ships now. For link+merge, the comparison uses the rewritten fragment. Otherwise the key is
+    *unproven*: it is never updated or removed, and sync warns. `status` and `doctor` report it as
+    `drift`, with a note on how to take the current version. Run a plain
+    `agentry sync` once after upgrading, before `agentry update`, so the comparison is made
+    against the locked revision. `status` migrates in memory and never writes.
+  - **Scope.** Event-keyed hook arrays (Claude, Gemini, Windsurf) are still owned as a whole
+    value: a user's existing `PreToolUse` array is refused, not merged into.
 
 ### `${VAR}` placeholders: ship verbatim, warn on dead refs
 
@@ -512,6 +538,10 @@ gitignore.py    ensure .agentry/ is ignored
   keeping with "nothing of it runs while your agents do." Per-component copy-with-rewrite remains
   the next phase.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
-- **Hook array-merge** — richer merging for event-keyed hook arrays beyond the named-key contract.
+- **Hook array-merge** — per-element ownership for event-keyed hook arrays (ADR-001 PR 2). It
+  would append agentry's matcher groups to the user's event array, and remove only those
+  groups by fingerprint, shared between components. Until then, an event array is owned as a
+  whole value, and an existing user array for the same event is refused rather than merged into
+  (§7).
 - **Copy fallback** — copy instead of symlink for filesystems without symlink support (Windows).
 - **TUI** — a Textual front-end over this same core (browse/toggle/sync).

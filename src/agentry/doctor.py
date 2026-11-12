@@ -153,10 +153,30 @@ def run_checks(root: Path) -> list[Check]:
     try:
         rows, _ = status(root)
         for r in rows:
+            if r.drifted:
+                # One line per entry agentry can't vouch for (ADR-001 Rev 3, PM R5): the
+                # row-level line would hide which keys need a decision.
+                for e in r.drifted:
+                    why = (
+                        "was recorded by an older agentry and differs from the current source"
+                        if e.unproven
+                        else "was edited by hand"
+                    )
+                    checks.append(
+                        Check(
+                            "warn",
+                            "drift",
+                            f"{e.file}: '{e.pointer}.{e.key}' (from {r.ref} → {r.target}) {why}"
+                            f" — delete it and run `{prog()} sync` to get the current version, "
+                            f"or disable {r.ref} to keep yours",
+                        )
+                    )
+                continue
             if r.state != "ok":
-                checks.append(
-                    Check("warn", "drift", f"{r.ref} → {r.target}: {r.state} (run `{prog()} sync`)")
-                )
+                # A row with a note can't be fixed by sync (a refused merge, a hand edit):
+                # say why instead of the generic hint (ADR-001, PM C2).
+                hint = r.note or f"run `{prog()} sync`"
+                checks.append(Check("warn", "drift", f"{r.ref} → {r.target}: {r.state} ({hint})"))
     except (ResolveError, deps.DependencyError):
         pass  # resolution errors already reported above
 

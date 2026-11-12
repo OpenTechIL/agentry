@@ -27,13 +27,17 @@ are what gets merged. An already-flat fragment is used as-is.
 
 from __future__ import annotations
 
+import hashlib
 import json
-from collections.abc import MutableMapping
+from collections.abc import Callable, MutableMapping
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import tomlkit
 import tomlkit.exceptions
 
+from ..models import OwnedEntry
+from ..progname import prog
 from ..spec import MergeDest
 from ._paths import require_confined
 
@@ -188,3 +192,338 @@ def merge_state(root: Path, dest: MergeDest, keys: list[str]) -> str:
     if not isinstance(section, MutableMapping):
         return "missing"
     return "ok" if all(k in section for k in keys) else "missing"
+
+
+# -- ownership-aware merging (ADR-001, named mode) ----------------------------------------
+#
+# The functions below work on an in-memory document held by a :class:`Documents` cache, so
+# reconcile reads each destination once, evaluates every component against it, and writes it
+# at most once. Ownership is proven by a content fingerprint recorded in the manifest
+# (:class:`~agentry.models.OwnedEntry`): agentry only updates or removes a key whose on-disk
+# value still matches what it wrote. Keys it did not write are never touched.
+
+
+def fingerprint(value: object) -> str:
+    """Stable content hash of a merged value (tomlkit items are unwrapped first)."""
+    unwrap = getattr(value, "unwrap", None)
+    plain = unwrap() if callable(unwrap) else value
+    canon = json.dumps(plain, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return "sha256:" + hashlib.sha256(canon.encode("utf-8")).hexdigest()
+
+
+class Documents:
+    """Per-sync cache of parsed merge destinations: each file read once, written once.
+
+    A parse failure is cached too, so every component targeting the same broken file gets
+    the same :class:`MergeTargetError` without re-reading it.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        self._docs: dict[str, tuple[Path, MutableMapping, str | None]] = {}
+        self._errors: dict[str, MergeTargetError] = {}
+
+    def get(self, file: str) -> MutableMapping:
+        if file in self._errors:
+            raise self._errors[file]
+        if file not in self._docs:
+            path = require_confined(self.root, file)
+            try:
+                doc = _read_doc(path, file)
+            except MergeTargetError as exc:
+                self._errors[file] = exc
+                raise
+            before = _serialize(path, doc) if path.is_file() else None
+            self._docs[file] = (path, doc, before)
+        return self._docs[file][1]
+
+    def flush(self) -> None:
+        """Write every document that changed (unchanged files are left byte-identical)."""
+        for path, doc, before in self._docs.values():
+            _write_doc(path, doc, before=before)
+
+
+_ABSENT = object()
+
+
+def _json_type(value: object) -> str:
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, (int, float)):
+        return "number"
+    return "null" if value is None else type(value).__name__
+
+
+@dataclass
+class NamedPlan:
+    """What applying one component's fragment to a document would do.
+
+    ``refused`` means nothing is written for the component (atomic per destination); its
+    previous record, if any, is kept so it stays owned. ``entries`` is the ownership map to
+    record when the plan is committed.
+    """
+
+    entries: dict[str, OwnedEntry] = field(default_factory=dict)
+    writes: dict[str, object] = field(default_factory=dict)
+    created: bool = False
+    updated: bool = False
+    refused: bool = False
+    warnings: list[str] = field(default_factory=list)
+    note: str | None = None  # why the component isn't installed (status row note)
+
+
+@dataclass(frozen=True)
+class MergeContext:
+    """Labels for warnings: who is merging what, where."""
+
+    ref: str
+    target: str
+    file: str
+    pointer: str
+
+    def at(self, key: str) -> str:
+        return f"'{self.pointer}.{key}' in {self.file}"
+
+
+def plan_named(
+    doc: MutableMapping,
+    ctx: MergeContext,
+    fragment: dict,
+    owned: dict[str, OwnedEntry],
+    claimed: Callable[[str], str | None],
+) -> NamedPlan:
+    """Plan merging ``fragment`` (named mode) without mutating ``doc``.
+
+    ``owned`` is this component's recorded ownership for the destination; ``claimed(key)``
+    names another live component that owns ``key`` there, if any.
+    """
+    plan = NamedPlan()
+    section = doc.get(ctx.pointer, _ABSENT)
+    if section is not _ABSENT and not isinstance(section, MutableMapping):
+        plan.refused = True
+        plan.warnings.append(
+            f"{ctx.ref}: '{ctx.pointer}' in {ctx.file} is a {_json_type(section)}, not an "
+            "object — not merged. Fix the file by hand, then re-run sync."
+        )
+        plan.note = f"'{ctx.pointer}' in {ctx.file} is not an object — fix the file by hand"
+        return plan
+    current: MutableMapping = section if isinstance(section, MutableMapping) else {}
+
+    for key, desired in fragment.items():
+        want = fingerprint(desired)
+        rec = owned.get(key)
+        if key not in current:
+            # Absent: ours to create (or re-create after the user deleted our entry).
+            plan.writes[key] = desired
+            plan.entries[key] = OwnedEntry(mode="named", fingerprint=want)
+            plan.created = True
+            continue
+        have = fingerprint(current[key])
+        if rec is not None and rec.preexisting:
+            if have == want:
+                plan.entries[key] = rec
+                continue
+            plan.refused = True
+            plan.warnings.append(
+                f"{ctx.ref}: {ctx.at(key)} is your entry (it matched {ctx.ref} earlier, but "
+                f"upstream has changed) — keeping yours. Delete it and re-run sync to take "
+                f"{ctx.ref}'s version."
+            )
+            plan.note = (
+                f"{ctx.at(key)} is your entry and differs from upstream — delete it to take "
+                f"{ctx.ref}'s version"
+            )
+            continue
+        if rec is not None:
+            if have != rec.fingerprint:
+                # The user edited what we wrote: theirs now. Keep the record so status
+                # reports drift; never write over it.
+                plan.entries[key] = rec
+                if rec.fingerprint is None:  # v1 record, value never proven to be agentry's
+                    plan.warnings.append(
+                        f"{ctx.ref}: {ctx.at(key)} was recorded by an older agentry and "
+                        "differs from the current source — keeping it. If you didn't edit it, "
+                        "delete it and re-run sync to get the current version."
+                    )
+                else:
+                    plan.warnings.append(
+                        f"{ctx.ref}: {ctx.at(key)} was edited after agentry installed it — "
+                        "keeping your version. Delete it and re-run sync to restore agentry's."
+                    )
+                continue
+            plan.entries[key] = OwnedEntry(mode="named", fingerprint=want)
+            if have != want:
+                plan.writes[key] = desired
+                plan.updated = True
+            continue
+        other = claimed(key)
+        if other is not None:
+            plan.refused = True
+            plan.warnings.append(
+                f"{ctx.ref}: {ctx.at(key)} is already provided by {other} — skipped. Disable "
+                "one of them or rename the entry."
+            )
+            plan.note = f"{ctx.at(key)} is already provided by {other}"
+            continue
+        if have == want:
+            plan.entries[key] = OwnedEntry(mode="named", fingerprint=want, preexisting=True)
+            plan.warnings.append(
+                f"{ctx.ref}: {ctx.file} already has an identical '{ctx.pointer}.{key}' (not "
+                "added by agentry) — using yours; agentry will never remove it."
+            )
+            continue
+        plan.refused = True
+        plan.warnings.append(
+            f"{ctx.ref}: {ctx.file} already has '{ctx.pointer}.{key}' (not added by agentry) "
+            f"— left unchanged; {ctx.ref} was not merged into {ctx.target}. Rename or remove "
+            f"your entry, or disable {ctx.ref}, then re-run sync."
+        )
+        plan.note = (
+            f"{ctx.file} already has '{ctx.pointer}.{key}' (not added by agentry) — rename or "
+            f"remove your entry, or disable {ctx.ref}"
+        )
+    if plan.refused:
+        plan.writes.clear()
+        plan.created = plan.updated = False
+    return plan
+
+
+def commit_named(doc: MutableMapping, pointer: str, plan: NamedPlan) -> None:
+    """Apply a non-refused plan's writes to ``doc``."""
+    if plan.refused or not plan.writes:
+        return
+    section = doc.get(pointer)
+    if not isinstance(section, MutableMapping):
+        doc[pointer] = {}
+        section = doc[pointer]  # tomlkit turns the dict into a live Table; re-fetch it
+    for key, value in plan.writes.items():
+        section[key] = value
+
+
+def remove_named(
+    doc: MutableMapping,
+    ctx: MergeContext,
+    entries: dict[str, OwnedEntry],
+    unverified: Callable[[str], str] | None = None,
+) -> tuple[bool, list[str]]:
+    """Remove the keys agentry owns (fingerprint still matches); return (removed, warnings).
+
+    Pre-existing entries are never removed; an entry the user edited is left in place, and
+    so is one whose ownership was never proven (``fingerprint=None``, from a v1 manifest).
+    ``unverified(key)`` overrides the warning for the latter (e.g. W6 for link+merge).
+    """
+    section = doc.get(ctx.pointer)
+    if not isinstance(section, MutableMapping):
+        return False, []
+    removed = False
+    warnings: list[str] = []
+    for key, rec in entries.items():
+        if rec.preexisting or key not in section:
+            continue
+        if rec.fingerprint is None:
+            warnings.append(
+                unverified(key)
+                if unverified is not None
+                else f"{ctx.ref}: {ctx.at(key)} could not be verified as agentry's (recorded "
+                "by an older agentry) — left in place on removal; delete it by hand if unused."
+            )
+            continue
+        if fingerprint(section[key]) != rec.fingerprint:
+            warnings.append(
+                f"{ctx.ref}: {ctx.at(key)} was edited after install — left in place on "
+                "removal; delete it by hand if unused."
+            )
+            continue
+        del section[key]
+        removed = True
+    if removed and not section:
+        doc.pop(ctx.pointer, None)
+    return removed, warnings
+
+
+def migrate_named(
+    doc: MutableMapping, pointer: str, keys: list[str], desired: dict | None
+) -> dict[str, OwnedEntry]:
+    """Ownership for a legacy v1 record, which asserted every key in ``keys``.
+
+    A v1 record proves nothing about *what* agentry wrote, so a key is owned only when its
+    current value equals what the component installs (``desired``). Anything else — a value
+    the user replaced, a hook array they appended to, a key absent on disk, or a component
+    whose fragment can't be re-derived — gets ``fingerprint=None``: unproven, so it is never
+    overwritten or removed, and reports as drift.
+    """
+    section = doc.get(pointer)
+    current: MutableMapping = section if isinstance(section, MutableMapping) else {}
+    out: dict[str, OwnedEntry] = {}
+    for key in keys:
+        fp: str | None = None
+        if key in current and desired is not None and key in desired:
+            have = fingerprint(current[key])
+            if fingerprint(desired[key]) == have:
+                fp = have
+        out[key] = OwnedEntry(mode="named", fingerprint=fp)
+    return out
+
+
+def drifted_keys(
+    doc: MutableMapping, pointer: str, fragment: dict, owned: dict[str, OwnedEntry]
+) -> list[tuple[str, bool]]:
+    """Keys agentry recorded whose on-disk value it can't vouch for: ``(key, unproven)``.
+
+    ``unproven`` is True for a v1 record never proven to be agentry's (``fingerprint=None``)
+    and False for an entry agentry wrote that was edited by hand since.
+    """
+    section = doc.get(pointer)
+    current: MutableMapping = section if isinstance(section, MutableMapping) else {}
+    out: list[tuple[str, bool]] = []
+    for key in fragment:
+        rec = owned.get(key)
+        if rec is None or rec.preexisting or key not in current:
+            continue
+        if rec.fingerprint is None or rec.fingerprint != fingerprint(current[key]):
+            out.append((key, rec.fingerprint is None))
+    return out
+
+
+def named_state(
+    doc: MutableMapping,
+    ctx: MergeContext,
+    fragment: dict,
+    owned: dict[str, OwnedEntry],
+    claimed: Callable[[str], str | None],
+) -> tuple[str, str | None]:
+    """Read-only drift check: ``(state, note)`` with state ``ok`` | ``missing`` | ``drift``.
+
+    A refused install (user's entry, non-object section, duplicate) is ``missing`` with a
+    note saying why; an owned entry the user edited is ``drift``.
+    """
+    plan = plan_named(doc, ctx, fragment, owned, claimed)
+    if plan.refused:
+        return "missing", plan.note
+    section = doc.get(ctx.pointer)
+    current: MutableMapping = section if isinstance(section, MutableMapping) else {}
+    for key in fragment:
+        rec = owned.get(key)
+        if (
+            key in current
+            and rec is not None
+            and not rec.preexisting
+            and rec.fingerprint != fingerprint(current[key])
+        ):
+            if rec.fingerprint is None:
+                return "drift", (
+                    "recorded by an older agentry; value differs from the current source — if "
+                    "you didn't edit it, delete the entry and run sync to get the current version"
+                )
+            return "drift", (
+                f"edited by hand — delete the entry and run `{prog()} sync` to restore it"
+            )
+    if plan.created:
+        return "missing", None
+    if plan.updated:
+        return "drift", None
+    return "ok", None

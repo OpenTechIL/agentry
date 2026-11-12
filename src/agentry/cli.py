@@ -797,6 +797,9 @@ def status_cmd() -> None:
         table.add_row(r.ref, r.target, r.where, f"[{style.get(r.state, 'white')}]{r.state}[/]")
     if rows:
         console.print(table)
+        for r in rows:
+            if r.note:
+                console.print(f"[yellow]  {r.ref} → {r.target}: {r.note}[/yellow]")
     else:
         console.print("[dim]Nothing installed yet.[/dim]")
     for w in warnings:

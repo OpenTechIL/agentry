@@ -116,9 +116,13 @@ The same applies when the file is not valid TOML (`<file> is not valid TOML (…
 text (`<file> is not UTF-8 text`), or has something other than an object at the top level
 (`<file> is not a JSON object`).
 
-`agentry status` shows the affected components as `missing` and lists the file problem once
-under the table. `agentry doctor` reports them as `missing (run agentry sync)`, but sync can't
-repair a file it can't parse, so fix the file first.
+`agentry status` shows the affected components as `missing` and prints the file problem under
+the table. `agentry doctor` repeats it on each affected component, and `agentry doctor --strict`
+fails on it:
+
+```text
+! drift  demo/mcp/github → copilot: missing (.vscode/mcp.json is not valid JSON (line 2, column 3: Expecting property name enclosed in double quotes) — left unchanged; fix it (comments and trailing commas are not supported), then re-run sync)
+```
 
 **Fix.** Make the file valid. Delete the comments and trailing commas, starting at the line and
 column in the message, then run `agentry sync`. If you need to keep a commented file, disable the
@@ -127,6 +131,172 @@ components that merge into it (`agentry disable <ref>`) and maintain that file b
 If you remove a component while the file is broken, the warning says "not removed from its
 config" instead. agentry keeps its record of the entry, and the first sync after you fix the
 file removes it.
+
+## A config entry was not merged (`mcp` and `hook` components)
+
+`mcp` and `hook` components add named entries to a shared config file such as `.mcp.json`,
+`.claude/settings.json` or `.vscode/mcp.json`. agentry only changes entries it added itself, and
+it can tell whether an entry on disk is still the one it wrote. When it can't merge safely, it
+leaves the file alone, skips that component **for that file only**, and prints one of the
+warnings below. `sync` still exits 0.
+
+To find these later:
+- `agentry status` shows the row as `missing` (or `drift`) and prints the reason under the table.
+- `agentry doctor` repeats the reason, and `agentry doctor --strict` fails on it, so CI notices.
+
+Running `agentry sync` again does not fix these. Apply the fix first.
+
+### `already has '<pointer>.<key>' (not added by agentry)`
+
+```text
+<ref>: <file> already has '<pointer>.<key>' (not added by agentry) — left unchanged; <ref> was not merged into <target>. Rename or remove your entry, or disable <ref>, then re-run sync.
+```
+
+**Cause.** The file already has an entry with that name, for example an MCP server called
+`github` that you added by hand, and it differs from the component's entry. agentry won't
+overwrite something it didn't create.
+
+**Fix.** Choose one, then run `agentry sync`:
+- **Keep both.** Rename your entry.
+- **Use the component's entry.** Delete yours.
+- **Keep yours and drop the component.** Run `agentry disable <ref>`.
+
+### `already has an identical '<pointer>.<key>'`
+
+```text
+<ref>: <file> already has an identical '<pointer>.<key>' (not added by agentry) — using yours; agentry will never remove it.
+```
+
+**Cause.** Your entry is exactly what the component ships. agentry counts the component as
+installed (`status` shows `ok`) but treats the entry as yours. You see this once, on the first
+sync.
+
+**Fix.** Usually nothing. Note that `agentry remove` and `agentry disable` will leave this entry
+in place. If you want agentry to manage it, delete it and run `agentry sync`. agentry then
+creates and owns it.
+
+### `is your entry (it matched <ref> earlier, but upstream has changed)`
+
+```text
+<ref>: '<pointer>.<key>' in <file> is your entry (it matched <ref> earlier, but upstream has changed) — keeping yours. Delete it and re-run sync to take <ref>'s version.
+```
+
+**Cause.** This follows the previous case. The source has since updated the entry, and yours no
+longer matches it. agentry still won't change your entry.
+
+**Fix.** To take the new version, delete your entry and run `agentry sync`. To keep yours, run
+`agentry disable <ref>`.
+
+### `'<pointer>' in <file> is a <type>, not an object`
+
+```text
+<ref>: '<pointer>' in <file> is a list, not an object — not merged. Fix the file by hand, then re-run sync.
+```
+
+**Cause.** The section agentry merges into (for example `mcpServers` or `servers`) exists but
+holds a list, string, number, boolean or `null` instead of an object. Every component that
+targets that section is skipped, and agentry never replaces the section.
+
+**Fix.** Edit the file so that the section is an object, for example `"mcpServers": {}`. Keep
+anything you need from the old value. Then run `agentry sync`.
+
+### `is already provided by <other>`
+
+```text
+<ref>: '<pointer>.<key>' in <file> is already provided by <other> — skipped. Disable one of them or rename the entry.
+```
+
+**Cause.** Two enabled components ship an entry with the same name for the same file. Only one
+of them can have it.
+
+**Fix.** Run `agentry disable` on whichever component you don't want. If you need both, rename
+the entry in one of the sources, or ask its author to.
+
+### `was edited after agentry installed it` (status shows `drift`)
+
+```text
+<ref>: '<pointer>.<key>' in <file> was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's.
+```
+
+**Cause.** You changed an entry that agentry installed. agentry keeps your edit and stops
+updating that entry from upstream. The warning repeats on every sync until you resolve it.
+`agentry doctor` lists every such entry with its file and component (see the
+[example below](#was-recorded-by-an-older-agentry-and-differs-from-the-current-source)).
+
+**Fix.** To keep your edit, leave it. agentry won't delete it on removal either (see the next
+entry). To go back to agentry's version and receive upstream updates again, delete the entry and
+run `agentry sync`.
+
+### `was recorded by an older agentry and differs from the current source`
+
+```text
+demo/mcp/github: 'mcpServers.github' in .mcp.json was recorded by an older agentry and differs from the current source — keeping it. If you didn't edit it, delete it and re-run sync to get the current version.
+```
+
+`agentry status` shows the row as `drift`. To get the full list of affected entries, run
+**`agentry doctor`**. It prints one line per entry, giving the file, the `pointer.key`, the
+component that installed it, and the fix. It also lists entries you edited by hand in the same
+format, and `--strict` fails on any of them:
+
+```text
+! drift  .mcp.json: 'mcpServers.github' (from demo/mcp/github → claude) was recorded by an older agentry and differs from the current source — delete it and run `agentry sync` to get the current version, or disable demo/mcp/github to keep yours
+! drift  .mcp.json: 'mcpServers.slack' (from demo/mcp/slack → claude) was edited by hand — delete it and run `agentry sync` to get the current version, or disable demo/mcp/slack to keep yours
+```
+
+**Cause.** You upgraded from an agentry version that didn't record what it wrote into config
+files. On the first sync after the upgrade, agentry keeps managing an entry only if it still
+matches what the component ships today. An entry that doesn't match might be one you edited, or
+it might be out of date, so agentry treats it as yours. It won't overwrite or remove it. Every
+such entry is affected if the source changed upstream before that first sync, for example
+because you ran `agentry update` first. That's why the upgrade advice is to run a plain
+`agentry sync` once before `agentry update`. If you run `update` while the old record is still
+in place, agentry reminds you:
+
+```text
+manifest from an older agentry: run `agentry sync` before `agentry update` so installed entries can be verified
+```
+
+**Fix.** Go through `agentry doctor`'s list. For each entry you edited and want to keep, leave
+it, or run `agentry disable <ref>` to stop the warning. Delete every other entry and run
+`agentry sync`. agentry then installs the current version and manages it from then on.
+
+### `was edited after install — left in place on removal`
+
+```text
+<ref>: '<pointer>.<key>' in <file> was edited after install — left in place on removal; delete it by hand if unused.
+```
+
+**Cause.** You removed or disabled a component whose entry you had edited. agentry treats the
+edited entry as yours, so it doesn't delete it.
+
+**Fix.** If you no longer need the entry, delete it from the file by hand.
+
+If you remove a component whose entry agentry couldn't verify after an upgrade (see
+[the previous entry](#was-recorded-by-an-older-agentry-and-differs-from-the-current-source)),
+you get a variant of this warning:
+
+```text
+<ref>: '<pointer>.<key>' in <file> could not be verified as agentry's (recorded by an older agentry) — left in place on removal; delete it by hand if unused.
+```
+
+The fix is the same.
+
+### `was installed by an older agentry with link+merge`
+
+```text
+<ref>: '<pointer>.<key>' in <file> was installed by an older agentry with link+merge and can't be verified — left in place on removal; its commands may point at the removed <link path>. Delete them by hand if unused.
+```
+
+**Cause.** You disabled or removed a plugin-style hook pack. That's the kind that links a scripts
+folder into place and merges hook commands that call those scripts. An older agentry installed
+it, and agentry can no longer work out what it wrote: the source or the file is gone, or the
+target no longer installs that type this way. So it removes the scripts folder but leaves the
+hook entry, whose commands may now point at a path that no longer exists. Your agent may then
+report a failing hook. While the component is still listed in `.agentry.yml`, even disabled,
+agentry can check the entry, and it removes a matching one cleanly without this warning.
+
+**Fix.** Open `<file>` and delete the hook entries under `<pointer>.<key>` that reference
+`<link path>`. Keep any hook commands you added yourself.
 
 ## Reading `agentry doctor`
 

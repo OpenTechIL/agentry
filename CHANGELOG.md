@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Behavior change: agentry no longer overwrites config entries it didn't add.** Previously,
+  when an `mcp` or `hook` component merged a key that already existed in the target file
+  (`.mcp.json`, `.claude/settings.json`, `.vscode/mcp.json`, …), agentry overwrote your entry,
+  and removing the component later deleted it. Now sync leaves your entry unchanged, does not
+  merge that component into that file, and warns. `agentry status` shows the component as
+  `missing` with the reason, and `agentry doctor --strict` fails. If your entry is identical to
+  the one the component ships, agentry uses yours and never removes it.
+- **Hand edits to entries agentry installed are kept.** If you edit an entry agentry merged,
+  sync keeps your version instead of reverting it, and reports it as `drift` in `status` and
+  `doctor`. To get agentry's version back, delete the entry and run `agentry sync`.
+- A config section that agentry merges into but that isn't an object (e.g. `"mcpServers": []`)
+  is no longer replaced. The components that target it are skipped with a warning.
+- `agentry status` now prints a reason under the table for each row that isn't `ok`, and
+  `agentry doctor` shows that reason instead of always suggesting `agentry sync`.
+- The install manifest moves to version 2 and is migrated automatically on the next sync. An
+  older agentry can still read it, but downgrading is not supported.
+- **Upgrading: run `agentry sync` once before `agentry update`.** On that first sync, agentry
+  checks the config entries it installed in earlier versions. It keeps managing an entry only if
+  the entry still matches what the component ships. It leaves any other entry untouched and
+  reports it as `drift`, and it won't remove that entry later. If you run `update` first, entries
+  from the old upstream version no longer match and can't be verified. Delete stale entries by
+  hand.
+
 ## [0.1.5] — 2026-09-09
 
 ### Added

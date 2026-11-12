@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -578,6 +579,27 @@ class InstalledCopy(BaseModel):
     path: str  # the copied path, relative to project root
 
 
+#: Current manifest schema version (see :class:`Manifest`).
+MANIFEST_VERSION = 2
+
+
+class OwnedEntry(BaseModel):
+    """Proof of what agentry wrote under one merged key (ADR-001, manifest v2).
+
+    Ownership is proven by content, not by name: agentry may only update or remove a key
+    whose on-disk value still has the ``fingerprint`` it recorded. ``preexisting`` marks an
+    identical entry the user already had — it satisfies the component, but agentry never
+    removes it. The array-mode fields (``items``, ``created_key``) are reserved for
+    event-keyed hook arrays and unused by named mode.
+    """
+
+    mode: Literal["named", "array"] = "named"
+    fingerprint: str | None = None  # named: fp of the value agentry wrote
+    preexisting: bool = False  # named: identical user entry; never removed
+    items: list[str] = Field(default_factory=list)  # array: fps agentry appended, in order
+    created_key: bool = False  # array: agentry created the event key itself
+
+
 class InstalledMerge(BaseModel):
     """Config keys agentry injected (merge strategy)."""
 
@@ -586,6 +608,8 @@ class InstalledMerge(BaseModel):
     file: str  # config file path, relative to project root
     pointer: str  # top-level JSON key the entry lives under (e.g. "mcpServers")
     keys: list[str]  # keys agentry owns under that pointer
+    # Per-key ownership proof (manifest v2). Empty ⇒ a legacy v1 record, migrated on load.
+    entries: dict[str, OwnedEntry] = Field(default_factory=dict)
 
 
 class InstalledGenerated(BaseModel):
@@ -605,6 +629,7 @@ class InstalledLinkMerge(BaseModel):
     file: str  # config file path, relative to project root
     pointer: str  # top-level JSON key the entries live under
     keys: list[str]  # keys agentry owns under that pointer
+    entries: dict[str, OwnedEntry] = Field(default_factory=dict)  # see InstalledMerge
 
 
 class InstalledTransform(BaseModel):
@@ -618,7 +643,8 @@ class InstalledTransform(BaseModel):
 class Manifest(BaseModel):
     """Record of everything agentry installed on disk (``.agentry/.manifest.json``)."""
 
-    version: int = 1
+    # 2 = merge records carry per-key ``entries`` (ADR-001). v1 files load unchanged.
+    version: int = MANIFEST_VERSION
     links: list[InstalledLink] = Field(default_factory=list)
     copies: list[InstalledCopy] = Field(default_factory=list)
     merges: list[InstalledMerge] = Field(default_factory=list)
