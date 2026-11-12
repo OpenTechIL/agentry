@@ -225,7 +225,8 @@ each key together with a **fingerprint** of the value it wrote: `sha256` of the 
 from `merge.fingerprint`. Ownership is proven by content, not by name (see §7). A key whose
 value is a JSON **list** (an event-keyed hook array such as `PreToolUse: [ … ]`) is merged
 **per element** instead: agentry appends its elements to the user's list and owns only those
-(see §7, "Event-keyed hook arrays"). Example
+(see §7, "Event-keyed hook arrays"). Two components shipping the same named key (or the
+same install path) are settled in `.agentry.yml` order — see §7, "Duplicate claims". Example
 `mcp/github.json`:
 
 ```json
@@ -439,10 +440,21 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
      TRANSFORM  → DesiredTransform(dest path, source file, provider)   [component has transform:,
                   single-file type on a LINK target; replaces the link]
      GENERATE   → DesiredGenerate(component, generate spec)            [component has generate:]
+   then settle duplicate claims in CLAIM ORDER (reconcile._resolve_claims; ADR-001 Rev 6):
+     claim order = augmented components: declared in .agentry.yml order, then transitive in
+     BFS order — a pure function of config + lock, identical on every machine.
+     · paths (link / copy / transform / link+merge script link), compared case-insensitively:
+       the earliest component keeps the path; later ones are dropped from the plan (W5-path;
+       a link+merge loses as a pair)
+     · named merge keys claimed by ≥2 components (unless every claim is a list — those share
+       per element): the earliest wins (plan.winners); planning refuses the rest (W5)
 
 3. Diff against the manifest and apply (in this order)
-   links:       remove manifest links not desired (safe-remove) → create/refresh desired
-   copies:      remove manifest copies not desired → copy desired (never over an unmanaged path)
+   transfers:   report each unit moving to its claim-order winner once, in `updated`
+   prune:       remove orphaned links, then copies, then transforms — ALL before any path is
+                installed, so a path moving between strategies never trips "not managed"
+   links:       create/refresh desired (a same-strategy transfer relinks + relabels the record)
+   copies:      copy desired (never over an unmanaged path)
    generated:   remove orphans (delete produced paths) → run (gated by trust / --allow-run),
                 record produced paths
    merge pass:  one file-grouped pass over merges, then link+merges (reconcile.
@@ -450,12 +462,14 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
                 against what a generator wrote:
                   · parse each destination once (merge.Documents); migrate v1 records in memory
                   · remove orphaned records (only keys whose fingerprint still matches)
+                  · release pass: a later claimant's owned entry for a key it lost is removed
+                    (fingerprint-checked) so the winner installs it in the same sync
                   · plan each component atomically against the document: refuse (warn) on a
                     pre-existing user key, a non-object section, or a key another record owns
                   · link+merge links the script dir only if its merge half was accepted
                   · write each changed file once; an unchanged file is not rewritten
-   transforms:  remove orphans → render via provider (agent provider gated by --allow-transform),
-                write as a manifest-tracked file
+   transforms:  render via provider (agent provider gated by --allow-transform), write as a
+                manifest-tracked file (their orphans were pruned above)
 
 4. Persist manifest (and the lock again if trust was granted); ensure .agentry/ is in .gitignore.
 ```
@@ -500,8 +514,8 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
   - **Install refuses** a key agentry did not create. A differing value is left byte-identical
     and the component is not merged into that destination, with a warning. An identical value
     is recorded as `preexisting`: it satisfies the component, but is never removed. Install
-    also refuses a pointer section that is not an object, and a key another component already
-    owns. Refusal is all-or-nothing only on **first install** in a destination (W3, the
+    also refuses a pointer section that is not an object, and a key an **earlier-listed**
+    component claims (W5, see "Duplicate claims" below). Refusal is all-or-nothing only on **first install** in a destination (W3, the
     non-object section, is always whole-destination). Once a component is installed there, a
     conflicting key is refused **per key**: the warning names it, the status row shows `drift`,
     and the component's other keys keep updating (ADR-001 rev 4). For link+merge, the
@@ -509,6 +523,17 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
   - **User edits win.** If the on-disk value no longer matches the recorded fingerprint, sync
     keeps the user's version. It warns, and `status` and `doctor` report `drift` with a note.
     Sync does not revert the edit.
+  - **Duplicate claims** (ADR-001 Rev 6). When two components claim the same named merge key
+    or the same install path, the one **earlier in claim order** wins. Claim order is declared
+    components in `.agentry.yml` order, then transitive ones. Every machine with the same config
+    and lock agrees, unlike "first installed keeps it". The loser gets W5; its status row is
+    `missing` with a note; `doctor --strict` fails. Paths compare case-insensitively (macOS and
+    Windows filesystems are). If a reorder or a new component moves a unit, it transfers in one
+    sync: the loser's entry is removed fingerprint-checked (a user edit is never overwritten:
+    W4 for the loser, W1 for the winner) and `sync` prints once `… now comes from {winner}
+    instead of {loser} — to keep {loser}'s version, list it before {winner} …`. A transitive
+    claimant's hint says to **declare** it in `.agentry.yml` instead. Identical hook groups
+    under array mode are shared, never W5; a list vs. an object on one key is W5.
   - **Keeping your own value** (`keep:`). A component's `keep:` list in `.agentry.yml` names
     merged keys the user takes over. A bare `key` applies to every target; `<target>:<key>` limits
     it to one. `agentry keep <ref> [<target>:]<key>` appends to the list.

@@ -305,17 +305,91 @@ targets that section is skipped, and agentry never replaces the section.
 **Fix.** Edit the file so that the section is an object, for example `"mcpServers": {}`. Keep
 anything you need from the old value. Then run `agentry sync`.
 
-### `is already provided by <other>`
+### `is already provided by <other>, listed earlier in .agentry.yml`
 
 ```text
-<ref>: '<pointer>.<key>' in <file> is already provided by <other> — skipped. Disable one of them or rename the entry.
+two/mcp/gh: 'mcpServers.github' in .mcp.json is already provided by one/mcp/gh, listed earlier in .agentry.yml — skipped. Disable one of them, rename the entry, or reorder components to choose which wins.
 ```
 
-**Cause.** Two enabled components ship an entry with the same name for the same file. Only one
-of them can have it. Only that entry is skipped. The component's other entries still install.
+**Cause.** Two enabled components ship an entry with the same name for the same file, and only
+one can have it. The one listed first under `components:` in `.agentry.yml` wins, on every
+machine, whatever order they were installed in. The other is skipped for that entry. On first
+install the whole component is skipped for that file, and once installed, its other entries
+keep updating. `status` shows it as `missing` with the reason, and `doctor --strict`
+fails.
 
-**Fix.** Run `agentry disable` on whichever component you don't want. If you need both, rename
-the entry in one of the sources, or ask its author to.
+**Fix.** Choose one:
+- **Pick the winner by order.** Move the component you want above the other in
+  `.agentry.yml` and run `agentry sync`. agentry swaps the entry over in that sync (see
+  [`now comes from`](#now-comes-from-instead-of)).
+- **Drop one.** Run `agentry disable` on the component you don't want.
+- **Keep both.** Rename the entry in one of the sources, or ask its author to.
+
+If the losing component is a dependency that another component pulls in through `requires`,
+it isn't listed in `.agentry.yml`. Components you list always come before dependencies, so the
+listed one wins, and the message tells you how to change that:
+
+```text
+one/mcp/gh: 'mcpServers.github' in .mcp.json is already provided by two/mcp/gh — skipped. Declare one/mcp/gh in .agentry.yml above two/mcp/gh, rename the entry, or disable two/mcp/gh.
+```
+
+To let the dependency win, add it to `components:` above the other one. If both colliding
+components are dependencies, the message ends with `declare <ref> in .agentry.yml to give it
+priority` instead.
+
+### `is already installed by <other>, listed earlier in .agentry.yml` (a file)
+
+```text
+two/command/review: .claude/commands/review.md is already installed by one/command/review, listed earlier in .agentry.yml — skipped on claude. Disable one of them, or reorder components to choose which wins.
+```
+
+**Cause.** Two components install a file at the same path, for example two sources that both
+ship `commands/review.md`. As with entries, the one listed first in `.agentry.yml` gets the
+path, and the other is skipped on that target. Earlier versions let the later one silently
+overwrite the earlier.
+
+**Fix.** Reorder the components to choose which file you get, or disable the one you don't
+want. When the loser is a dependency that isn't listed in `.agentry.yml`, the message names the
+listed winner:
+
+```text
+one/command/review: .claude/commands/review.md is already installed by two/command/review — skipped on claude. Declare one/command/review in .agentry.yml above two/command/review, or disable two/command/review.
+```
+
+Add the dependency to `components:` above the other to let it win. If both colliding
+components are dependencies (two packages pulled in by `requires`, say), the one required first
+wins, and neither can be disabled directly:
+
+```text
+depb/skill/rev: .claude/skills/rev is already installed by depa/skill/rev — skipped on claude. To change that, declare depb/skill/rev in .agentry.yml to give it priority.
+```
+
+### `now comes from … instead of …`
+
+```text
+~ .claude/commands/review.md now comes from two/command/review (listed earlier in .agentry.yml) instead of one/command/review — to keep one/command/review's version, list it before two/command/review in .agentry.yml, or disable two/command/review
+```
+
+**Cause.** This isn't an error. agentry printed it once, in the sync where the owner of a
+contested file or entry changed. Usually that's because you reordered `components:` or added a
+component above an existing one. After an upgrade, it can also be a file that an earlier version
+let the later-listed component overwrite. agentry moved the file or entry to the component
+listed first. It removes the old owner's entry only if you hadn't edited it.
+
+When the previous owner was a dependency, the line tells you to declare it instead:
+
+```text
+~ .mcp.json:mcpServers.github now comes from two/mcp/gh instead of one/mcp/gh — to keep one/mcp/gh's version, declare one/mcp/gh in .agentry.yml above two/mcp/gh, or disable two/mcp/gh
+```
+
+If both are dependencies, it reads:
+
+```text
+~ .claude/skills/rev now comes from depa/skill/rev instead of depb/skill/rev — to keep depb/skill/rev's version, declare depb/skill/rev in .agentry.yml to give it priority
+```
+
+**Fix.** Nothing, if that's the version you want. Otherwise do what the line says: list or
+declare the other component first, or disable the winner.
 
 ### `was edited after agentry installed it` (status shows `drift`)
 

@@ -33,6 +33,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agentry handles each entry independently.
 
 ### Changed
+- **Behavior change: when two components install the same entry or file, the one listed first
+  in `.agentry.yml` now wins on every machine.** Previously the outcome depended on install
+  order, and for files the later one silently overwrote the earlier. The other component is
+  skipped for that file or entry with a warning, and `doctor --strict` fails on it. Reorder
+  `components:` to choose the winner, and agentry swaps it over in the next sync with a one-time
+  `… now comes from …` line. **On upgrade, a linked or copied file can change content:** where
+  the later-listed component had overwritten a path, the next sync switches it to the
+  earlier-listed one. Entries you edited by hand are never overwritten.
 - **`sync`, `status`, `doctor` and `sync --frozen` work offline once a source is cloned.** If
   the commit pinned in `.agentry.lock` is already in the local `.agentry/` store, agentry no
   longer fetches from the remote. `agentry update a` doesn't fetch the sources you didn't name
