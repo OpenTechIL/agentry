@@ -21,6 +21,7 @@ from agentry.models import (
     Strategy,
 )
 from agentry.reconcile import status, sync
+from agentry.resolver import _remove
 from agentry.targets import BUILTIN_TARGETS
 
 
@@ -248,7 +249,7 @@ def test_determinism_resync_from_lock(project: Path, local_source: Path):
     sync(project)
     locked = load_lock(project).entry("s").resolved
 
-    shutil.rmtree(project / ".agentry")
+    _remove(project / ".agentry")  # read-only-aware: a git store has read-only packs
     sync(project)
     assert load_lock(project).entry("s").resolved == locked
     assert (project / ".claude/skills/code-reviewer/SKILL.md").read_text(
