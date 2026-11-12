@@ -24,4 +24,4 @@ template: |
 
   $CHANGES
 
-  **Full changelog**: https://github.com/opentech/agentry/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
+  **Full changelog**: https://github.com/OpenTechIL/agentry/compare/$PREVIOUS_TAG...v$RESOLVED_VERSION
