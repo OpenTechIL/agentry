@@ -119,6 +119,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output goes to a log or pipe. Each warning is one line, so it's easy to grep. In a terminal,
   long lines still wrap on screen.
 
+### Removed
+- Releases no longer publish the duplicate `agy-<version>-<target>` binaries, which 0.1.4 and
+  0.1.5 shipped alongside `agentry-*` for compatibility. `install.sh` and `install.ps1` from
+  0.1.4 onward already fetch `agentry-*`, so they're unaffected. A copy of either script older
+  than 0.1.4 can't install new releases: download a fresh one. The `agy` command alias is
+  unaffected, because it was never a release asset. Python installs get it from
+  `[project.scripts]`, and the installers and packages create it as a link (or `.cmd` shim) to
+  `agentry`.
+
 ### Fixed
 - **Per-harness variants now replace the canonical fragment on their target, as documented.**
   This applies when an `mcp` or `hook` component has an enabled `<base>-<target>.json` variant

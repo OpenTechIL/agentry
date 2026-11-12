@@ -102,10 +102,16 @@ target; the suffix-less file applies to every other target that supports the typ
   `uvx ruff format --check .`. CI runs the same checks on Python 3.10–3.13, plus a
   macOS and a Windows job on 3.12 (symlink behaviour differs there), and gates coverage
   at 85% — so a PR that drops coverage fails.
+- **Changed a dependency in `pyproject.toml`? Run `uv lock` and commit the updated
+  `uv.lock` in the same PR.** CI checks the lock with `uv lock --check` and fails if it's out of
+  date. Release builds install exactly the committed lock (`--frozen`). Dependabot PRs update both
+  files together.
 
 ## What CI does
 
-Every push and PR runs **CI** (ruff lint/format + the pytest matrix). Pushes to `main`
+Every push and PR runs **CI** (ruff lint/format, a `uv lock --check` that `uv.lock` matches
+`pyproject.toml`, and the pytest matrix, run against the locked environment via
+`uv run --locked`). Pushes to `main`
 redeploy the **docs site** to GitHub Pages (`docs.yml`), and **Release Drafter**
 (`release-drafter.yml`) keeps a draft release note up to date from merged PR titles. You
 don't need to do anything beyond opening a green PR.
@@ -116,9 +122,13 @@ GitHub Releases (binaries + native installers) is the sole distribution route.
 **Releasing.** Bump the version and tag in one step:
 
 ```bash
-python scripts/bump.py X.Y.Z   # edits pyproject + __init__ + CHANGELOG, commits, tags vX.Y.Z
+python scripts/bump.py X.Y.Z   # edits pyproject + __init__ + CHANGELOG, runs `uv lock`, commits, tags vX.Y.Z
 git push --follow-tags
 ```
+
+`bump.py` refreshes `uv.lock` (which records agentry's own version) and commits it with the
+release, so CI's `uv lock --check` passes on the tagged commit. If `uv lock` fails, nothing is
+committed. Fix the problem and re-run, or discard the version edits with `git checkout -- .`.
 
 Pushing the `vX.Y.Z` tag fires **Release Binaries** (`release-binaries.yml`): it freezes the
 `agentry` binary for Windows/macOS/Linux, builds the native installers (`.pkg`, `.exe`,
@@ -126,8 +136,8 @@ Pushing the `vX.Y.Z` tag fires **Release Binaries** (`release-binaries.yml`): it
 GitHub Release, and pushes a refreshed formula to `OpenTechIL/homebrew-tap`. See
 [packaging/README.md](packaging/README.md).
 
-Note `scripts/bump.py` edits `pyproject.toml`, `src/agentry/__init__.py` and `CHANGELOG.md`
-only — it does not touch the docs, so keep version references there generic.
+Note `scripts/bump.py` edits `pyproject.toml`, `src/agentry/__init__.py`, `CHANGELOG.md` and
+`uv.lock` only. It does not touch the docs, so keep version references there generic.
 
 ## Commit & PR conventions
 

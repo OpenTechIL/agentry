@@ -18,7 +18,7 @@ behind these commands.
 | `agentry sync` / `install` / `update` / `add` `… -v` | `-v`/`--verbose` prints every warning in full instead of summarizing repeated ones |
 | `agentry remove <source>/<type>/<name>` | Remove a component and uninstall it |
 | `agentry enable <ref>` / `agentry disable <ref>` | Toggle a component's `enabled` flag, then sync |
-| `agentry sync [--allow-run] [--frozen] [--allow-transform]` / `agentry install …` | Reconcile on-disk state to config + lock (idempotent). `--allow-run` permits `generate` installers; `--frozen` installs strictly from `.agentry.lock` and fails on drift (CI); `--allow-transform` permits `agent` transforms to run |
+| `agentry sync [--allow-run] [--frozen] [--allow-transform]` / `agentry install …` | Reconcile on-disk state to config + lock (idempotent). `--allow-run` permits `generate` installers; `--frozen` installs strictly from `.agentry.lock` and fails if any source is unpinned or has drifted (CI); `--allow-transform` permits `agent` transforms to run |
 | `agentry update [SOURCES]...` | Re-resolve refs to latest, rewrite `.agentry.lock`, reinstall. With no names, every source. With names, only those sources: the rest keep their lock pins (and trust), and only the named sources' generators re-run. A dependency source the new revision adds, one with no lock entry yet, is resolved and installed too. Names are sources in `.agentry.yml`, or transitive `url` dependencies that exist only in the lock. An unknown name exits 1 and changes nothing |
 | `agentry status` | Report drift between config and what's installed |
 | `agentry doctor [--strict]` | Preflight: undefined targets, unprovided components, unset `${VARs}`, unsupported combos, drift. Exits 1 on errors (or warnings with `--strict`) |
@@ -62,7 +62,7 @@ hand-written `target_profiles` — for the current project.
 |---|---|
 | `agentry target drivers` | List agentry's built-in target drivers (claude, codex, opencode, …) |
 | `agentry target list` | Show targets in use (resolved via built-in / profile / unresolved) and which overlays are installable from catalogs |
-| `agentry target add NAME [--catalog C]` | Install a shared driver overlay into `target_profiles`, then sync |
+| `agentry target add NAME [--catalog C] [--yes]` | Install a shared driver overlay into `target_profiles`, then sync. Shows every destination and asks first; `--yes`/`-y` skips the prompt (CI) |
 | `agentry target use NAME` | Activate a resolvable target (built-in or already-overlaid) for this project: add it to `targets:`, then sync |
 
 ## Interop & portability
