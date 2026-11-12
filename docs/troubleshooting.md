@@ -305,18 +305,21 @@ on warnings too — which makes it a good CI gate.
 
 | Category | Level | Meaning |
 |---|---|---|
-| `target` | error | A target in `targets:` has no built-in driver and no `target_profiles` entry. |
-| `source` | error | A component references a source that isn't declared. |
-| `component` | error | A source doesn't actually provide the component you enabled. Run `agentry list` for the real names. |
-| `type` | warn | No active target installs this component type, so it goes nowhere. |
+| `target` | error | A target in `targets:` has no built-in driver, no `target_profiles` entry, and no installed overlay. |
+| `resolve` | error | A source or dependency couldn't be resolved: git failed or timed out, a ref doesn't exist, a local source path is missing, or a dependency conflicts. The remaining checks are skipped until this is fixed. |
+| `component` | error | A component references a source that isn't declared (`unknown source`), or the source doesn't actually provide it (`not provided by source`). Run `agentry list` for the real names. |
+| `support` | warn | No active target installs this component type, so it goes nowhere. |
 | `env` | warn | A merge fragment references `${VAR}`, which is unset. agentry ships the placeholder; your agent resolves it at runtime. |
 | `drift` | warn | On-disk state doesn't match config/lock. Run `agentry sync`. |
 | `command` | warn | The `agy` alias on `PATH` belongs to another tool (see above). |
 
 ## An undefined target during `sync`
 
-**Symptom.** `no driver for target 'foo' — define it under target_profiles, or install a
-shared driver overlay (agentry target list)`.
+**Symptom.**
+
+```text
+target 'foo' is undefined — define it under target_profiles in .agentry.yml, or install a shared driver overlay (`agentry target list`)
+```
 
 **Fix.** Either write the target yourself (`target_profiles` in `.agentry.yml` — see the
 [configuration reference](config-reference.md#target_profiles)), or install an overlay a

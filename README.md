@@ -455,7 +455,7 @@ Grouped by what you're trying to do. Full reference with every flag:
 | `agentry status` | What's installed, where, and whether it drifted from your config. |
 | `agentry why <ref>` | Where a component came from (source + pinned commit) and every place it installs. |
 | `agentry doctor [--strict]` | Preflight check for undefined targets, missing components, unset `${VARs}` and drift. Exits non-zero on problems. |
-| `agentry deps <ref>` | The component's transitive dependency graph. |
+| `agentry deps` | The resolved dependency map: every enabled component plus everything it pulls in. |
 | `agentry --version` | The installed version. |
 
 ### Managing sources and catalogs
@@ -475,7 +475,7 @@ Grouped by what you're trying to do. Full reference with every flag:
 |---|---|
 | `agentry enable <ref>` / `disable <ref>` | Turn a component off without forgetting it. `disable` uninstalls on the next sync; `enable` puts it back. |
 | `agentry trust <source>` | Allow a source to run its own installer at install time. Pinned to that source's commit, and revoked automatically if the source moves. |
-| `agentry sync --frozen` | Install strictly from `.agentry.lock`, failing on anything unpinned. Use this in CI. |
+| `agentry sync --frozen` | Install strictly from `.agentry.lock`, failing if any source is unpinned or has drifted. Use this in CI. |
 | `agentry emit agents-md [--check]` | Generate a portable `AGENTS.md` from your skills, agents and commands. `--check` verifies it's up to date in CI. |
 | `agentry emit triggers [--check]` | Write a "when to use each skill" block into every target's memory file (`CLAUDE.md`, `AGENTS.md`, …), so tools that don't auto-load skills still know to reach for them. |
 | `agentry import apm [--file apm.yml]` | Convert another agent package manager's manifest into `.agentry.yml`. |

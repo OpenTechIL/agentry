@@ -51,8 +51,9 @@ trap 'rm -rf "$tmp"' EXIT
 curl -fsSL "$base/SHA256SUMS.txt" -o "$tmp/SHA256SUMS.txt" || err "checksum download failed"
 
 # Release assets were named agy-<version>-<target> before 0.1.4. Prefer the current name
-# and fall back, so an older copy of this script keeps working against a new release and
-# a new copy keeps working against an old one.
+# and fall back, so this script can still install releases older than 0.1.4, which only
+# published agy-* assets. (Copies of this script older than 0.1.4 can't install current
+# releases: those no longer publish agy-* assets.)
 asset=""
 for candidate in "agentry-${version_no_v}-${target}" "agy-${version_no_v}-${target}"; do
   if grep -q "  $candidate\$" "$tmp/SHA256SUMS.txt"; then

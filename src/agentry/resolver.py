@@ -10,7 +10,12 @@ a 40-char commit SHA for git, a ``sha256:`` content hash for local.
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
+import stat
 import subprocess
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from .config import STORE_DIR
@@ -119,6 +124,10 @@ def resolve(root: Path, source: Source, *, pinned: str | None, normalize: bool =
 def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
     if source.url is None:  # normally guaranteed by Source._check_locator
         raise ResolveError(f"git source '{source.name}' has no url")
+    if (dest / ".git").is_dir() and _origin_url(dest) != source.url:
+        # The configured url moved (a fork, a renamed repo): the cached clone belongs to the
+        # old origin, and fetching it would silently install the old repo's content.
+        _remove(dest)
     if not (dest / ".git").is_dir():
         if dest.exists() or dest.is_symlink():
             _remove(dest)
@@ -135,6 +144,14 @@ def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
         ref=source.ref,
         resolved=sha,
     )
+
+
+def _origin_url(clone: Path) -> str | None:
+    """The ``origin`` remote url of a store clone, or ``None`` if it has none/is broken."""
+    try:
+        return _git(["remote", "get-url", "origin"], cwd=clone)
+    except ResolveError:
+        return None
 
 
 def _resolve_local(root: Path, source: Source, dest: Path, *, normalize: bool = True) -> LockEntry:
@@ -155,10 +172,31 @@ def _resolve_local(root: Path, source: Source, dest: Path, *, normalize: bool = 
     )
 
 
-def _remove(path: Path) -> None:
-    import shutil
+def _force_writable(func: Callable[..., object], path: str, _exc: object) -> None:
+    """rmtree error hook: clear the read-only bit and retry.
 
-    if path.is_symlink() or path.is_file():
+    git marks pack files (``.git/objects/pack/*.idx`` / ``*.pack``) read-only. POSIX lets
+    you unlink them anyway (removal is a directory permission), but Windows refuses with
+    ``PermissionError [WinError 5]`` — so removing a store clone crashed on Windows.
+    """
+    os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+    parent = os.path.dirname(path)
+    if parent:  # a read-only directory also blocks unlinking its entries (POSIX)
+        os.chmod(parent, stat.S_IRWXU)
+    func(path)
+
+
+def _remove(path: Path) -> None:
+    if path.is_symlink():
+        path.unlink()  # the link itself — never touch (or chmod) what it points at
+    elif path.is_file():
+        # A read-only file can't be unlinked on Windows (PermissionError [WinError 5]).
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
         path.unlink()
     elif path.is_dir():
-        shutil.rmtree(path)
+        # `onexc` replaced `onerror` in Python 3.12 (and `onerror` is deprecated there);
+        # both receive (func, path, exc-or-excinfo), which the hook ignores.
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=_force_writable)
+        else:
+            shutil.rmtree(path, onerror=_force_writable)
