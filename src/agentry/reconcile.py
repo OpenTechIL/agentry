@@ -553,6 +553,13 @@ def _reconcile_transforms(
             have.add(path)
 
 
+def _warn_unparseable(
+    result: SyncResult, component: str, action: str, exc: merge_inst.MergeTargetError
+) -> None:
+    """Report a merge skipped because its destination file can't be parsed."""
+    result.warnings.append(f"{component}: {action} its config — {exc}")
+
+
 def _reconcile_merges(
     root: Path, desired: list[DesiredMerge], manifest: Manifest, result: SyncResult
 ) -> None:
@@ -562,21 +569,32 @@ def _reconcile_merges(
     desired_by_key = {key(d.component, d.target): d for d in desired}
     old_by_key = {key(m.component, m.target): m for m in manifest.merges}
 
+    new_records: list[InstalledMerge] = []
     for k, m in old_by_key.items():
         if k not in desired_by_key:
             dest = MergeDest(m.file, m.pointer)
-            if merge_inst.remove_merge(root, dest, m.keys):
-                result.removed.append(f"merge {m.file}:{m.pointer} ({', '.join(m.keys)})")
+            try:
+                if merge_inst.remove_merge(root, dest, m.keys):
+                    result.removed.append(f"merge {m.file}:{m.pointer} ({', '.join(m.keys)})")
+            except merge_inst.MergeTargetError as exc:
+                # Keep the record so the removal is retried once the file is fixed.
+                _warn_unparseable(result, m.component, "not removed from", exc)
+                new_records.append(m)
 
-    new_records: list[InstalledMerge] = []
     for k, d in desired_by_key.items():
         old = old_by_key.get(k)
-        if old is not None:
-            stale = [key_ for key_ in old.keys if key_ not in d.keys]
-            if stale:
-                merge_inst.remove_merge(root, d.dest, stale)
-        existed = merge_inst.merge_state(root, d.dest, d.keys) == "ok"
-        merge_inst.install_merge(root, d.dest, d.fragment)
+        try:
+            if old is not None:
+                stale = [key_ for key_ in old.keys if key_ not in d.keys]
+                if stale:
+                    merge_inst.remove_merge(root, d.dest, stale)
+            existed = merge_inst.merge_state(root, d.dest, d.keys) == "ok"
+            merge_inst.install_merge(root, d.dest, d.fragment)
+        except merge_inst.MergeTargetError as exc:
+            _warn_unparseable(result, d.component, "not merged into", exc)
+            if old is not None:
+                new_records.append(old)  # still owned; reconciled once the file parses
+            continue
         if not existed:
             result.created.append(f"merge {d.dest.file}:{d.dest.pointer} ({', '.join(d.keys)})")
         new_records.append(
@@ -666,28 +684,43 @@ def _reconcile_link_merges(
     old_by_key = {key(m.component, m.target): m for m in manifest.link_merges}
 
     # Remove orphans: both the symlink and the owned merge keys.
+    new_records: list[InstalledLinkMerge] = []
     for k, m in old_by_key.items():
         if k not in desired_by_key:
-            removed = link_inst.remove_link(root, m.link_path)
-            if merge_inst.remove_merge(root, MergeDest(m.file, m.pointer), m.keys) or removed:
+            # Merge side first: if the config can't be parsed, leave the pair (link and
+            # record) intact so the whole removal is retried once the file is fixed.
+            try:
+                merge_removed = merge_inst.remove_merge(root, MergeDest(m.file, m.pointer), m.keys)
+            except merge_inst.MergeTargetError as exc:
+                _warn_unparseable(result, m.component, "not removed from", exc)
+                new_records.append(m)
+                continue
+            if link_inst.remove_link(root, m.link_path) or merge_removed:
                 result.removed.append(f"link+merge {m.link_path} + {m.file}:{m.pointer}")
 
-    new_records: list[InstalledLinkMerge] = []
     for k, d in desired_by_key.items():
         old = old_by_key.get(k)
-        if old is not None:
-            stale = [key_ for key_ in old.keys if key_ not in d.keys]
-            if stale:
-                merge_inst.remove_merge(root, d.dest, stale)
-            # The dest template (e.g. {repo}@{ref}) may have moved the link — drop the old one.
-            if old.link_path != d.link_path:
-                link_inst.remove_link(root, old.link_path)
+        try:
+            # Probe the config before touching anything: a link whose hooks can't be
+            # merged would be half an install.
+            merge_existed = merge_inst.merge_state(root, d.dest, d.keys) == "ok"
+            if old is not None:
+                stale = [key_ for key_ in old.keys if key_ not in d.keys]
+                if stale:
+                    merge_inst.remove_merge(root, d.dest, stale)
+        except merge_inst.MergeTargetError as exc:
+            _warn_unparseable(result, d.component, "not merged into", exc)
+            if old is not None:
+                new_records.append(old)
+            continue
+        # The dest template (e.g. {repo}@{ref}) may have moved the link — drop the old one.
+        if old is not None and old.link_path != d.link_path:
+            link_inst.remove_link(root, old.link_path)
         try:
             link_status = link_inst.install_link(root, d.artifact, d.link_path)
         except FileExistsError as exc:
             result.warnings.append(str(exc))
             continue
-        merge_existed = merge_inst.merge_state(root, d.dest, d.keys) == "ok"
         merge_inst.install_merge(root, d.dest, d.fragment)
         if link_status == "created" or not merge_existed:
             result.created.append(f"link+merge {d.link_path} + {d.dest.file}:{d.dest.pointer}")
@@ -741,13 +774,23 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
                 dc.component, dc.target, dc.path, copy_inst.copy_state(root, dc.artifact, dc.path)
             )
         )
+
+    def merge_state(dest: MergeDest, keys: list[str]) -> str:
+        # An unparseable config is reported (once per file) instead of raising.
+        try:
+            return merge_inst.merge_state(root, dest, keys)
+        except merge_inst.MergeTargetError as exc:
+            if str(exc) not in warnings:
+                warnings.append(str(exc))
+            return "missing"
+
     for dm in merges:
         rows.append(
             StatusRow(
                 dm.component,
                 dm.target,
                 f"{dm.dest.file}:{dm.dest.pointer}",
-                merge_inst.merge_state(root, dm.dest, dm.keys),
+                merge_state(dm.dest, dm.keys),
             )
         )
     for dg in generates:
@@ -756,7 +799,7 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
         rows.append(StatusRow(dg.component, dg.target, where, state))
     for dlm in link_merges:
         link_ok = link_inst.link_state(root, dlm.artifact, dlm.link_path) == "ok"
-        merge_ok = merge_inst.merge_state(root, dlm.dest, dlm.keys) == "ok"
+        merge_ok = merge_state(dlm.dest, dlm.keys) == "ok"
         state = "ok" if (link_ok and merge_ok) else "missing"
         rows.append(
             StatusRow(

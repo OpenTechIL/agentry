@@ -32,6 +32,7 @@ from collections.abc import MutableMapping
 from pathlib import Path
 
 import tomlkit
+import tomlkit.exceptions
 
 from ..spec import MergeDest
 from ._paths import require_confined
@@ -65,25 +66,49 @@ def _is_toml(path: Path) -> bool:
     return path.suffix == ".toml"
 
 
-def _read_doc(path: Path) -> MutableMapping:
+class MergeTargetError(ValueError):
+    """A merge destination exists but cannot be parsed, so agentry leaves it untouched.
+
+    Raised before anything is written: an unparseable file (truncated JSON, JSONC
+    comments, invalid TOML, a non-object root) can't be merged into without losing the
+    user's content, so the caller warns and skips that destination instead.
+    """
+
+
+def _read_doc(path: Path, label: str | None = None) -> MutableMapping:
     """Read a config file as a mutable mapping (a tomlkit document for ``.toml``).
 
     A missing/empty file yields an empty document of the right kind so a later write
     produces the correct format. Both backends return a ``MutableMapping``, so the merge
-    logic below is format-agnostic.
+    logic below is format-agnostic. A file that exists but can't be parsed raises
+    :class:`MergeTargetError` naming ``label`` (the project-relative path).
     """
-    if _is_toml(path):
-        if not path.is_file():
-            return tomlkit.document()
-        return tomlkit.parse(path.read_text(encoding="utf-8"))
+    name = label or str(path)
     if not path.is_file():
+        return tomlkit.document() if _is_toml(path) else {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise MergeTargetError(f"{name} is not UTF-8 text — left unchanged") from exc
+    if _is_toml(path):
+        try:
+            return tomlkit.parse(text)
+        except tomlkit.exceptions.TOMLKitError as exc:
+            raise MergeTargetError(
+                f"{name} is not valid TOML ({exc}) — left unchanged; fix it, then re-run sync"
+            ) from exc
+    if not text.strip():
         return {}
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        return {}
-    doc = json.loads(text)
+    try:
+        doc = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise MergeTargetError(
+            f"{name} is not valid JSON (line {exc.lineno}, column {exc.colno}: {exc.msg}) — "
+            "left unchanged; fix it (comments and trailing commas are not supported), "
+            "then re-run sync"
+        ) from exc
     if not isinstance(doc, dict):
-        raise ValueError(f"{path} is not a JSON object")
+        raise MergeTargetError(f"{name} is not a JSON object — left unchanged")
     return doc
 
 
@@ -117,7 +142,7 @@ def _write_doc(path: Path, doc: MutableMapping, *, before: str | None) -> None:
 def install_merge(root: Path, dest: MergeDest, fragment: dict) -> list[str]:
     """Merge ``fragment`` into the target config; return the owned keys."""
     path = require_confined(root, dest.file)
-    doc = _read_doc(path)
+    doc = _read_doc(path, dest.file)
     before = _serialize(path, doc) if path.is_file() else None
     section = doc.get(dest.pointer)
     if not isinstance(section, MutableMapping):
@@ -136,7 +161,7 @@ def remove_merge(root: Path, dest: MergeDest, keys: list[str]) -> bool:
     path = require_confined(root, dest.file)
     if not path.is_file():
         return False
-    doc = _read_doc(path)
+    doc = _read_doc(path, dest.file)
     section = doc.get(dest.pointer)
     if not isinstance(section, MutableMapping):
         return False
@@ -159,7 +184,7 @@ def merge_state(root: Path, dest: MergeDest, keys: list[str]) -> str:
     path = require_confined(root, dest.file)
     if not path.is_file():
         return "missing"
-    section = _read_doc(path).get(dest.pointer)
+    section = _read_doc(path, dest.file).get(dest.pointer)
     if not isinstance(section, MutableMapping):
         return "missing"
     return "ok" if all(k in section for k in keys) else "missing"
