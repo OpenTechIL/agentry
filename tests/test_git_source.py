@@ -251,3 +251,16 @@ def test_ref_change_to_the_same_sha_keeps_trust(project: Path, git_source: Path)
     entry = load_lock(project).entry("g")
     assert entry.ref == "dev" and entry.resolved == sha
     assert entry.trusted is True
+
+
+def test_unchanged_url_keeps_trust(project: Path, git_source: Path):
+    """Negative guard: with url and ref untouched, neither sync nor a no-movement update
+    revokes consent."""
+    _git_project(project, f"file://{git_source}")
+    sync(project)
+    _trust(project)
+
+    sync(project)
+    assert load_lock(project).entry("g").trusted is True
+    sync(project, update=True)  # upstream hasn't moved: same SHA, same origin
+    assert load_lock(project).entry("g").trusted is True
