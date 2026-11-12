@@ -72,10 +72,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   run now fails on purpose: before, sync treated the typo as "no targets" and uninstalled the
   components of the target you meant. Fix the name, or define the target. `catalog add` and
   `catalog remove` still work, so you can install the overlay that defines it.
-- **Behavior change: agentry no longer overwrites config entries it didn't add.** Previously,
-  when an `mcp` or `hook` component merged a key that already existed in the target file
-  (`.mcp.json`, `.claude/settings.json`, `.vscode/mcp.json`, …), agentry overwrote your entry,
-  and removing the component later deleted it. Now sync leaves your entry unchanged and warns.
+- **agentry's hooks now append to your own hooks on the same event; previously one could
+  silently replace the other.** When a hook pack ships an event you already use, such as
+  `PreToolUse` in `.claude/settings.json`, agentry adds its hook groups after yours. Your groups
+  and their order are never touched. Removing or disabling a pack removes only its own groups.
+  An identical group shipped by two packs is stored once and stays until the last of them is
+  removed. If you edit or delete one of agentry's groups, sync reports it as `drift` and doesn't
+  re-add it.
+- **Behavior change: agentry no longer overwrites named config entries it didn't add.** This
+  covers named entries such as MCP servers. Previously, when an `mcp` or `hook` component merged
+  a key that already existed in the target file (`.mcp.json`, `.vscode/mcp.json`, …), agentry
+  overwrote your entry, and removing the component later deleted it. Now sync leaves your entry
+  unchanged and warns.
   On first install, the component is not merged into that file at all, so nothing is
   half-installed. Once a component is installed, a conflict holds back only that entry, and the
   component's other entries keep updating. `agentry status` shows the reason and

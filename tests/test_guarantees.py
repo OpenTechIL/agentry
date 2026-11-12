@@ -220,6 +220,62 @@ def test_merge_never_clobbers_same_named_hand_authored_key(tmp_path: Path, local
     assert _read_json(proj / ".mcp.json").get("mcpServers", {}).get("github") == mine
 
 
+def test_hook_pack_preserves_user_entries_on_same_event(tmp_path: Path):
+    """A hook pack shipping PreToolUse adds its entry alongside the user's own PreToolUse
+    hooks; uninstalling removes only agentry's entry. Guards QA D2."""
+    src = tmp_path / "src"
+    _native_hook(src, "guard", "PreToolUse", "agentry-guard")
+    proj = tmp_path / "proj"
+    store = _project(proj, src, Component(source="s", type=_C.HOOK, name="guard"))
+    (proj / ".claude").mkdir(parents=True, exist_ok=True)
+    (proj / ".claude/settings.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "PreToolUse": [
+                        {"matcher": "Bash", "hooks": [{"type": "command", "command": "USER-HOOK"}]}
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    sync(proj)
+    cmds = _hook_commands(proj, "PreToolUse")
+    assert "USER-HOOK" in cmds and "agentry-guard" in cmds
+    sync(proj)
+    assert sorted(_hook_commands(proj, "PreToolUse")) == sorted(cmds)  # re-sync: no dupes
+
+    store.set_enabled("s/hook/guard", False)
+    store.save()
+    sync(proj)
+    assert _hook_commands(proj, "PreToolUse") == ["USER-HOOK"]
+
+
+def test_two_hook_components_on_same_event_coexist(tmp_path: Path):
+    """Two components both hooking PostToolUse each install; disabling one leaves the
+    other in place. Guards field D2 (last-write-wins on a shared event key)."""
+    src = tmp_path / "src"
+    _native_hook(src, "fmt", "PostToolUse", "run-fmt")
+    _native_hook(src, "lint", "PostToolUse", "run-lint")
+    proj = tmp_path / "proj"
+    store = _project(
+        proj,
+        src,
+        Component(source="s", type=_C.HOOK, name="fmt"),
+        Component(source="s", type=_C.HOOK, name="lint"),
+    )
+
+    sync(proj)
+    assert {"run-fmt", "run-lint"} <= set(_hook_commands(proj, "PostToolUse"))
+
+    store.set_enabled("s/hook/fmt", False)
+    store.save()
+    sync(proj)
+    assert _hook_commands(proj, "PostToolUse") == ["run-lint"]
+
+
 def test_merge_never_replaces_non_object_section(tmp_path: Path, local_source: Path):
     """A target section the user set to a non-object value is never silently replaced.
     Guards QA D3."""
@@ -462,8 +518,8 @@ def test_duplicate_claim_has_exactly_one_owner(tmp_path: Path):
 
 
 def test_link_merge_refused_merge_creates_no_symlink(tmp_path: Path):
-    """link+merge is atomic: when the merge half is refused (W1), the link half is not
-    installed either."""
+    """link+merge is atomic: when the merge half is refused (W1, here a list-vs-object shape
+    conflict), the link half is not installed either."""
     src = tmp_path / "src"
     (src / "hooks").mkdir(parents=True)
     (src / "hooks" / "run.sh").write_text("echo hi\n", encoding="utf-8")
@@ -497,13 +553,66 @@ target_profiles:
     )
     settings = proj / ".claude" / "settings.json"
     settings.parent.mkdir()
-    mine = json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "MINE"}]}]}})
+    # Rev 5: a user *list* on the same event no longer refuses (ours is appended), so the
+    # refusal under test is a shape conflict: the user's Stop is an object, not a list.
+    mine = json.dumps({"hooks": {"Stop": {"x": 1}}})
     settings.write_text(mine, encoding="utf-8")
 
     sync(proj)
     assert settings.read_text(encoding="utf-8") == mine
     link = proj / ".claude/hooks/agentry/hooks"
     assert not link.exists() and not link.is_symlink()
+
+
+def test_link_merge_user_list_on_same_event_merges_alongside(tmp_path: Path):
+    """Rev 5: a user's own list on the same event no longer refuses a link+merge hook. Ours
+    is appended and linked; the user's group stays byte-identical, also through disable."""
+    src = tmp_path / "src"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "run.sh").write_text("echo hi\n", encoding="utf-8")
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "r"}]}]}}),
+        encoding="utf-8",
+    )
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / ".agentry.yml").write_text(
+        f"""version: 1
+targets: [claude]
+sources:
+  - name: s
+    type: local
+    path: {src}
+components:
+  - source: s
+    type: hook
+    name: hooks
+    path: hooks
+target_profiles:
+  claude:
+    hook:
+      strategy: link+merge
+      dest: ".claude/hooks/agentry/{{name}}"
+      file: .claude/settings.json
+      pointer: hooks
+""",
+        encoding="utf-8",
+    )
+    settings = proj / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    mine = {"hooks": [{"type": "command", "command": "MINE"}]}
+    settings.write_text(json.dumps({"hooks": {"Stop": [mine]}}), encoding="utf-8")
+
+    sync(proj)
+    stop = _read_json(settings)["hooks"]["Stop"]
+    assert stop[0] == mine and len(stop) == 2  # user's first and unchanged, ours appended
+    assert (proj / ".claude/hooks/agentry/hooks").is_symlink()
+
+    store = ConfigStore.load(proj)
+    store.set_enabled("s/hook/hooks", False)
+    store.save()
+    sync(proj)
+    assert _read_json(settings)["hooks"]["Stop"] == [mine]
 
 
 def test_fingerprint_is_canonical():
@@ -531,35 +640,63 @@ def _downgrade_manifest_to_v1(proj: Path) -> None:
     mp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
 
-def test_v1_hook_key_with_user_additions_not_owned(tmp_path: Path):
-    """A v1 record claims a hook-event key, but the user has since appended their own group
-    to that event's array. Migration must not adopt the user-modified array as agentry's:
-    status reports drift, and disable leaves both groups and drops the record."""
-    from agentry.manifest import load_manifest
+_USER_GROUP = {"matcher": "Bash", "hooks": [{"type": "command", "command": "USER-HOOK"}]}
 
+
+def _v1_hook_with_user_addition(tmp_path: Path):
+    """guard installed PreToolUse [agentry-guard]; the user appended _USER_GROUP; the
+    manifest is then downgraded to v1 (no per-key proof)."""
     src = tmp_path / "src"
     _native_hook(src, "guard", "PreToolUse", "agentry-guard")
     proj = tmp_path / "proj"
     store = _project(proj, src, Component(source="s", type=_C.HOOK, name="guard"))
     sync(proj)
     _downgrade_manifest_to_v1(proj)
-
     settings = proj / ".claude/settings.json"
     doc = _read_json(settings)
-    doc["hooks"]["PreToolUse"].append(
-        {"matcher": "Bash", "hooks": [{"type": "command", "command": "USER-HOOK"}]}
-    )
+    doc["hooks"]["PreToolUse"].append(_USER_GROUP)
     settings.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+    return proj, store, settings
+
+
+def test_v1_hook_key_with_user_additions_not_owned(tmp_path: Path):
+    """A v1 record claims a hook-event key, but the user has since appended their own group.
+    The user's group is never adopted: it survives sync and disable byte-identical.
+    (Rev 5 §8: status is ok because agentry's identical element is claimed.)"""
+    proj, store, settings = _v1_hook_with_user_addition(tmp_path)
 
     rows, _ = status(proj)
     (row,) = [r for r in rows if r.ref == "s/hook/guard"]
-    assert row.state == "drift" and row.note and "recorded by an older agentry" in row.note
+    assert row.state == "ok"
+    assert _USER_GROUP in _read_json(settings)["hooks"]["PreToolUse"]
 
     _disable(store, "s/hook/guard")
-    res = sync(proj)
-    assert sorted(_hook_commands(proj, "PreToolUse")) == ["USER-HOOK", "agentry-guard"]
-    assert any("left in place on removal" in w for w in res.warnings)
+    sync(proj)
+    assert _USER_GROUP in _read_json(settings)["hooks"]["PreToolUse"]  # user's group survives
+
+
+def test_v1_hook_key_same_sync_disable_removes_only_ours(tmp_path: Path):
+    """Agentry-side half of the above: disabling in the same sync that migrates the v1 record
+    removes agentry's identical element (no dead hook left) and drops the record."""
+    from agentry.manifest import load_manifest
+
+    proj, store, settings = _v1_hook_with_user_addition(tmp_path)
+    _disable(store, "s/hook/guard")
+    sync(proj)
+    assert _read_json(settings)["hooks"]["PreToolUse"] == [_USER_GROUP]
     assert not [m for m in load_manifest(proj).merges if m.component == "s/hook/guard"]
+
+
+def test_v1_hook_key_with_user_additions_migrated_then_disabled(tmp_path: Path):
+    """With a sync between the upgrade and the disable, the migrated record claims only
+    `agentry-guard`: the user's group survives both syncs, and disable removes only ours."""
+    proj, store, settings = _v1_hook_with_user_addition(tmp_path)
+
+    sync(proj)  # migrates the v1 record (claims only the identical element)
+    assert _USER_GROUP in _read_json(settings)["hooks"]["PreToolUse"]
+    _disable(store, "s/hook/guard")
+    sync(proj)
+    assert _read_json(settings)["hooks"]["PreToolUse"] == [_USER_GROUP]
 
 
 def test_v1_hook_key_unchanged_is_owned_and_removed(tmp_path: Path):

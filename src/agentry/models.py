@@ -672,7 +672,12 @@ class OwnedEntry(BaseModel):
     fingerprint: str | None = None  # named: fp of the value agentry wrote
     preexisting: bool = False  # named: identical user entry; never removed
     kept: bool = False  # named, with preexisting: became the user's via the component's keep:
-    items: list[str] = Field(default_factory=list)  # array: fps agentry appended, in order
+    # array: one slot per desired element, in fragment order — the fp of the element this
+    # record claims, or None when the slot is satisfied by the user's identical element.
+    items: list[str | None] = Field(default_factory=list)
+    # array: for a None slot, the fp of the user's element that satisfies it (so an upstream
+    # change is reported instead of appending a second copy). Empty when there are none.
+    user_items: list[str | None] = Field(default_factory=list)
     created_key: bool = False  # array: agentry created the event key itself
 
 

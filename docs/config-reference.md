@@ -106,6 +106,12 @@ spelling.
 The component's other entries keep updating as normal. Disabling or removing the component
 leaves a kept entry in place, which is intended: it's yours.
 
+For a `hook` component, the key is an event name, such as `PreToolUse`. Keeping it hands that
+component's hook groups on that event over to you, and other packs' groups on the same event are
+unaffected. A kept group still counts as that component's claim. If another pack ships an
+identical group, removing that pack leaves it in place, and so does removing the component that
+kept it, because it's yours.
+
 If a hook pack's events depend on each other (for example `PreToolUse` and `PostToolUse` scripts
 sharing state), keep or delete them together. agentry handles each entry independently.
 
