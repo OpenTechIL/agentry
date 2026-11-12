@@ -70,11 +70,14 @@ the breakage would be a missing binary rather than a clear error message.
   `[project.scripts]` gets three names for free. `tests/test_packaging.py` was rewritten
   around `BIN`/`ALIASES` constants for exactly this reason: a missed channel otherwise
   surfaces only as a broken release asset.
-- **Release-asset names are a compatibility boundary.** `install.sh`/`install.ps1` fetch
-  `agy-<version>-<target>` when self-updating, so renaming assets breaks *already
-  installed* copies of the installer. Publish both names for one release and have the
-  installers try the current name first with a fallback. This is easy to forget because
-  nothing in CI exercises the previously shipped installer.
+- **Release-asset names are a compatibility boundary.** Before 0.1.4, `install.sh` and
+  `install.ps1` fetched `agy-<version>-<target>` when self-updating, so renaming the assets
+  would have broken *already installed* copies of the installer. So 0.1.4 and 0.1.5 published
+  both names, and the installers since 0.1.4 try `agentry-*` first and fall back to `agy-*`
+  for old releases. The duplicate `agy-*` assets have since been removed. An installer copy
+  older than 0.1.4 can no longer install new releases and must be re-downloaded. The lesson
+  still applies: CI never exercises a previously shipped installer, so an asset rename needs a
+  deliberate overlap window and a planned end to it.
 - **Homebrew has a first-class alias mechanism.** A symlink at `Aliases/agy →
   ../Formula/agentry.rb` in the tap keeps `brew install OpenTechIL/tap/agy` resolving; two
   formula files would have fought over the same binary.
