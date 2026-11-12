@@ -19,12 +19,13 @@ from rich.prompt import Prompt
 from rich.table import Table
 from rich.tree import Tree
 
-from . import __version__, deps, discovery
+from . import __version__, deps, discovery, plugin_manifest
 from .config import DEFAULT_CATALOG_NAME, DEFAULT_CATALOG_URL, LOCK_NAME, ConfigStore
 from .deps import DependencyError
 from .drivers import BUILTIN_DRIVERS
 from .lockfile import load_lock, save_lock
 from .models import (
+    MERGE_TYPES,
     TYPE_EXT,
     Component,
     ComponentType,
@@ -260,6 +261,8 @@ def _summary_count(kind: str, msgs: list[str]) -> int:
     target), but the line says "{N} components", so count distinct components."""
     if kind == "format":
         return len({m.split(": may not work in ", 1)[0] for m in msgs})
+    if kind == "plugin":  # one line per unsupported key; the summary counts sources
+        return len({m.split(": plugin.json ", 1)[0] for m in msgs})
     return len(msgs)
 
 
@@ -280,6 +283,11 @@ def _summary_line(kind: str, n: int) -> str:
             f"{_plural(n, 'component target', 'component targets')} "
             f"{'isn' if n == 1 else 'aren'}'t active in this project and "
             f"{'was' if n == 1 else 'were'} skipped — run `{prog()} doctor` for the list"
+        )
+    if kind == "plugin":
+        return (
+            f"{_plural(n, 'plugin source uses', 'plugin sources use')} features agentry "
+            "doesn't install — run with --verbose for the list"
         )
     if kind == "unsupported":
         return (
@@ -310,9 +318,11 @@ def _print_result(res: SyncResult, *, verbose: bool = False) -> None:
     summaries: list[str] = []
     if not verbose:
         for kind, msgs in res.summarized.items():
-            if len(msgs) >= _SUMMARY_MIN:
+            n = _summary_count(kind, msgs)
+            # plugin lines collapse per source: one source's keys still print in full
+            if (n if kind == "plugin" else len(msgs)) >= _SUMMARY_MIN:
                 hidden.update(msgs)
-                summaries.append(_summary_line(kind, _summary_count(kind, msgs)))
+                summaries.append(_summary_line(kind, n))
     for w in res.warnings:
         if hidden[w] > 0:
             hidden[w] -= 1
@@ -1032,6 +1042,21 @@ def _fragment_file(ref: str) -> str:
     return f"{name}{TYPE_EXT.get(ComponentType(ctype), '')}"
 
 
+def _plugin_origin(store: ConfigStore, component: Component) -> str | None:
+    """``.claude-plugin/plugin.json (hooks)`` when a component is inline in a plugin.json."""
+    src = store.parsed().source(component.source)
+    if src is None or component.type not in MERGE_TYPES:
+        return None
+    sp = effective_root(_root(), src)
+    if not sp.exists():
+        return None
+    if component.path is not None:
+        artifact: Path | None = sp / component.path
+    else:
+        artifact = discovery.index(sp).get((component.type, component.name))
+    return None if artifact is None else plugin_manifest.origin(artifact, component.type)
+
+
 @app.command(name="why")
 def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/<name>.")) -> None:
     """Explain a component: where it came from (source + pinned revision) and where it installs.
@@ -1053,6 +1078,9 @@ def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/
         f"[cyan]{_e(ref)}[/cyan]" + ("" if component.enabled else " [yellow](disabled)[/yellow]")
     )
     tree.add(f"source: {_source_provenance(store, component.source)}")
+    defined_in = _plugin_origin(store, component)
+    if defined_in is not None:
+        tree.add(f"defined in: {_e(defined_in)}")
     targets = tree.add("installs to")
     style = {"ok": "green", "ok (kept)": "green", "missing": "red", "drift": "yellow"}
     mine = [r for r in rows if r.ref == ref]

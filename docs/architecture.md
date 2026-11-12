@@ -66,9 +66,14 @@ tracks so removal deletes exactly those and nothing else. See `installers/genera
 
 ## 4. Source-repo layout: convention or descriptor
 
-A source (git repo or local dir) provides components in one of three ways, in precedence
-order: an explicit `agentry.yaml` **descriptor**, an **`.apm/` package tree** (consumed
-directly — see below), else agentry's own **convention** scan.
+A source (git repo or local dir) provides components in one of these ways, in precedence
+order:
+1. An explicit `agentry.yaml` **descriptor**. When there is one, it wins entirely and the
+   other layouts are not consulted.
+2. A **Claude Code plugin manifest**, `.claude-plugin/plugin.json`, at the subdir-adjusted
+   source root.
+3. An **`.apm/` package tree**, consumed directly (see below).
+4. Otherwise, agentry's own **convention** scan.
 
 **Convention** — mirror the standard agent layout:
 
@@ -108,6 +113,39 @@ under agentry's own naming (e.g. `.apm/agents/x.agent.md` → a symlink at
 `.claude/agents/x.md`). So such a package repo is consumable as an agentry source with no
 republishing — the package-tree counterpart to `agentry import apm`, which translates the matching
 `apm.yml` manifest.
+
+**Claude Code plugin manifests (`.claude-plugin/plugin.json`).** `plugin_manifest.load`
+translates the manifest into a `SourceDescriptor`-shaped layout, which discovery merges with the
+convention scan, the same way as a descriptor. Discovery itself stays layout-agnostic. The keys
+follow Claude's loader:
+- **`commands` / `agents` replace** the default `commands/` and `agents/` scans. Each value is a
+  path, a list of paths, or a `{name: {source}}` map. Inline `{content}` is skipped with a
+  warning.
+- **`skills` adds** to `skills/`. Each path is either a skill directory, meaning it contains
+  `SKILL.md`, or a root of skill directories.
+- **`hooks` / `mcpServers` add** to `hooks/hooks.json` and `.mcp.json`.
+  - A path, or a list of paths, becomes one component per file, named after the file stem, so
+    `-<harness>` variants still route (§5).
+  - An inline object becomes one component, `plugin-hooks` / `plugin-mcp`. Its artifact is
+    `plugin.json` itself, and only its `hooks` / `mcpServers` subtree is merged.
+  - Hooks from `plugin.json` and from `hooks/hooks.json` both load. Where they share events they
+    merge per element (§7).
+
+The surrounding rules:
+- **Confinement.** Every manifest path must be relative and use forward slashes, with no `..`.
+  It must also resolve, symlinks included, inside the **source root**: the store's
+  `.agentry/<source>`, not the plugin subdir. That lets a marketplace plugin symlink a sibling
+  plugin's files, as Claude allows. Anything else is skipped with a warning before any
+  filesystem lookup.
+- **Fallbacks and warnings.** A malformed manifest, or one without a `name`, falls back to the
+  convention scan with a warning. Keys agentry has no equivalent for (`outputStyles`,
+  `lspServers`, …) and MCP bundles (`.mcpb` / `.dxt`) are reported, and summarised by sync when
+  several sources have them.
+- **Inline hooks that reference `${…_PLUGIN_ROOT}`** only resolve inside an installed plugin, so
+  they are skipped per event. They are *not* routed to link+merge, which would link
+  `.claude-plugin/` rather than the plugin root.
+- `agentry why` shows where an inline component is defined: `.claude-plugin/plugin.json
+  (hooks)`.
 
 **Consumer-side overrides (third way).** When a source follows neither layout — a common
 case for third-party skills whose repo *is* the skill — the consumer's `.agentry.yml`
@@ -600,7 +638,11 @@ file that may be committed.
 The one case that contract can't self-protect against is a reference that is **unset
 *and* has no default** (`${VAR}`, not `${VAR:-x}`): it ships as a dead placeholder.
 Both `agentry sync` and `agentry doctor` scan for exactly that and emit a warning (shared
-`envscan.unset_env_refs`); `agentry doctor --strict` turns the warning into a non-zero exit,
+`envscan.unset_env_refs`). The scan covers only the text agentry actually installs
+(`plugin_manifest.merge_text`). For a `plugin.json` artifact that is just its `hooks` /
+`mcpServers` subtree, so placeholders in fields that aren't installed are never reported.
+`${CLAUDE_PLUGIN_DATA}` gets its own warning, because it exists only inside an installed Claude
+plugin. `agentry doctor --strict` turns the warning into a non-zero exit,
 which is the CI guardrail. The merge still proceeds — the warning is loud, not blocking —
 so a value the user *will* set at runtime isn't spuriously rejected.
 

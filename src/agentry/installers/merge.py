@@ -57,7 +57,8 @@ def select_entries(fragment: dict, dest: MergeDest) -> dict:
     metadata like a top-level ``description``. When a wrapper key (see
     :attr:`MergeDest.wrapper_keys`) is present with an object value, those inner
     entries are the real payload and any sibling keys are ignored. An already-flat
-    fragment is returned unchanged.
+    fragment is returned unchanged. (A plugin.json's inline entries are picked out by
+    :func:`agentry.plugin_manifest.manifest_entries` instead, never by this.)
     """
     for key in dest.wrapper_keys:
         inner = fragment.get(key)

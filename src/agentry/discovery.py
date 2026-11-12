@@ -24,6 +24,7 @@ from pathlib import Path
 
 from ruamel.yaml import YAML
 
+from . import plugin_manifest
 from .models import (
     KNOWN_HARNESS_SLUGS,
     MERGE_TYPES,
@@ -98,12 +99,17 @@ APM_LAYOUT: dict[str, tuple[ComponentType, str | None]] = {
 def discover(source_root: Path) -> list[Discovered]:
     """List every component a source provides.
 
-    Precedence: an explicit ``agentry.yaml`` descriptor, then a Microsoft apm ``.apm/``
-    package tree (consumed directly, no republishing), then agentry's own convention scan.
+    Precedence: an explicit ``agentry.yaml`` descriptor; then a Claude plugin's
+    ``.claude-plugin/plugin.json`` (applied on top of the convention scan); then a Microsoft
+    apm ``.apm/`` package tree (consumed directly, no republishing); then agentry's own
+    convention scan.
     """
     descriptor = load_descriptor(source_root)
     if descriptor is not None:
         return _discover_from_descriptor(source_root, descriptor)
+    layout = plugin_manifest.load(source_root)
+    if layout is not None:
+        return _discover_plugin(source_root, layout)[0]
     if (source_root / APM_PACKAGE_DIR).is_dir():
         return _discover_apm_package(source_root)
     return _discover_by_convention(source_root)
@@ -212,6 +218,65 @@ def _discover_by_convention(source_root: Path) -> list[Discovered]:
                 found.append(Discovered(ComponentType.MCP, ROOT_MCP_COMPONENT, root_mcp))
                 break
     return found
+
+
+def _discover_plugin(
+    source_root: Path, layout: plugin_manifest.PluginLayout, src: str | None = None
+) -> tuple[list[Discovered], list[str]]:
+    """The convention scan, minus the scans plugin.json replaces, plus what it adds.
+
+    A file-based component wins a name clash with a manifest one (e.g. a real
+    ``hooks/plugin-hooks.json`` over inline ``hooks``); the clash is reported.
+    """
+    found = [d for d in _discover_by_convention(source_root) if d.type not in layout.replaces]
+    seen = {(d.type, d.name): d for d in found}
+    warnings: list[str] = []
+    src = src or plugin_manifest.source_label(source_root)
+    for d in _discover_from_descriptor(source_root, layout.descriptor):
+        prior = seen.get((d.type, d.name))
+        if prior is None:
+            found.append(d)
+            seen[(d.type, d.name)] = d
+        elif prior.path != d.path:
+            warnings.append(
+                f"source '{src}': plugin.json would add {d.type.value} '{d.name}', but "
+                f"{prior.path.relative_to(source_root).as_posix()} already provides it — "
+                "installed the file one; the plugin.json one is not installed. Rename the "
+                "file to install both."
+            )
+    return found, warnings
+
+
+def plugin_source_warnings(
+    source_root: Path, src: str | None = None
+) -> tuple[list[str], list[str]]:
+    """Source-level findings about a source's plugin.json: ``(all, unsupported)``.
+
+    ``all`` covers rejected or missing paths, name clashes and unsupported keys;
+    ``unsupported`` is the unsupported-key subset (sync summarizes those). Both are empty
+    when the source has no plugin.json or an ``agentry.yaml`` descriptor wins.
+    """
+    if load_descriptor(source_root) is not None:
+        return [], []  # an agentry.yaml wins entirely; plugin.json isn't read
+    layout = plugin_manifest.load(source_root, src)
+    if layout is None:
+        return [], []
+    _, clashes = _discover_plugin(source_root, layout, src)
+    return [*layout.warnings, *clashes], list(layout.unsupported)
+
+
+def plugin_warnings(source_root: Path) -> list[str]:
+    """Everything worth telling the user about a source's plugin.json (empty if none):
+    rejected or missing paths, unsupported keys, name clashes, ``${CLAUDE_PLUGIN_DATA}``."""
+    out, _ = plugin_source_warnings(source_root)
+    if load_descriptor(source_root) is not None or plugin_manifest.load(source_root) is None:
+        return out
+    src = plugin_manifest.source_label(source_root)
+    for d in discover(source_root):
+        if d.type in MERGE_TYPES:
+            ref = f"{src}/{d.type.value}/{d.name}"
+            out.extend(plugin_manifest.plugin_data_refs(ref, d.type, d.path))
+    return out
 
 
 def index(source_root: Path) -> dict[tuple[ComponentType, str], Path]:

@@ -17,7 +17,7 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import deps, discovery
+from . import deps, discovery, plugin_manifest
 from .config import ConfigStore
 from .drivers import Driver, resolve_drivers
 from .envscan import unset_env_refs
@@ -108,7 +108,13 @@ def _component_checks(
             Check("warn", "support", f"{comp.ref}: no active target installs a '{comp.type.value}'")
         )
     if comp.type in MERGE_TYPES and artifact.is_file():
-        for var in unset_env_refs(artifact.read_text(encoding="utf-8")):
+        try:  # only what installs: for plugin.json, its hooks/mcpServers subtree
+            text = plugin_manifest.merge_text(artifact, comp.type)
+        except (ValueError, OSError):
+            text = ""
+        for var in unset_env_refs(text):
+            if var == "CLAUDE_PLUGIN_DATA":
+                continue  # reported with its own wording from the plan (plugin_notes)
             checks.append(
                 Check(
                     "warn",
@@ -161,10 +167,15 @@ def run_checks(root: Path) -> list[Check]:
     # Cross-target content mismatches (phase A): the same findings sync warns about, from
     # the same read-only plan computation, reported as warnings so --strict fails on them.
     plan = compute_desired(root, augmented, [], graph.transitive)
-    for issue in plan.format_issues:
-        checks.append(Check("warn", "format", issue))
-    for issue in plan.inactive:  # component targets the project hasn't activated
-        checks.append(Check("warn", "target", issue))
+    checks.extend(
+        [
+            *(Check("warn", "format", issue) for issue in plan.format_issues),
+            # component targets the project hasn't activated
+            *(Check("warn", "target", issue) for issue in plan.inactive),
+            # plugin.json paths, name clashes, unsupported keys, ${CLAUDE_PLUGIN_DATA}
+            *(Check("warn", "plugin", note) for note in plan.plugin_notes),
+        ]
+    )
 
     try:
         rows, _ = status(root)

@@ -18,7 +18,7 @@ from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import deps, discovery, envscan
+from . import deps, discovery, envscan, plugin_manifest
 from .config import ConfigStore
 from .drivers import Driver, resolve_drivers
 from .gitignore import ensure_gitignore
@@ -166,6 +166,11 @@ class DesiredPlan:
     #: Path claims lost in config order, dropped from the plan: ``(loser, target, path,
     #: winner ref, note)`` — status shows them as missing with the note.
     path_losers: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    #: plugin.json findings (also in the caller's warnings): rejected paths, name clashes,
+    #: unsupported keys, ``${CLAUDE_PLUGIN_DATA}`` references — doctor reports them too.
+    plugin_notes: list[str] = field(default_factory=list)
+    #: The unsupported-key subset of ``plugin_notes``, kept apart so the CLI can summarize.
+    plugin_unsupported: list[str] = field(default_factory=list)
 
 
 def compute_desired(
@@ -188,13 +193,17 @@ def compute_desired(
         )
 
     # Build a (type, name) -> path index per source.
+    plan = DesiredPlan()
     indexes: dict[str, dict[tuple[ComponentType, str], Path]] = {}
     for indexed in config.sources:
         sp = effective_root(root, indexed)
         if sp.exists():
             indexes[indexed.name] = discovery.index(sp)
+            notes, unsupported = discovery.plugin_source_warnings(sp, indexed.name)
+            plan.plugin_notes.extend(notes)
+            plan.plugin_unsupported.extend(unsupported)
+    warnings.extend(plan.plugin_notes)
 
-    plan = DesiredPlan()
     variants = _enabled_variants(config)
 
     for comp in config.components:
@@ -231,11 +240,7 @@ def compute_desired(
         # reference that is unset *and* has no default would ship dead. Warn once per
         # component rather than silently install it — mirrors `agentry doctor`.
         if comp.type in MERGE_TYPES and artifact.is_file():
-            for var in envscan.unset_env_refs(artifact.read_text(encoding="utf-8")):
-                warnings.append(
-                    f"{comp.ref}: references ${{{var}}}, which is unset — set it before your "
-                    "agent runs (agentry ships the placeholder; the runtime resolves it)"
-                )
+            _warn_placeholders(comp, artifact, plan, warnings)
 
         for tname in comp.applies_to(config.targets):
             driver = drivers.get(tname)
@@ -358,6 +363,30 @@ def _resolve_key_claims(
             continue  # uncontested, or every claim is an array (shared per element, Rev 5)
         _, winner, _ = min(cl, key=lambda c: (c[0], c[1]))
         plan.winners[unit] = (winner, winner[0] in transitive)
+
+
+def _warn_placeholders(
+    comp: Component, artifact: Path, plan: DesiredPlan, warnings: list[str]
+) -> None:
+    """Warn about placeholders in what a hook/MCP component installs that won't resolve.
+
+    Only the entries agentry installs are scanned (for an inline plugin component, the
+    ``hooks`` / ``mcpServers`` subtree of plugin.json, not its other fields).
+    """
+    try:
+        text = plugin_manifest.merge_text(artifact, comp.type)
+    except (ValueError, OSError):
+        return  # unreadable or malformed: the merge step reports it
+    for var in envscan.unset_env_refs(text):
+        if var == "CLAUDE_PLUGIN_DATA":
+            continue  # its own, more specific warning below
+        warnings.append(
+            f"{comp.ref}: references ${{{var}}}, which is unset — set it before your "
+            "agent runs (agentry ships the placeholder; the runtime resolves it)"
+        )
+    for note in plugin_manifest.plugin_data_refs(comp.ref, comp.type, artifact):
+        warnings.append(note)
+        plan.plugin_notes.append(note)
 
 
 def _warn_inactive_targets(
@@ -506,39 +535,99 @@ def _desired_for_target(
     else:
         dest = driver.merge_dest(comp.type)
         try:
-            entries = merge_inst.select_entries(merge_inst.load_fragment(artifact), dest)
+            entries, notes = _fragment_entries(artifact, comp.type, dest)
         except (ValueError, OSError) as exc:
             warnings.append(f"{comp.ref}: {exc}")
             return
+        warnings.extend(f"{comp.ref}: {note}" for note in notes)
         # Defense-in-depth: drop hook events the target doesn't recognize (e.g. Claude
         # Code rejects a settings.json carrying unknown events). No-op for agents
         # without a hook-event policy.
         if comp.type is ComponentType.HOOK:
-            entries, dropped = driver.filter_hook_events(entries)
-            for bad in dropped:
-                warnings.append(
-                    f"{comp.ref}: hook event '{bad}' is not a recognized {tname} event — skipped"
-                )
+            entries = _hook_entries(comp, tname, driver, artifact, dest, entries, plan, warnings)
             if not entries:
                 return
-            # A plugin-style hook ships ${...PLUGIN_ROOT} paths that only resolve inside
-            # a real installed plugin. Merged verbatim into a config file they fail at
-            # startup; the fix is a link+merge profile (which rewrites them). Warn rather
-            # than silently install a dead hook.
-            for cmd in link_merge_inst.plugin_root_refs(entries):
-                warnings.append(
-                    f"{comp.ref}: hook command references a plugin-root variable "
-                    f"({cmd!r}), which only resolves inside an installed plugin — merged "
-                    f"into {dest.file} it will fail at startup. Configure a 'link+merge' "
-                    f"hook profile under target_profiles for this repo (see the "
-                    f"superpowers/arckit catalog entries)."
-                )
         _check_format(comp, tname, driver, plan, warnings, entries=entries)
         # Seam: a driver.transform (currently always None) would reshape `entries`
         # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
         plan.merges.append(
             DesiredMerge(comp.ref, tname, dest, entries, list(entries), comp.kept_keys(tname))
         )
+
+
+def _fragment_entries(
+    artifact: Path, ctype: ComponentType, dest: MergeDest
+) -> tuple[dict, list[str]]:
+    """The named entries a plain-merge artifact provides, plus notes on what was left out.
+
+    A plugin.json (an inline plugin component) yields only its hooks/mcpServers value; any
+    other fragment file is unwrapped once by its section name.
+    """
+    if plugin_manifest.is_manifest(artifact):
+        return plugin_manifest.manifest_entries(artifact, ctype)
+    return merge_inst.select_entries(merge_inst.load_fragment(artifact), dest), []
+
+
+def _hook_entries(
+    comp: Component,
+    tname: str,
+    driver: Driver,
+    artifact: Path,
+    dest: MergeDest,
+    entries: dict,
+    plan: DesiredPlan,
+    warnings: list[str],
+) -> dict:
+    """The hook events of ``entries`` worth merging on ``tname``, warning about the rest."""
+    # Defense-in-depth: drop hook events the target doesn't recognize (e.g. Claude
+    # Code rejects a settings.json carrying unknown events). No-op for agents
+    # without a hook-event policy.
+    entries, dropped = driver.filter_hook_events(entries)
+    for bad in dropped:
+        warnings.append(
+            f"{comp.ref}: hook event '{bad}' is not a recognized {tname} event — skipped"
+        )
+    if plugin_manifest.is_manifest(artifact):
+        return _drop_plugin_root_events(comp, tname, entries, plan, warnings)
+    # A plugin-style hook ships ${...PLUGIN_ROOT} paths that only resolve inside a real
+    # installed plugin. Merged verbatim into a config file they fail at startup; the fix
+    # is a link+merge profile (which rewrites them). Warn rather than silently install a
+    # dead hook.
+    for cmd in link_merge_inst.plugin_root_refs(entries):
+        warnings.append(
+            f"{comp.ref}: hook command references a plugin-root variable "
+            f"({cmd!r}), which only resolves inside an installed plugin — merged "
+            f"into {dest.file} it will fail at startup. Configure a 'link+merge' "
+            f"hook profile under target_profiles for this repo (see the "
+            f"superpowers/arckit catalog entries)."
+        )
+    return entries
+
+
+def _drop_plugin_root_events(
+    comp: Component, tname: str, entries: dict, plan: DesiredPlan, warnings: list[str]
+) -> dict:
+    """Skip inline plugin.json hook events whose commands use ``${..._PLUGIN_ROOT}``.
+
+    Such a path only resolves inside an installed Claude plugin, and an inline hook has no
+    script directory agentry could link and rewrite it to (a link+merge profile needs one),
+    so the event is left out rather than merged dead.
+    """
+    kept: dict = {}
+    for event, groups in entries.items():
+        refs = link_merge_inst.plugin_root_refs(groups)
+        if not refs:
+            kept[event] = groups
+            continue
+        note = (
+            f"{comp.ref}: hook event '{event}' in {plugin_manifest.MANIFEST_PATH} runs "
+            f"{refs[0]!r}, and agentry doesn't support ${{CLAUDE_PLUGIN_ROOT}} paths in inline "
+            f"plugin hooks yet — skipped it on {tname}. Install the plugin in Claude Code "
+            "itself to use this hook."
+        )
+        warnings.append(note)
+        plan.plugin_notes.append(note)  # doctor reports it too
+    return kept
 
 
 def _check_format(
@@ -688,6 +777,7 @@ def sync(
     result.summarized["unsupported"] = list(plan.skipped)
     result.summarized["format"] = list(plan.format_issues)
     result.summarized["inactive"] = list(plan.inactive)
+    result.summarized["plugin"] = list(plan.plugin_unsupported)
     links, copies, merges = plan.links, plan.copies, plan.merges
     generates, link_merges, transforms = plan.generates, plan.link_merges, plan.transforms
     manifest = load_manifest(root)
@@ -1209,9 +1299,7 @@ def _source_fragments(root: Path, config: Config, declared: Config) -> FragmentL
         if not artifact.is_file():
             return None
         try:
-            return merge_inst.select_entries(
-                merge_inst.load_fragment(artifact), MergeDest(rec.file, rec.pointer)
-            )
+            return _fragment_entries(artifact, ctype, MergeDest(rec.file, rec.pointer))[0]
         except (ValueError, OSError):
             return None
 

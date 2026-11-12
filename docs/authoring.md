@@ -131,6 +131,41 @@ If your repo already ships an `.apm/` tree, agentry reads it directly — `.apm/
 `command` type). `instructions` has no agentry equivalent and is skipped. No republishing
 needed. See [architecture §4](architecture.md#4-source-repo-layout-convention-or-descriptor).
 
+### Claude Code plugins (`.claude-plugin/plugin.json`)
+
+A Claude Code plugin repo uses the same layout the conventional scan reads (`skills/`,
+`commands/`, `agents/`, `hooks/hooks.json`, `.mcp.json`). Its `.claude-plugin/plugin.json` can
+point some of those elsewhere, and agentry follows it the way Claude Code's own plugin loader
+does:
+
+| plugin.json key | Effect on discovery |
+|---|---|
+| `commands` | **Replaces** the default `commands/` scan. A path or list of paths. |
+| `agents` | **Replaces** the default `agents/` scan. |
+| `skills` | **Adds** to `skills/`. Each path is a skills root (`<name>/` folders) or one skill folder. |
+| `hooks` | **Adds** to `hooks/hooks.json`. A path, an inline object, or a list of those. Inline objects (all items of a list together) become one component named `plugin-hooks`. |
+| `mcpServers` | **Adds** to `.mcp.json`. A path, an inline object, or a list of those. Inline objects become one component named `plugin-mcp`. It stays separate from the `.mcp.json` component, and a server name both define follows the usual [first-listed-wins](config-reference.md#components) rule. |
+
+What's skipped, with a warning:
+- keys with no agentry component type: `outputStyles`, `workflows`, `themes`, `lspServers`,
+  `monitors`, `userConfig`, `channels`, `bin`;
+- a path that doesn't exist, or one that leaves the source (`..`, absolute paths);
+- inline `commands`/`agents` content (ship a file instead);
+- MCP bundles (`.mcpb`, `.dxt`);
+- a `hooks` or `mcpServers` value that's neither a path nor an object, such as a number.
+
+A component that plugin.json adds but the repo already provides as a file (same type and name)
+installs the file version, with a warning. A plugin.json that only has `name` discovers exactly
+what the conventional scan does. If plugin.json isn't valid JSON, agentry warns and falls back
+to the conventional layout.
+
+**An `agentry.yaml` descriptor wins.** When the repo has one, agentry doesn't read plugin.json
+at all.
+
+Newly discovered components aren't enabled automatically. They show up in `agentry list`.
+Warnings for a source's plugin.json are listed in
+[troubleshooting](troubleshooting.md#a-claude-plugin-source-reports-pluginjson-warnings).
+
 ### Repos that are themselves the skill
 
 Very common for third-party skills: the repo root *is* the component. Nothing to author —
