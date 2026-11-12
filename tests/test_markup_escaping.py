@@ -1,7 +1,9 @@
 """T15: user-controlled text is printed literally by every CLI surface.
 
 Rich interprets ``[...]`` as markup and (unless disabled) ``:name:`` as emoji, so a source,
-component, path or error containing them could lose text or restyle output. Each command
+component, path or error containing them could lose text or restyle output. Filesystem
+names here avoid ``:`` (illegal on Windows); ``:b:`` is exercised through a merged entry key
+and CLI-argument refs, which never become paths. Each command
 here is run on names built from those characters and must print them verbatim — while
 agentry's own styling tags never leak as literal text.
 """
@@ -19,9 +21,9 @@ from agentry.cli import app
 runner = CliRunner()
 
 SRC = "[red]s"  # source name
-SKILL = "[bold]x:b:"  # component name: markup + an emoji shortcode
+SKILL = "[bold]x"  # component name with markup (a directory name: no ":" — illegal on Windows)
 MCP = "[i]srv"  # merged component name with markup
-KEY = "[/]k"  # merged entry key holding a bare closing tag
+KEY = "[/]k:b:"  # merged entry key: a bare closing tag + an emoji shortcode (never a filename)
 REF = f"{SRC}/skill/{SKILL}"
 B_EMOJI = "\N{NEGATIVE SQUARED LATIN CAPITAL LETTER B}"
 
@@ -129,13 +131,13 @@ def test_merged_entry_names_print_literally_in_warnings_and_doctor(proj: Path):
 
 
 def test_error_path_prints_user_text_literally(proj: Path):
-    result = runner.invoke(app, ["add", "[x]y/skill/z"])
+    result = runner.invoke(app, ["add", "[x]y:b:/skill/z"])
     assert result.exit_code == 1
-    _assert_literal(result, "Unknown source '[x]y'")
+    _assert_literal(result, "Unknown source '[x]y:b:'")
 
-    why = runner.invoke(app, ["why", "[x]y/skill/[bold]z"])
+    why = runner.invoke(app, ["why", "[x]y:b:/skill/[bold]z"])
     assert why.exit_code == 1
-    _assert_literal(why, "[x]y/skill/[bold]z")
+    _assert_literal(why, "[x]y:b:/skill/[bold]z")
 
 
 def test_catalog_and_target_list_print_names_literally(proj: Path, tmp_path: Path):
