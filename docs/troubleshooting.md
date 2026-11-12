@@ -708,8 +708,31 @@ It fails when:
   locally. Run it and commit the updated lock.
 - **the lock is out of date relative to config** — same fix.
 - **the store is missing** — `.agentry/` is git-ignored, so a fresh CI checkout has to clone.
-  That's expected and `--frozen` handles it; if it fails here, the pinned SHA is gone from
-  the remote (a force-push or deleted branch). Re-run `agentry update <source>`.
+  That's expected and `--frozen` handles it. If it fails here, the pinned commit is gone from
+  the remote; see [locked commit is no longer on origin](#locked-commit-is-no-longer-on-origin).
+
+Once a source is cloned and its pinned commit is in `.agentry/`, `sync`, `sync --frozen`,
+`status` and `doctor` don't contact the remote at all, so they also work offline.
+
+## `locked commit … is no longer on origin`
+
+**Symptom.**
+
+```text
+source 'a': locked commit 56462872c9f8 is no longer on origin (force-pushed or deleted?). Run `agentry update a` to re-pin.
+```
+
+**Cause.** `.agentry.lock` pins the source to a commit that your local `.agentry/` store
+doesn't have, and the remote doesn't have it any more either. Someone force-pushed over it, or
+deleted the branch it was on. This usually shows up on a fresh checkout, such as CI, where
+the store has to be cloned from scratch. agentry stops instead of installing a different
+commit.
+
+**Fix.** Re-pin the source to what the remote has now, then commit the updated lock:
+
+```bash
+agentry update a
+```
 
 ## Recovering a broken `.agentry/` store
 
