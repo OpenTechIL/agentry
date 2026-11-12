@@ -36,7 +36,9 @@ try {
   $sums = Get-Content "$tmp\SHA256SUMS.txt"
 
   # Release assets were named agy-<version>-<target>.exe before 0.1.4. Prefer the current
-  # name and fall back, so old and new copies of this script both keep working.
+  # name and fall back, so this script can still install releases older than 0.1.4, which
+  # only published agy-* assets. (Copies of this script older than 0.1.4 can't install
+  # current releases: those no longer publish agy-* assets.)
   $asset = $null
   foreach ($candidate in @("agentry-$version_no_v-$target.exe", "agy-$version_no_v-$target.exe")) {
     if ($sums -match "  $([regex]::Escape($candidate))$") { $asset = $candidate; break }
