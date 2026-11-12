@@ -729,26 +729,56 @@ Who = tuple[str, str]  # (component ref, target) — the identity of one merge r
 
 
 class _Claims:
-    """Which record owns each ``(file, pointer, key)`` — so no component writes over, or
-    adopts, an entry another live component installed (ADR-001)."""
+    """Who owns what in each merge destination, across every live record (ADR-001).
+
+    Named mode: one owner per ``(file, pointer, key)`` — no component writes over, or
+    adopts, an entry another live component installed (W5). Array mode (Rev 5 §5): a
+    refcount per element, ``(file, pointer, key, fp) -> {records}``, counting *every* record
+    that lists the fingerprint (pre-existing and kept ones too), so a shared element is
+    removed only when its last claimant goes.
+    """
 
     def __init__(self, records: list[InstalledMerge | InstalledLinkMerge]) -> None:
         self._by: dict[tuple[str, str, str], Who] = {}
+        self._elements: dict[tuple[str, str, str, str], set[Who]] = {}
+        self._array_keys: dict[tuple[str, str, str], set[Who]] = {}
         for r in records:
             self.claim((r.component, r.target), r.file, r.pointer, r.entries)
 
     def claim(self, who: Who, file: str, pointer: str, entries: dict[str, OwnedEntry]) -> None:
         for key, entry in entries.items():
-            if not entry.preexisting:
+            if entry.mode == "array":
+                self._array_keys.setdefault((file, pointer, key), set()).add(who)
+                for fp in entry.items:
+                    if fp is not None:
+                        self._elements.setdefault((file, pointer, key, fp), set()).add(who)
+            elif not entry.preexisting:
                 self._by[(file, pointer, key)] = who
 
     def release(self, who: Who) -> None:
         self._by = {k: v for k, v in self._by.items() if v != who}
+        for claimants in [*self._elements.values(), *self._array_keys.values()]:
+            claimants.discard(who)
 
     def lookup(self, who: Who, file: str, pointer: str) -> Callable[[str], str | None]:
+        """Another live owner of ``key`` — named, or array-mode (a shape conflict, W5)."""
+
         def other(key: str) -> str | None:
             owner = self._by.get((file, pointer, key))
-            return owner[0] if owner is not None and owner != who else None
+            if owner is not None and owner != who:
+                return owner[0]
+            for w in sorted(self._array_keys.get((file, pointer, key), set())):
+                if w != who:
+                    return w[0]
+            return None
+
+        return other
+
+    def shared(self, who: Who, file: str, pointer: str) -> Callable[[str, str], bool]:
+        """Whether another live record also claims element ``fp`` of array key ``key``."""
+
+        def other(key: str, fp: str) -> bool:
+            return any(w != who for w in self._elements.get((file, pointer, key, fp), ()))
 
         return other
 
@@ -783,6 +813,70 @@ def _migrate_v1(
         else:
             fragment = fallback(r)
         r.entries = merge_inst.migrate_named(doc, r.pointer, r.keys, fragment)
+
+
+def _convert_list_records(
+    docs: merge_inst.Documents,
+    records: list[InstalledMerge | InstalledLinkMerge],
+    desired: dict[Who, tuple[MergeDest, dict]],
+    fallback: FragmentLookup | None = None,
+) -> None:
+    """Turn PR 1 / v1 named-mode records of list-valued keys into array mode (Rev 5 §8).
+
+    In memory; sync persists the result. The fragment comes from the desired plan, or —
+    for a record being removed this sync (disabled, uninstalled) — from ``fallback``, which
+    re-reads the source; so removal is per element too, and only agentry's identical
+    groups go. A record whose fragment can't be re-derived keeps its named form (whole-value
+    removal, left in place if the user changed it).
+    """
+    for r in records:
+        if not any(e.mode == "named" for e in r.entries.values()):
+            continue
+        want = desired.get((r.component, r.target))
+        if want is not None and (want[0].file, want[0].pointer) == (r.file, r.pointer):
+            fragment: dict | None = want[1]
+        else:
+            fragment = fallback(r) if fallback is not None else None
+        if fragment is None or not any(
+            e.mode == "named" and isinstance(fragment.get(k), list) for k, e in r.entries.items()
+        ):
+            continue
+        try:
+            doc = docs.get(r.file)
+        except merge_inst.MergeTargetError:
+            continue
+        r.entries = merge_inst.convert_named_lists(doc, r.pointer, r.entries, fragment)
+
+
+def _hand_over_created_keys(
+    records: list[InstalledMerge | InstalledLinkMerge],
+    desired: dict[Who, tuple[MergeDest, dict]],
+) -> None:
+    """Before planning: when the record that created an array key leaves it this sync
+    (disabled, moved, or the key dropped from its fragment) while another record that stays
+    still appends to that key, pass ``created_key`` on — so the last one out deletes the key
+    it empties instead of leaving ``[]`` behind.
+
+    Done up front on the old records (which planning reads), so it doesn't depend on the
+    order components are processed in. Pre-existing/kept records never receive it.
+    """
+    leaving: list[tuple[InstalledMerge | InstalledLinkMerge, str]] = []
+    staying: dict[tuple[str, str, str], list[OwnedEntry]] = {}
+    for r in records:
+        want = desired.get((r.component, r.target))
+        same = want is not None and (want[0].file, want[0].pointer) == (r.file, r.pointer)
+        for key, entry in r.entries.items():
+            if entry.mode != "array":
+                continue
+            if same and want is not None and key in want[1]:
+                if not entry.preexisting:
+                    staying.setdefault((r.file, r.pointer, key), []).append(entry)
+            elif entry.created_key:
+                leaving.append((r, key))
+    for r, key in leaving:
+        heirs = staying.get((r.file, r.pointer, key))
+        if heirs:
+            heirs[0].created_key = True
 
 
 def _desired_fragments(
@@ -863,11 +957,25 @@ def _ctx(
 
 def _differs(rec: OwnedEntry | None, have: str, want: str) -> bool:
     """Whether a recorded entry is one the user now owns a different value of (W2/W1b)."""
-    if rec is None:
+    if rec is None or rec.mode == "array":
         return False
     if rec.preexisting:
         return have != want
     return rec.fingerprint != have
+
+
+def _drifted(rec: OwnedEntry | None, have: object, want: object) -> bool:
+    """Whether this key needs the user's decision on this target (drives keep hints)."""
+    if rec is not None and rec.mode == "array":
+        on_disk = {merge_inst.fingerprint(e) for e in have} if isinstance(have, list) else set()
+        if any(f is not None and f not in on_disk for f in rec.items):
+            return True  # a group of ours was edited or removed (W2)
+        wanted = [merge_inst.fingerprint(e) for e in want] if isinstance(want, list) else []
+        return any(  # the user's copy no longer matches upstream (array W1b)
+            u is not None and u in on_disk and i < len(wanted) and wanted[i] != u
+            for i, u in enumerate(rec.user_items)
+        )
+    return _differs(rec, merge_inst.fingerprint(have), merge_inst.fingerprint(want))
 
 
 def _bare_keys(seen: dict[tuple[str, str], tuple[set[str], set[str]]]) -> dict[str, set[str]]:
@@ -905,11 +1013,7 @@ def _mark_bare_desired(
                 continue
             written, drifted = seen.setdefault((d.component, key), (set(), set()))
             written.add(d.target)
-            if key in current and _differs(
-                owned.get(key),
-                merge_inst.fingerprint(current[key]),
-                merge_inst.fingerprint(value),
-            ):
+            if key in current and _drifted(owned.get(key), current[key], value):
                 drifted.add(d.target)
 
 
@@ -944,7 +1048,7 @@ def _orphan_bare(
         section = doc.get(r.pointer)
         current = section if isinstance(section, MutableMapping) else {}
         for key, e in r.entries.items():
-            if e.preexisting:
+            if e.preexisting or e.mode == "array":
                 continue
             written, drifted = seen.setdefault((r.component, key), (set(), set()))
             written.add(r.target)
@@ -961,6 +1065,7 @@ def _remove_record(
     result: SyncResult,
     kept: frozenset[str] = frozenset(),
     bare: frozenset[str] = frozenset(),
+    claims: _Claims | None = None,
 ) -> bool | None:
     """Remove a record's owned entries, never its ``kept`` keys (the user's by ``keep:``).
 
@@ -988,6 +1093,7 @@ def _remove_record(
         _ctx((rec.component, rec.target), rec.file, rec.pointer, bare),
         {k: e for k, e in rec.entries.items() if k not in kept},
         unverified,
+        claims.shared((rec.component, rec.target), rec.file, rec.pointer) if claims else None,
     )
     result.warnings.extend(warnings)
     return removed
@@ -1026,6 +1132,7 @@ def _plan_record(
         claims.lookup(who, dest.file, dest.pointer),
         kept,
         installed=old is not None and not moved,  # per-key refusal once installed here
+        shared=claims.shared(who, dest.file, dest.pointer),
     )
     result.warnings.extend(plan.warnings)
     result.summarized.setdefault("drift", []).extend(plan.drift_warnings)
@@ -1049,11 +1156,13 @@ def _commit_record(
     the writes; re-point this record's claims at what it now owns."""
     if old is not None and (old.file, old.pointer) != (dest.file, dest.pointer):
         # Destination moved: never orphan the old entries (kept keys stay the user's).
-        _remove_record(docs, old, result, kept, bare)
+        _remove_record(docs, old, result, kept, bare, claims)
     doc = docs.get(dest.file)
     ctx = _ctx(who, dest.file, dest.pointer, bare)
     if stale:
-        _, warnings = merge_inst.remove_named(doc, ctx, stale)
+        _, warnings = merge_inst.remove_named(
+            doc, ctx, stale, shared=claims.shared(who, dest.file, dest.pointer)
+        )
         result.warnings.extend(warnings)
     merge_inst.commit_named(doc, dest.pointer, plan)
     claims.release(who)
@@ -1087,12 +1196,11 @@ def _reconcile_merge_targets(
             f"manifest from an older agentry: run `{prog()} sync` before `{prog()} update` so "
             "installed entries can be verified"
         )
-    _migrate_v1(
-        docs,
-        records,
-        _desired_fragments(merges, link_merges),
-        _source_fragments(root, config, declared),
-    )
+    from_source = _source_fragments(root, config, declared)
+    _migrate_v1(docs, records, _desired_fragments(merges, link_merges), from_source)
+    desired_frags = _desired_fragments(merges, link_merges)
+    _convert_list_records(docs, records, desired_frags, from_source)
+    _hand_over_created_keys(records, desired_frags)
     claims = _Claims(records)
     _assign_bare(merges, link_merges, docs, records)
     kept_for = _kept_lookup(config, declared)
@@ -1130,7 +1238,7 @@ def _reconcile_merges(
         if k in desired_by_key:
             continue
         removed = _remove_record(
-            docs, m, result, kept_for(k), frozenset(orphan_bare.get(m.component, set()))
+            docs, m, result, kept_for(k), frozenset(orphan_bare.get(m.component, set())), claims
         )
         if removed is None:
             new_records.append(m)  # unparseable: keep it so removal is retried
@@ -1253,7 +1361,7 @@ def _reconcile_link_merges(
         if k in desired_by_key:
             continue
         merge_removed = _remove_record(
-            docs, m, result, kept_for(k), frozenset(orphan_bare.get(m.component, set()))
+            docs, m, result, kept_for(k), frozenset(orphan_bare.get(m.component, set())), claims
         )
         if merge_removed is None:
             new_records.append(m)
@@ -1363,12 +1471,9 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
     manifest = load_manifest(root)
     docs = merge_inst.Documents(root)
     records: list[InstalledMerge | InstalledLinkMerge] = [*manifest.merges, *manifest.link_merges]
-    _migrate_v1(
-        docs,
-        records,
-        _desired_fragments(merges, link_merges),
-        _source_fragments(root, augmented, config),
-    )
+    from_source = _source_fragments(root, augmented, config)
+    _migrate_v1(docs, records, _desired_fragments(merges, link_merges), from_source)
+    _convert_list_records(docs, records, _desired_fragments(merges, link_merges), from_source)
     claims = _Claims(records)
     old_records = {(r.component, r.target): r for r in records}
     _assign_bare(merges, link_merges, docs, records)
@@ -1394,6 +1499,7 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
             claims.lookup(who, dest.file, dest.pointer),
             kept,
             installed=same,
+            shared=claims.shared(who, dest.file, dest.pointer),
         )
         drifted = [
             DriftedEntry(dest.file, dest.pointer, key, unproven, ctx.keep_arg(key))

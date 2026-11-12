@@ -143,6 +143,19 @@ file removes it.
 `.claude/settings.json` or `.vscode/mcp.json`. agentry only changes entries it added itself, and
 it can tell whether an entry on disk is still the one it wrote. When it can't merge safely, it
 leaves your entry alone and prints one of the warnings below. `sync` still exits 0.
+
+**Hook events are shared, not refused.** A hook event such as `PreToolUse` holds a list of hook
+groups. If you already have that event, agentry appends its groups after yours, keeps your
+groups and their order, and removes only its own groups on uninstall. So the "already has …"
+refusal below applies to named entries such as MCP servers. For hooks, it applies only when the
+event exists but isn't a list:
+
+```text
+demo/hook/c: .claude/settings.json already has 'hooks.Stop' (not added by agentry) as an object, not a list — left unchanged; demo/hook/c was not merged into claude. Fix or remove your entry, or disable demo/hook/c, then re-run sync.
+```
+
+Fix that event so it holds a list (or remove it), then re-run sync. Hook-specific warnings are
+under [hook groups](#hook-groups-edited-or-removed).
 - **On first install,** a conflict skips the whole component for that file, so nothing is
   half-installed.
 - **Once the component is installed,** only the conflicting entry is skipped. The component's
@@ -240,6 +253,44 @@ The component's other entries keep updating.
 
 **Fix.** To hand it back to agentry, delete the entry and run `agentry sync`. To keep it after
 all, add it back with `agentry keep <ref> [<target>:]<key>`.
+
+### Hook groups edited or removed
+
+```text
+demo/hook/a: 1 hook group of 'hooks.PreToolUse' in .claude/settings.json no longer matches what agentry installed (edited or removed) — left as is. To reinstall, disable demo/hook/a, sync, then re-enable it; or run `agentry keep demo/hook/a PreToolUse` to keep yours.
+```
+
+With several, it reads `2 hook groups of … no longer match …`.
+
+**Cause.** You edited or deleted a hook group that agentry added to an event. agentry can't tell
+an edit from a deletion here. Re-adding the original could make the same hook run twice, so it
+leaves the event as it is. `status` shows the row as `drift`. The component's other events, and
+other packs' groups on the same event, keep updating.
+
+**Fix.** Choose one:
+- **Keep your version.** Run `agentry keep <ref> <event>` (the message gives the exact
+  command). This hands that component's groups on that event over to you. agentry stops writing
+  to that event for that component, and other packs are unaffected.
+- **Reinstall agentry's version.** Run `agentry disable <ref>`, `agentry sync`, then
+  `agentry enable <ref>`.
+
+### `your copy of <ref>'s '<event>' hook group … differs from upstream`
+
+```text
+demo/hook/a: your copy of demo/hook/a's 'hooks.PreToolUse' hook group in .claude/settings.json differs from upstream — keeping yours; delete it to take demo/hook/a's version, or run `agentry keep demo/hook/a PreToolUse` to keep yours (this stops demo/hook/a adding hooks to PreToolUse).
+```
+
+**Cause.** You already had a hook group identical to one a pack ships, so agentry used yours
+instead of adding a duplicate. The pack's version has since changed upstream. Your group is
+still yours, so agentry leaves it alone. It also doesn't add the new version next to it, because
+the hook would then run twice. `status` shows the row as `drift`. With several groups, it reads
+`your copies of 2 of <ref>'s '<event>' hook groups … differ from upstream`.
+
+**Fix.** Choose one:
+- **Take the pack's version.** Delete your group and run `agentry sync`. agentry installs the
+  new version and manages it from then on.
+- **Keep yours.** Run the `agentry keep …` command from the message. This also stops that pack
+  adding any hooks to that event.
 
 ### `'<pointer>' in <file> is a <type>, not an object`
 

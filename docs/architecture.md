@@ -222,7 +222,10 @@ Only descriptor sources can declare dependencies (the convention scan carries no
 **Merge fragment contract.** A `hooks/*.json` or `mcp/*.json` file is a JSON **object of
 named entries**. Each top-level key is merged under the target's pointer. Agentry records
 each key together with a **fingerprint** of the value it wrote: `sha256` of the canonical JSON,
-from `merge.fingerprint`. Ownership is proven by content, not by name (see §7). Example
+from `merge.fingerprint`. Ownership is proven by content, not by name (see §7). A key whose
+value is a JSON **list** (an event-keyed hook array such as `PreToolUse: [ … ]`) is merged
+**per element** instead: agentry appends its elements to the user's list and owns only those
+(see §7, "Event-keyed hook arrays"). Example
 `mcp/github.json`:
 
 ```json
@@ -510,8 +513,37 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
     `drift`, with a note on how to take the current version. Run a plain
     `agentry sync` once after upgrading, before `agentry update`, so the comparison is made
     against the locked revision. `status` migrates in memory and never writes.
-  - **Scope.** Event-keyed hook arrays (Claude, Gemini, Windsurf) are still owned as a whole
-    value: a user's existing `PreToolUse` array is refused, not merged into.
+  - **Event-keyed hook arrays** (array mode; ADR-001 PR 2). This applies when the desired value
+    is a list, as in the Claude, Gemini and Windsurf hooks.
+    - **Ownership per element.** Ownership is per **element**, identified by its fingerprint.
+      The record's `items` is ordered and aligned with the fragment's list. A `None` slot means
+      the slot is satisfied by the user's identical element, which agentry doesn't own.
+    - **Installing.** Agentry appends its elements to the user's list. The user's elements and
+      their order are never touched.
+    - **Updating.** An update replaces agentry's own element **in place**, pairing positions
+      between the old record and the new fragment.
+    - **Shared elements.** Elements are reference-counted across components: an identical
+      element two components ship is shared, and kept or pre-existing records count as claims.
+      Removing a component deletes only elements no other live record claims. It deletes the
+      event key only if the key is empty and agentry created it.
+    - **Edited elements.** An element of ours that the user edited or removed is reported (W2)
+      and not re-appended.
+    - **The user's identical copy.** A `None` slot also records the user's element fingerprint
+      (`user_items`). If upstream later changes that element while the user's copy is still
+      there, agentry keeps the user's and does **not** append. Appending would run the hook
+      twice. It reports a per-element W1b with a `keep` hint that covers the whole event. Once
+      the user deletes their copy, the next sync installs ours.
+    - **`created_key` hand-over.** `created_key` passes from a leaving record to one that stays
+      on the same key (`_hand_over_created_keys`, a pre-pass before planning). This means the
+      last component deletes an event key it empties.
+    - **`keep:`** on an event key stops that component writing to it. Its elements still count
+      as claims.
+    - **Conflicts.** A list on one side and an object on the other is a conflict (W1/W5).
+    - **Older records.** PR 1 and v1 records for list keys convert in place. A proven record
+      converts exactly. An unproven one claims only elements identical to what the component
+      ships now, and never deletes the key. This includes records being disabled in the same
+      sync, whose fragment is re-read from the source. A record whose fragment can't be
+      re-derived stays named.
 
 ### `${VAR}` placeholders: ship verbatim, warn on dead refs
 
@@ -645,10 +677,5 @@ gitignore.py    ensure .agentry/ is ignored
   keeping with "nothing of it runs while your agents do." Per-component copy-with-rewrite remains
   the next phase.
 - **Compatibility metadata** — components declare supported model/tool versions; sync warns on mismatch.
-- **Hook array-merge** — per-element ownership for event-keyed hook arrays (ADR-001 PR 2). It
-  would append agentry's matcher groups to the user's event array, and remove only those
-  groups by fingerprint, shared between components. Until then, an event array is owned as a
-  whole value, and an existing user array for the same event is refused rather than merged into
-  (§7).
 - **Copy fallback** — copy instead of symlink for filesystems without symlink support (Windows).
 - **TUI** — a Textual front-end over this same core (browse/toggle/sync).
