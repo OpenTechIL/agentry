@@ -11,6 +11,7 @@ agentry's own styling tags never leak as literal text.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -75,7 +76,8 @@ def _add_source(proj: Path):
 
 def test_source_add_and_list_print_names_and_paths_literally(proj: Path):
     added = _add_source(proj)
-    _assert_literal(added, f"Added source {SRC}", "src[/]dir")
+    # The printed path uses the OS separator ("src[/]dir" on POSIX, "src[\\]dir" on Windows).
+    _assert_literal(added, f"Added source {SRC}", os.path.join("src[", "]dir"))
 
     listed = runner.invoke(app, ["source", "list"])
     assert listed.exit_code == 0, listed.output
