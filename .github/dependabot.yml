@@ -4,6 +4,8 @@ updates:
   # pass CI's `uv lock --check` / `--locked` instead of leaving the lock stale.
   - package-ecosystem: uv
     directory: "/"
+    # Keep pyproject floors put (only uv.lock moves) unless a new version falls outside the range.
+    versioning-strategy: increase-if-necessary
     schedule:
       interval: weekly
     open-pull-requests-limit: 5

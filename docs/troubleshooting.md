@@ -744,6 +744,10 @@ doesn't list) are summarized too:
 
 See [`target '<name>' is not in the project's targets — skipped`](#target-name-is-not-in-the-projects-targets-skipped).
 
+**Kept keys with no entry on a target** are summarized too, as
+`2 keys in keep: have no entry on one or more targets and were not installed — …`. See
+[`kept, but no entry on <target>`](#kept-but-no-entry-on-target).
+
 **Format mismatches** have their own summary:
 
 ```text
@@ -770,35 +774,16 @@ on warnings too — which makes it a good CI gate.
 
 | Category | Level | Meaning |
 |---|---|---|
-| `target` | error | A target in `targets:` has no built-in driver, no `target_profiles` entry, and no installed overlay. |
+| `target` | error | A target in `targets:` has no built-in driver, no `target_profiles` entry, and no installed overlay. See [not defined](#target-name-is-not-defined-nothing-was-changed). |
+| `target` | warn | A component's `targets:` names a target the project doesn't list, so it's skipped there. See [not in the project's targets](#target-name-is-not-in-the-projects-targets-skipped). |
 | `resolve` | error | A source or dependency couldn't be resolved: git failed or timed out, a ref doesn't exist, a local source path is missing, or a dependency conflicts. The remaining checks are skipped until this is fixed. |
 | `component` | error | A component references a source that isn't declared (`unknown source`), or the source doesn't actually provide it (`not provided by source`). Run `agentry list` for the real names. |
 | `support` | warn | No active target installs this component type, so it goes nowhere. |
 | `plugin` | warn | A Claude plugin source's `plugin.json` has something agentry couldn't install or follow. See [plugin.json warnings](#a-claude-plugin-source-reports-pluginjson-warnings). |
 | `env` | warn | A merge fragment references `${VAR}`, which is unset. agentry ships the placeholder; your agent resolves it at runtime. |
-| `drift` | warn | On-disk state doesn't match config/lock. Run `agentry sync`. |
+| `drift` | warn | On-disk state doesn't match config/lock. The line says why and what to do: usually `agentry sync`, but for an entry you edited by hand or a merge agentry refused, follow the fix it names. |
+| `format` | warn | A component's content visibly won't work in that target. It's installed as-is. See [format warnings](#a-component-may-not-work-on-its-target-format-warnings). |
 | `command` | warn | The `agy` alias on `PATH` belongs to another tool (see above). |
-
-## An undefined target during `sync`
-
-**Symptom.**
-
-```text
-target 'foo' is undefined — define it under target_profiles in .agentry.yml, or install a shared driver overlay (`agentry target list`)
-```
-
-**Fix.** Either write the target yourself (`target_profiles` in `.agentry.yml` — see the
-[configuration reference](config-reference.md#target_profiles)), or install an overlay a
-catalog publishes:
-
-```bash
-agentry target list          # what overlays are available
-agentry target add foo       # shows the destinations, then asks before applying
-```
-
-`target add` prints every destination the overlay will write to and prompts for
-confirmation, because an overlay arrives over the network and dictates where files land.
-Pass `--yes` in CI once you've reviewed it.
 
 ## `target '<name>' is not defined` — nothing was changed
 
@@ -825,6 +810,17 @@ command. If the name is a real tool agentry doesn't ship, define it under
 [`target_profiles`](config-reference.md#target_profiles) or install a catalog overlay with
 `agentry target add <name>`. `agentry catalog add` still works while the config is in this
 state. Removing the component whose `targets:` holds the typo also works.
+
+To install a catalog overlay:
+
+```bash
+agentry target list          # what overlays are available
+agentry target add foo       # shows the destinations, then asks before applying
+```
+
+`target add` prints every destination the overlay will write to and prompts for
+confirmation, because an overlay arrives over the network and dictates where files land.
+Pass `--yes` in CI once you've reviewed it.
 
 `agentry target use` gives the same kind of hint for a name that doesn't exist:
 
@@ -901,8 +897,31 @@ It fails when:
   locally. Run it and commit the updated lock.
 - **the lock is out of date relative to config** — same fix.
 - **the store is missing** — `.agentry/` is git-ignored, so a fresh CI checkout has to clone.
-  That's expected and `--frozen` handles it; if it fails here, the pinned SHA is gone from
-  the remote (a force-push or deleted branch). Re-run `agentry update <source>`.
+  That's expected and `--frozen` handles it. If it fails here, the pinned commit is gone from
+  the remote; see [locked commit is no longer on origin](#locked-commit-is-no-longer-on-origin).
+
+Once a source is cloned and its pinned commit is in `.agentry/`, `sync`, `sync --frozen`,
+`status` and `doctor` don't contact the remote at all, so they also work offline.
+
+## `locked commit … is no longer on origin`
+
+**Symptom.**
+
+```text
+source 'a': locked commit 56462872c9f8 is no longer on origin (force-pushed or deleted?). Run `agentry update a` to re-pin.
+```
+
+**Cause.** `.agentry.lock` pins the source to a commit that your local `.agentry/` store
+doesn't have, and the remote doesn't have it any more either. Someone force-pushed over it, or
+deleted the branch it was on. This usually shows up on a fresh checkout, such as CI, where
+the store has to be cloned from scratch. agentry stops instead of installing a different
+commit.
+
+**Fix.** Re-pin the source to what the remote has now, then commit the updated lock:
+
+```bash
+agentry update a
+```
 
 ## Recovering a broken `.agentry/` store
 
