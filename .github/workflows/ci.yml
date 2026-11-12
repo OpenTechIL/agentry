@@ -18,9 +18,9 @@ jobs:
     name: Lint & format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
       # Pinned so a new ruff release can't fail an unrelated PR, and so the version here
@@ -30,7 +30,7 @@ jobs:
       - name: Ruff format check
         run: uvx ruff@0.15.20 format --check .
       - name: Type check
-        run: uv run --extra dev mypy
+        run: uv run --locked --extra dev mypy
 
   test:
     name: Test (py${{ matrix.python-version }})
@@ -40,9 +40,9 @@ jobs:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
           python-version: ${{ matrix.python-version }}
@@ -51,7 +51,7 @@ jobs:
       # gate was introduced; raise it, never lower it.
       - name: Run tests
         run: >-
-          uv run --extra dev pytest
+          uv run --locked --extra dev pytest
           --cov=agentry --cov-report=term-missing --cov-fail-under=85
 
   # Symlinks are the default install strategy, and Windows refuses them without Developer
@@ -66,11 +66,11 @@ jobs:
       matrix:
         os: [macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
         with:
           enable-cache: true
           python-version: "3.12"
       - name: Run tests
-        run: uv run --extra dev pytest -q
+        run: uv run --locked --extra dev pytest -q
