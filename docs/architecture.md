@@ -415,8 +415,13 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
    ├─ resolve every config source         resolver.resolve(source, pinned=deps._choose_pin(…))
    │    ├─ pin:   reuse the lock SHA only while the lock entry's type/url/ref still match the
    │    │         config (deps.pin_mismatch); a changed identity re-resolves (--frozen: abort)
-   │    ├─ git:   clone once (re-clone if origin ≠ configured url) → fetch
+   │    ├─ git:   clone once (re-clone if origin ≠ configured url) → fetch only if needed
    │    │         → checkout --detach <sha>                       → resolved = SHA
+   │    │         no network when the lock pin is already in the clone (`_has_commit`,
+   │    │         `git cat-file -e`): sync/status/doctor/--frozen run offline. Fetch happens
+   │    │         only with no pin (update, changed url/ref, new source) or a missing pin;
+   │    │         a pin still missing after fetch → "locked commit … is no longer on origin"
+   │    │         (force-pushed/deleted) → `agentry update <source>` to re-pin
    │    └─ local: symlink store/<name> → abspath(path)          → resolved = sha256(tree)
    ├─ walk requires from the enabled roots (BFS), recursing into each dep's own descriptor
    │    ├─ url dep → synthesize a lock-only source, download, recurse

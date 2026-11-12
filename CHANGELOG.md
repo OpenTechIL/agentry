@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agentry handles each entry independently.
 
 ### Changed
+- **`sync`, `status`, `doctor` and `sync --frozen` work offline once a source is cloned.** If
+  the commit pinned in `.agentry.lock` is already in the local `.agentry/` store, agentry no
+  longer fetches from the remote. `agentry update a` doesn't fetch the sources you didn't name
+  either. agentry fetches only when the pinned commit is missing locally. If the commit is gone
+  from the remote too (for example after a force-push), agentry fails with a message that says
+  so and suggests `agentry update <source>` to re-pin.
 - **Behavior change: `agentry update <source>` now updates only the named sources.** It used to
   ignore its argument and update everything. Now `agentry update a b` re-resolves `a` and `b`
   only. Every other source keeps its pinned revision in `.agentry.lock` and its trust, and only
