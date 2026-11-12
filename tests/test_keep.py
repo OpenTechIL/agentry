@@ -294,13 +294,17 @@ def test_installed_component_new_upstream_key_collides_refused_per_key(tmp_path:
 
 def test_installed_component_duplicate_claim_refused_per_key(tmp_path: Path, monkeypatch):
     """PM Rev 4 #2: after install, an upstream key that another component already owns is
-    refused for that key only (W5); siblings still update."""
+    refused for that key only (W5); siblings still update. Under Rev 6 the earlier-listed
+    claimant wins, so `extra` is listed first to keep it the owner."""
     proj, store = _project(tmp_path)
     (tmp_path / "src" / "mcp" / "extra.json").write_text(
         json.dumps({"slack": {"command": "from-extra"}}), encoding="utf-8"
     )
     store = ConfigStore.load(proj)
-    store.add_component(Component(source="s", type=_C.MCP, name="extra"))
+    store.doc["components"].insert(
+        0,
+        Component(source="s", type=_C.MCP, name="extra").model_dump(mode="json", exclude_none=True),
+    )
     store.save()
     sync(proj)
     _upstream(
@@ -314,6 +318,41 @@ def test_installed_component_duplicate_claim_refused_per_key(tmp_path: Path, mon
     assert servers["gitlab"] == {"command": "gl-v2"}  # sibling updated
     assert any(w.startswith(_REF) and "is already provided by" in w for w in res.warnings)
     assert _strict_exit(proj, monkeypatch) == 1
+
+
+def test_installed_duplicate_claim_transfers_to_earlier_listed(tmp_path: Path):
+    """Rev 6 sibling of the test above: `servers` is listed before `extra`, so when its
+    upstream adds `slack`, ownership transfers from `extra` in one sync (fingerprint-safe),
+    `extra` gets W5, and the transfer line is reported exactly once."""
+    proj, store = _project(tmp_path)
+    (tmp_path / "src" / "mcp" / "extra.json").write_text(
+        json.dumps({"slack": {"command": "from-extra"}}), encoding="utf-8"
+    )
+    store = ConfigStore.load(proj)
+    store.add_component(Component(source="s", type=_C.MCP, name="extra"))  # after servers
+    store.save()
+    sync(proj)
+    assert _servers(proj)["slack"] == {"command": "from-extra"}  # extra owns it for now
+    _upstream(
+        tmp_path,
+        {"github": {"command": "gh"}, "gitlab": {"command": "gl-v2"}, "slack": {"command": "sl"}},
+    )
+
+    res = sync(proj)
+    servers = _servers(proj)
+    assert servers["slack"] == {"command": "sl"}  # transferred to the earlier-listed claimant
+    assert servers["gitlab"] == {"command": "gl-v2"}
+    line = (
+        ".mcp.json:mcpServers.slack now comes from s/mcp/servers (listed earlier in "
+        ".agentry.yml) instead of s/mcp/extra — to keep s/mcp/extra's version, list it before "
+        "s/mcp/servers in .agentry.yml, or disable s/mcp/servers"
+    )
+    assert res.updated.count(line) == 1
+    assert any(
+        w.startswith("s/mcp/extra") and "already provided by s/mcp/servers" in w
+        for w in res.warnings
+    )
+    assert line not in sync(proj).updated  # reported once, not every sync
 
 
 def test_kept_key_survives_other_claimant_disable(tmp_path: Path):

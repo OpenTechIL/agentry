@@ -160,9 +160,20 @@ class DesiredPlan:
     #: "target '<t>' is not in the project's targets — skipped" warnings (also in the
     #: caller's warnings): a component listing a valid target the project hasn't activated.
     inactive: list[str] = field(default_factory=list)
+    #: Contested named merge keys ``(file, pointer, key) -> (winner ref, transitive?)`` —
+    #: the earliest claimant in config order (ADR-001 Rev 6). Losers get W5 at planning.
+    winners: dict[tuple[str, str, str], tuple[Who, bool]] = field(default_factory=dict)
+    #: Path claims lost in config order, dropped from the plan: ``(loser, target, path,
+    #: winner ref, note)`` — status shows them as missing with the note.
+    path_losers: list[tuple[str, str, str, str, str]] = field(default_factory=list)
 
 
-def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredPlan:
+def compute_desired(
+    root: Path,
+    config: Config,
+    warnings: list[str],
+    transitive: frozenset[str] | set[str] = frozenset(),
+) -> DesiredPlan:
     """Resolve config + on-disk sources into the full desired install plan.
 
     Per component: resolve its artifact (explicit ``path``, discovery index, or the
@@ -233,7 +244,120 @@ def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredP
             _desired_for_target(comp, src, tname, driver, artifact, plan, warnings, variants)
 
     _warn_unmatched_keep(config, plan, warnings)
+    _resolve_claims(config, plan, warnings, frozenset(transitive))
     return plan
+
+
+def _resolve_claims(
+    config: Config, plan: DesiredPlan, warnings: list[str], transitive: frozenset[str]
+) -> None:
+    """Settle duplicate claims in config order (ADR-001 Rev 6) — a pure function of config.
+
+    Claim order is the order of ``config.components`` (declared, then transitive in BFS
+    order). Paths (links, copies, transforms, link+merge links), compared case-insensitively
+    since macOS/Windows filesystems are: the earliest component keeps the path, later ones
+    are dropped (W5-path; a link+merge loses as a pair). Named merge keys contested by two
+    components (unless every claim is a list — those are shared per element): the earliest
+    wins, recorded in ``plan.winners`` for planning to refuse the others.
+    """
+    order = {c.ref: i for i, c in enumerate(config.components)}
+
+    def rank(ref: str) -> int:
+        return order.get(ref, len(order))
+
+    _resolve_path_claims(plan, warnings, transitive, rank)
+    _resolve_key_claims(plan, transitive, rank)
+
+
+def _resolve_path_claims(
+    plan: DesiredPlan,
+    warnings: list[str],
+    transitive: frozenset[str],
+    rank: Callable[[str], int],
+) -> None:
+    """Contested install paths: the earliest claimant keeps the path; later ones are dropped
+    from the plan with W5-path (a link+merge loses as a pair)."""
+    # -- paths
+    claims: dict[str, list[tuple[int, str, str, str]]] = {}
+    path_items: list[DesiredLink | DesiredCopy | DesiredTransform] = [
+        *plan.links,
+        *plan.copies,
+        *plan.transforms,
+    ]
+    for d in path_items:
+        claims.setdefault(d.path.casefold(), []).append(
+            (rank(d.component), d.component, d.target, d.path)
+        )
+    for dlm in plan.link_merges:
+        claims.setdefault(dlm.link_path.casefold(), []).append(
+            (rank(dlm.component), dlm.component, dlm.target, dlm.link_path)
+        )
+    losers: set[tuple[str, str]] = set()  # (component, casefolded path)
+    for folded, cl in claims.items():
+        refs = sorted({(r, ref) for r, ref, _, _ in cl})
+        if len(refs) < 2:
+            continue
+        winner = refs[0][1]
+        for _, ref, target, path in cl:
+            if ref == winner:
+                continue
+            losers.add((ref, folded))
+            mode = _transitive_mode(winner, ref, transitive)
+            if mode == "loser":
+                msg = (
+                    f"{ref}: {path} is already installed by {winner} — skipped on {target}. "
+                    f"Declare {ref} in .agentry.yml above {winner}, or disable {winner}."
+                )
+                note = f"{path} is provided by {winner}"
+            elif mode:
+                msg = (
+                    f"{ref}: {path} is already installed by {winner} — skipped on {target}. To "
+                    f"change that, declare {ref} in .agentry.yml to give it priority."
+                )
+                note = f"{path} is provided by {winner}"
+            else:
+                msg = (
+                    f"{ref}: {path} is already installed by {winner}, listed earlier in "
+                    f".agentry.yml — skipped on {target}. Disable one of them, or reorder "
+                    "components to choose which wins."
+                )
+                note = f"{path} is provided by {winner} (listed earlier in .agentry.yml)"
+            if msg not in warnings:
+                warnings.append(msg)
+            plan.path_losers.append((ref, target, path, winner, note))
+    if losers:
+        plan.links = [d for d in plan.links if (d.component, d.path.casefold()) not in losers]
+        plan.copies = [d for d in plan.copies if (d.component, d.path.casefold()) not in losers]
+        plan.transforms = [
+            d for d in plan.transforms if (d.component, d.path.casefold()) not in losers
+        ]
+        plan.link_merges = [  # a link+merge loses as a pair: no merge without its link
+            d for d in plan.link_merges if (d.component, d.link_path.casefold()) not in losers
+        ]
+
+
+def _resolve_key_claims(
+    plan: DesiredPlan, transitive: frozenset[str], rank: Callable[[str], int]
+) -> None:
+    """Contested named merge keys (not all-list): the earliest claimant wins (``winners``)."""
+    # -- named merge keys
+    keyed: dict[tuple[str, str, str], list[tuple[int, Who, bool]]] = {}
+    for dm in plan.merges:
+        for key, value in dm.fragment.items():
+            keyed.setdefault((dm.dest.file, dm.dest.pointer, key), []).append(
+                (rank(dm.component), (dm.component, dm.target), isinstance(value, list))
+            )
+    for dlm in plan.link_merges:
+        for key, value in dlm.fragment.items():
+            keyed.setdefault((dlm.dest.file, dlm.dest.pointer, key), []).append(
+                (rank(dlm.component), (dlm.component, dlm.target), isinstance(value, list))
+            )
+    for unit, cl in keyed.items():
+        refs = {who[0] for _, who, _ in cl}  # one component on two targets isn't a contest
+        if len(refs) < 2 or all(is_list for _, _, is_list in cl):
+            continue  # uncontested, or every claim is an array (shared per element, Rev 5)
+        _, winner, _ = min(cl, key=lambda c: (c[0], c[1]))
+        plan.winners[unit] = (winner, winner[0] in transitive)
 
 
 def _warn_inactive_targets(
@@ -560,7 +684,7 @@ def sync(
     # 2. Desired vs. installed. The augmented config carries synthesized sources and
     #    transitive components so reconcile treats them like any declared dependency.
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    plan = compute_desired(root, augmented, result.warnings)
+    plan = compute_desired(root, augmented, result.warnings, graph.transitive)
     result.summarized["unsupported"] = list(plan.skipped)
     result.summarized["format"] = list(plan.format_issues)
     result.summarized["inactive"] = list(plan.inactive)
@@ -569,8 +693,17 @@ def sync(
     manifest = load_manifest(root)
     transform_cmd = config.transform.command if config.transform else []
 
-    _reconcile_links(root, links, manifest, result)
-    _reconcile_copies(root, copies, manifest, result)
+    transitive = frozenset(graph.transitive)
+    # Claim-order transfers (ADR-001 Rev 6 C2): reported once, in `updated` — but only after
+    # the winner's install succeeded (checked below), never for one that hit a conflict.
+    pending_transfers = _transfer_lines(plan, manifest, transitive)
+    # Every path-strategy orphan is removed before any path is installed, so a path moving
+    # between strategies (a loser's link → the winner's copy) never trips "not managed".
+    _prune_links(root, links, manifest, result)
+    _prune_copies(root, copies, manifest, result)
+    _prune_transforms(root, transforms, manifest, result)
+    _install_links(root, links, manifest, result)
+    _install_copies(root, copies, manifest, result)
     trust_changed = _reconcile_generated(
         root,
         generates,
@@ -583,12 +716,37 @@ def sync(
         update_only=update_only,
     )
     # One pass over every merge destination, after generators (ADR-001 §8).
+    path_owned = {d.path.casefold() for d in links}
+    path_owned |= {d.path.casefold() for d in copies}
+    path_owned |= {d.path.casefold() for d in transforms}
     _reconcile_merge_targets(
-        root, augmented, config, merges, link_merges, manifest, result, update=update
+        root,
+        augmented,
+        config,
+        merges,
+        link_merges,
+        manifest,
+        result,
+        update=update,
+        winners=plan.winners,
+        path_owned=path_owned,
+        transitive=transitive,
     )
     _reconcile_transforms(
         root, transforms, manifest, result, allow_transform=allow_transform, command=transform_cmd
     )
+
+    installed_paths: set[tuple[str, str]] = set()
+    for rec_path, comp in [
+        *((r.path, r.component) for r in manifest.links),
+        *((r.path, r.component) for r in manifest.copies),
+        *((r.path, r.component) for r in manifest.transforms),
+        *((r.link_path, r.component) for r in manifest.link_merges),
+    ]:
+        installed_paths.add((rec_path.casefold(), comp))
+    for path, winner, line in pending_transfers:
+        if (path.casefold(), winner) in installed_paths:
+            result.updated.append(line)
 
     manifest.version = MANIFEST_VERSION
     save_manifest(root, manifest)
@@ -600,21 +758,25 @@ def sync(
     return result
 
 
-def _reconcile_links(
+def _prune_links(
     root: Path, desired: list[DesiredLink], manifest: Manifest, result: SyncResult
 ) -> None:
-    desired_by_path = {d.path: d for d in desired}
-
+    desired_paths = {d.path for d in desired}
     kept: list[InstalledLink] = []
     for inst in manifest.links:
-        if inst.path not in desired_by_path:
+        if inst.path not in desired_paths:
             if link_inst.remove_link(root, inst.path):
                 result.removed.append(f"link {inst.path}")
         else:
             kept.append(inst)
     manifest.links = kept
 
-    have = {inst.path for inst in manifest.links}
+
+def _install_links(
+    root: Path, desired: list[DesiredLink], manifest: Manifest, result: SyncResult
+) -> None:
+    desired_by_path = {d.path: d for d in desired}
+    have = {inst.path: inst for inst in manifest.links}
     for path, d in desired_by_path.items():
         try:
             status = link_inst.install_link(root, d.artifact, path)
@@ -625,26 +787,33 @@ def _reconcile_links(
             result.created.append(f"link {path}")
         elif status == "updated":
             result.updated.append(f"link {path}")
-        if path not in have:
-            manifest.links.append(InstalledLink(component=d.component, target=d.target, path=path))
-            have.add(path)
+        if path in have:
+            have[path].component, have[path].target = d.component, d.target  # transfer label
+        else:
+            inst = InstalledLink(component=d.component, target=d.target, path=path)
+            manifest.links.append(inst)
+            have[path] = inst
 
 
-def _reconcile_copies(
+def _prune_copies(
     root: Path, desired: list[DesiredCopy], manifest: Manifest, result: SyncResult
 ) -> None:
-    desired_by_path = {d.path: d for d in desired}
-
+    desired_paths = {d.path for d in desired}
     kept: list[InstalledCopy] = []
     for inst in manifest.copies:
-        if inst.path not in desired_by_path:
+        if inst.path not in desired_paths:
             if copy_inst.remove_copy(root, inst.path):
                 result.removed.append(f"copy {inst.path}")
         else:
             kept.append(inst)
     manifest.copies = kept
 
-    have = {inst.path for inst in manifest.copies}
+
+def _install_copies(
+    root: Path, desired: list[DesiredCopy], manifest: Manifest, result: SyncResult
+) -> None:
+    desired_by_path = {d.path: d for d in desired}
+    have = {inst.path: inst for inst in manifest.copies}
     for path, d in desired_by_path.items():
         try:
             status = copy_inst.install_copy(root, d.artifact, path, managed=path in have)
@@ -655,9 +824,87 @@ def _reconcile_copies(
             result.created.append(f"copy {path}")
         elif status == "updated":
             result.updated.append(f"copy {path}")
-        if path not in have:
-            manifest.copies.append(InstalledCopy(component=d.component, target=d.target, path=path))
-            have.add(path)
+        if path in have:
+            have[path].component, have[path].target = d.component, d.target  # transfer label
+        else:
+            inst = InstalledCopy(component=d.component, target=d.target, path=path)
+            manifest.copies.append(inst)
+            have[path] = inst
+
+
+def _prune_transforms(
+    root: Path, desired: list[DesiredTransform], manifest: Manifest, result: SyncResult
+) -> None:
+    desired_paths = {d.path for d in desired}
+    kept: list[InstalledTransform] = []
+    for inst in manifest.transforms:
+        if inst.path not in desired_paths:
+            if copy_inst.remove_copy(root, inst.path):  # a transformed file is a managed real file
+                result.removed.append(f"transform {inst.path}")
+        else:
+            kept.append(inst)
+    manifest.transforms = kept
+
+
+def _transitive_mode(winner: str, loser: str, transitive: frozenset[str]) -> str:
+    """How a claim-order contest involves transitive components (see ``Rival.transitive``)."""
+    if winner in transitive:
+        return "winner"
+    return "loser" if loser in transitive else ""
+
+
+def _transfer_lines(
+    plan: DesiredPlan, manifest: Manifest, transitive: frozenset[str]
+) -> list[tuple[str, str, str]]:
+    """C2 candidates: ``(path, winner, line)`` per installed path whose owner changes to the
+    claim-order winner. Emitted only once the winner's install has succeeded."""
+    wanted: dict[str, str] = {}
+    paths: list[tuple[str, str]] = [(d.path, d.component) for d in plan.links]
+    paths += [(d.path, d.component) for d in plan.copies]
+    paths += [(d.path, d.component) for d in plan.transforms]
+    for path, component in paths:
+        wanted.setdefault(path.casefold(), component)
+    for dlm in plan.link_merges:
+        wanted.setdefault(dlm.link_path.casefold(), dlm.component)
+    lines: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    records: list[tuple[str, str]] = [
+        *((r.path, r.component) for r in manifest.links),
+        *((r.path, r.component) for r in manifest.copies),
+        *((r.path, r.component) for r in manifest.transforms),
+        *((r.link_path, r.component) for r in manifest.link_merges),
+    ]
+    for path, loser in records:
+        winner = wanted.get(path.casefold())
+        if winner is None or winner == loser or path.casefold() in seen:
+            continue
+        seen.add(path.casefold())
+        lines.append(
+            (
+                path,
+                winner,
+                _transfer_line(path, winner, loser, _transitive_mode(winner, loser, transitive)),
+            )
+        )
+    return lines
+
+
+def _transfer_line(unit: str, winner: str, loser: str, mode: str) -> str:
+    if mode == "loser":
+        return (
+            f"{unit} now comes from {winner} instead of {loser} — to keep {loser}'s version, "
+            f"declare {loser} in .agentry.yml above {winner}, or disable {winner}"
+        )
+    if mode:
+        return (
+            f"{unit} now comes from {winner} instead of {loser} — to keep {loser}'s version, "
+            f"declare {loser} in .agentry.yml to give it priority"
+        )
+    return (
+        f"{unit} now comes from {winner} (listed earlier in .agentry.yml) instead of {loser} — "
+        f"to keep {loser}'s version, list it before {winner} in .agentry.yml, or disable "
+        f"{winner}"
+    )
 
 
 def _reconcile_transforms(
@@ -672,17 +919,9 @@ def _reconcile_transforms(
     from .emit import TransformError
 
     desired_by_path = {d.path: d for d in desired}
-
-    kept: list[InstalledTransform] = []
-    for inst in manifest.transforms:
-        if inst.path not in desired_by_path:
-            if copy_inst.remove_copy(root, inst.path):  # a transformed file is a managed real file
-                result.removed.append(f"transform {inst.path}")
-        else:
-            kept.append(inst)
-    manifest.transforms = kept
-
-    have = {inst.path for inst in manifest.transforms}
+    _prune_transforms(root, desired, manifest, result)  # no-op after sync's prune phase
+    records = {inst.path: inst for inst in manifest.transforms}
+    have = set(records)
     for path, d in desired_by_path.items():
         if d.provider == transform_inst.AGENT:
             if not allow_transform:
@@ -711,7 +950,9 @@ def _reconcile_transforms(
             result.created.append(f"transform {path}")
         elif status == "updated":
             result.updated.append(f"transform {path}")
-        if path not in have:
+        if path in records:
+            records[path].component, records[path].target = d.component, d.target
+        else:
             manifest.transforms.append(
                 InstalledTransform(component=d.component, target=d.target, path=path)
             )
@@ -740,6 +981,12 @@ class _Claims:
 
     def __init__(self, records: list[InstalledMerge | InstalledLinkMerge]) -> None:
         self._by: dict[tuple[str, str, str], Who] = {}
+        #: Contested named keys settled in config order (ADR-001 Rev 6), set by the caller.
+        self.winners: dict[tuple[str, str, str], tuple[Who, bool]] = {}
+        #: Transitive component refs (for the W5 / transfer hint wording).
+        self.transitive: frozenset[str] = frozenset()
+        #: Key transfers awaiting the winner's install: (winner, file, pointer, key, line).
+        self.pending_transfers: list[tuple[Who, str, str, str, str]] = []
         self._elements: dict[tuple[str, str, str, str], set[Who]] = {}
         self._array_keys: dict[tuple[str, str, str], set[Who]] = {}
         for r in records:
@@ -755,20 +1002,42 @@ class _Claims:
             elif not entry.preexisting:
                 self._by[(file, pointer, key)] = who
 
+    def rival(self, who: Who, file: str, pointer: str) -> Callable[[str], merge_inst.Rival | None]:
+        """The config-order winner of a contested key, when it isn't ``who`` (W5)."""
+
+        def other(key: str) -> merge_inst.Rival | None:
+            won = self.winners.get((file, pointer, key))
+            if won is None or won[0][0] == who[0]:
+                return None
+            mode = "winner" if won[1] else ("loser" if who[0] in self.transitive else "")
+            return merge_inst.Rival(won[0][0], mode)
+
+        return other
+
+    def release_key(self, who: Who, file: str, pointer: str, key: str) -> None:
+        """Drop ``who``'s claim on one key (it lost the key in config order)."""
+        if self._by.get((file, pointer, key)) == who:
+            del self._by[(file, pointer, key)]
+        self._array_keys.get((file, pointer, key), set()).discard(who)
+        for (f, p, k, _), claimants in self._elements.items():
+            if (f, p, k) == (file, pointer, key):
+                claimants.discard(who)
+
     def release(self, who: Who) -> None:
         self._by = {k: v for k, v in self._by.items() if v != who}
         for claimants in [*self._elements.values(), *self._array_keys.values()]:
             claimants.discard(who)
 
     def lookup(self, who: Who, file: str, pointer: str) -> Callable[[str], str | None]:
-        """Another live owner of ``key`` — named, or array-mode (a shape conflict, W5)."""
+        """Another live owner of ``key`` — named, or array-mode (a shape conflict). The same
+        component through another target returns ``""``: it already wrote this very entry."""
 
         def other(key: str) -> str | None:
             owner = self._by.get((file, pointer, key))
             if owner is not None and owner != who:
-                return owner[0]
+                return "" if owner[0] == who[0] else owner[0]
             for w in sorted(self._array_keys.get((file, pointer, key), set())):
-                if w != who:
+                if w[0] != who[0]:
                     return w[0]
             return None
 
@@ -1133,6 +1402,7 @@ def _plan_record(
         kept,
         installed=old is not None and not moved,  # per-key refusal once installed here
         shared=claims.shared(who, dest.file, dest.pointer),
+        rival=claims.rival(who, dest.file, dest.pointer),
     )
     result.warnings.extend(plan.warnings)
     result.summarized.setdefault("drift", []).extend(plan.drift_warnings)
@@ -1179,6 +1449,9 @@ def _reconcile_merge_targets(
     result: SyncResult,
     *,
     update: bool = False,
+    winners: dict[tuple[str, str, str], tuple[Who, bool]] | None = None,
+    path_owned: set[str] | None = None,
+    transitive: frozenset[str] = frozenset(),
 ) -> None:
     """The single file-grouped merge pass (ADR-001 §8): merges, then link+merges.
 
@@ -1202,11 +1475,78 @@ def _reconcile_merge_targets(
     _convert_list_records(docs, records, desired_frags, from_source)
     _hand_over_created_keys(records, desired_frags)
     claims = _Claims(records)
+    claims.winners = dict(winners or {})
+    claims.transitive = frozenset(transitive)
+    _release_lost_keys(docs, records, claims, result)
     _assign_bare(merges, link_merges, docs, records)
     kept_for = _kept_lookup(config, declared)
     _reconcile_merges(docs, merges, manifest, result, claims, kept_for)
-    _reconcile_link_merges(root, docs, link_merges, manifest, result, claims, kept_for)
+    _reconcile_link_merges(
+        root, docs, link_merges, manifest, result, claims, kept_for, path_owned or set()
+    )
     docs.flush()
+    owned_now: set[tuple[Who, str, str, str]] = set()
+    for mrec in manifest.merges:
+        owned_now.update(
+            ((mrec.component, mrec.target), mrec.file, mrec.pointer, k) for k in mrec.entries
+        )
+    for lrec in manifest.link_merges:
+        owned_now.update(
+            ((lrec.component, lrec.target), lrec.file, lrec.pointer, k) for k in lrec.entries
+        )
+    for winner, file, pointer, key, line in claims.pending_transfers:
+        if (winner, file, pointer, key) in owned_now:  # the winner really took it over
+            result.updated.append(line)
+
+
+def _release_lost_keys(
+    docs: merge_inst.Documents,
+    records: list[InstalledMerge | InstalledLinkMerge],
+    claims: _Claims,
+    result: SyncResult,
+) -> None:
+    """Before planning: a component that owns a key another component now wins in config
+    order gives it up — removed through the normal fingerprint check, so the winner installs
+    into the free key in this same sync (ADR-001 Rev 6 (a)). A loser's entry the user edited
+    stays (W4) and is no longer anyone's: the winner then refuses it (W1), never overwriting.
+    """
+    for r in records:
+        who = (r.component, r.target)
+        lost = {
+            key: entry
+            for key, entry in r.entries.items()
+            if not entry.preexisting
+            and (won := claims.winners.get((r.file, r.pointer, key))) is not None
+            and won[0][0] != r.component
+        }
+        if not lost:
+            continue
+        try:
+            doc = docs.get(r.file)
+        except merge_inst.MergeTargetError:
+            continue
+        for key, entry in lost.items():
+            ctx = _ctx(who, r.file, r.pointer)
+            removed, warnings = merge_inst.remove_named(
+                doc, ctx, {key: entry}, shared=claims.shared(who, r.file, r.pointer)
+            )
+            result.warnings.extend(warnings)
+            winner, _ = claims.winners[(r.file, r.pointer, key)]
+            if removed:
+                mode = _transitive_mode(winner[0], r.component, claims.transitive)
+                claims.pending_transfers.append(
+                    (
+                        winner,
+                        r.file,
+                        r.pointer,
+                        key,
+                        _transfer_line(f"{r.file}:{r.pointer}.{key}", winner[0], r.component, mode),
+                    )
+                )
+            del r.entries[key]
+            if key in r.keys:
+                r.keys.remove(key)
+            claims.release_key(who, r.file, r.pointer, key)
 
 
 def _kept_lookup(config: Config, declared: Config) -> Callable[[Who], frozenset[str]]:
@@ -1349,7 +1689,9 @@ def _reconcile_link_merges(
     result: SyncResult,
     claims: _Claims,
     kept_for: Callable[[Who], frozenset[str]],
+    path_owned: set[str] | None = None,
 ) -> None:
+    owned_paths = path_owned or set()
     desired_by_key = {(d.component, d.target): d for d in desired}
     old_by_key = {(m.component, m.target): m for m in manifest.link_merges}
     orphan_bare = _orphan_bare(docs, [m for k, m in old_by_key.items() if k not in desired_by_key])
@@ -1367,7 +1709,11 @@ def _reconcile_link_merges(
             new_records.append(m)
             continue
         claims.release(k)
-        if link_inst.remove_link(root, m.link_path) or merge_removed:
+        # A path now owned by a link/copy/transform winner (ADR-001 Rev 6) isn't ours to drop.
+        unlinked = m.link_path.casefold() not in owned_paths and link_inst.remove_link(
+            root, m.link_path
+        )
+        if unlinked or merge_removed:
             result.removed.append(f"link+merge {m.link_path} + {m.file}:{m.pointer}")
 
     for k, d in desired_by_key.items():
@@ -1448,11 +1794,14 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
     graph, _ = deps.resolve_graph(root, config, load_lock(root))
     warnings.extend(graph.warnings)
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
-    plan = compute_desired(root, augmented, warnings)
+    plan = compute_desired(root, augmented, warnings, graph.transitive)
     links, copies, merges = plan.links, plan.copies, plan.merges
     generates, link_merges, transforms = plan.generates, plan.link_merges, plan.transforms
 
     rows: list[StatusRow] = []
+    # Paths a component lost to one listed earlier (ADR-001 Rev 6): missing, with the reason.
+    for ref, target, path, _winner, why in plan.path_losers:
+        rows.append(StatusRow(ref, target, path, "missing", why))
     for dl in links:
         rows.append(
             StatusRow(
@@ -1475,6 +1824,8 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
     _migrate_v1(docs, records, _desired_fragments(merges, link_merges), from_source)
     _convert_list_records(docs, records, _desired_fragments(merges, link_merges), from_source)
     claims = _Claims(records)
+    claims.winners = dict(plan.winners)
+    claims.transitive = frozenset(graph.transitive)
     old_records = {(r.component, r.target): r for r in records}
     _assign_bare(merges, link_merges, docs, records)
 
@@ -1500,6 +1851,7 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
             kept,
             installed=same,
             shared=claims.shared(who, dest.file, dest.pointer),
+            rival=claims.rival(who, dest.file, dest.pointer),
         )
         drifted = [
             DriftedEntry(dest.file, dest.pointer, key, unproven, ctx.keep_arg(key))

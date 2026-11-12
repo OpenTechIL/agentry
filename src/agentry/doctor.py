@@ -160,7 +160,7 @@ def run_checks(root: Path) -> list[Check]:
 
     # Cross-target content mismatches (phase A): the same findings sync warns about, from
     # the same read-only plan computation, reported as warnings so --strict fails on them.
-    plan = compute_desired(root, augmented, [])
+    plan = compute_desired(root, augmented, [], graph.transitive)
     for issue in plan.format_issues:
         checks.append(Check("warn", "format", issue))
     for issue in plan.inactive:  # component targets the project hasn't activated

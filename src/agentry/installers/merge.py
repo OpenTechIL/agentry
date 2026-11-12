@@ -402,7 +402,7 @@ def _refuse_shape(
     """A list-valued key whose on-disk value isn't a list: W5 if another component owns it,
     else W1 (the user's). Atomic on first install, per key after (Rev 4)."""
     other = claimed(key)
-    if other is not None:
+    if other:  # "" is this component via another target — not a rival
         refuse(
             key,
             f"{ctx.ref}: {ctx.at(key)} is already provided by {other} — skipped. Disable "
@@ -633,6 +633,110 @@ def _plan_kept(
         plan.kept_missing_warnings.append(w)
 
 
+@dataclass(frozen=True)
+class Rival:
+    """The component that wins a contested key over this one (ADR-001 Rev 6, config order)."""
+
+    ref: str
+    #: "" — both declared; "loser" — only the losing component is transitive (it can be
+    #: declared above the winner); "winner" — the winner is transitive too (neither can be
+    #: reordered or disabled directly).
+    transitive: str = ""
+
+
+def w5_texts(ctx: MergeContext, key: str, rival: Rival) -> tuple[str, str]:
+    """(warning, status note) for a key another component wins in claim order (W5)."""
+    if rival.transitive == "loser":
+        warning = (
+            f"{ctx.ref}: {ctx.at(key)} is already provided by {rival.ref} — skipped. Declare "
+            f"{ctx.ref} in .agentry.yml above {rival.ref}, rename the entry, or disable "
+            f"{rival.ref}."
+        )
+        note = f"{ctx.file}:{ctx.pointer}.{key} is provided by {rival.ref}"
+    elif rival.transitive:
+        warning = (
+            f"{ctx.ref}: {ctx.at(key)} is already provided by {rival.ref} — skipped. Rename "
+            f"the entry, or declare {ctx.ref} in .agentry.yml to give it priority."
+        )
+        note = f"{ctx.file}:{ctx.pointer}.{key} is provided by {rival.ref}"
+    else:
+        warning = (
+            f"{ctx.ref}: {ctx.at(key)} is already provided by {rival.ref}, listed earlier in "
+            ".agentry.yml — skipped. Disable one of them, rename the entry, or reorder "
+            "components to choose which wins."
+        )
+        note = (
+            f"{ctx.file}:{ctx.pointer}.{key} is provided by {rival.ref} (listed earlier in "
+            ".agentry.yml)"
+        )
+    return warning, note
+
+
+def _settled_first(
+    plan: NamedPlan,
+    ctx: MergeContext,
+    key: str,
+    desired: object,
+    owned: dict[str, OwnedEntry],
+    current: MutableMapping,
+    kept: frozenset[str],
+    rival: Callable[[str], Rival | None] | None,
+    refuse: Callable[..., None],
+) -> bool:
+    """Keys decided before ownership is looked at: kept ones (the user's), and ones another
+    component wins in config order (W5, Rev 6). True when ``key`` was handled here."""
+    if key in kept:
+        _plan_kept(plan, ctx, key, desired, owned.get(key), current)
+        return True
+    winner = rival(key) if rival is not None else None
+    if winner is not None:
+        refuse(key, *w5_texts(ctx, key, winner))
+        return True
+    return False
+
+
+def _plan_unowned(
+    plan: NamedPlan,
+    ctx: MergeContext,
+    key: str,
+    want: str,
+    have: str,
+    other: str | None,
+    refuse: Callable[..., None],
+    *,
+    installed: bool,
+) -> None:
+    """A present named key no record of this component owns: a sibling target's (``""``),
+    another component's (W5), an identical user entry (W1a), or the user's own (W1)."""
+    if other == "":
+        # The same component, through another target sharing this file, wrote it this sync:
+        # not a conflict and not the user's — that record owns and removes it.
+        plan.entries[key] = OwnedEntry(mode="named", fingerprint=want, preexisting=True)
+    elif other is not None:
+        refuse(
+            key,
+            f"{ctx.ref}: {ctx.at(key)} is already provided by {other} — skipped. Disable "
+            "one of them or rename the entry.",
+            f"{ctx.at(key)} is already provided by {other}",
+        )
+    elif have == want:
+        plan.entries[key] = OwnedEntry(mode="named", fingerprint=want, preexisting=True)
+        plan.warnings.append(
+            f"{ctx.ref}: {ctx.file} already has an identical '{ctx.pointer}.{key}' (not "
+            "added by agentry) — using yours; agentry will never remove it."
+        )
+    else:
+        what = f"'{key}'" if installed else ctx.ref
+        refuse(
+            key,
+            f"{ctx.ref}: {ctx.file} already has '{ctx.pointer}.{key}' (not added by "
+            f"agentry) — left unchanged; {what} was not merged into {ctx.target}. Rename or "
+            f"remove your entry, or disable {ctx.ref}, then re-run sync.",
+            f"{ctx.file} already has '{ctx.pointer}.{key}' (not added by agentry) — rename "
+            f"or remove your entry, or disable {ctx.ref}",
+        )
+
+
 def plan_named(
     doc: MutableMapping,
     ctx: MergeContext,
@@ -643,6 +747,7 @@ def plan_named(
     *,
     installed: bool = False,
     shared: Callable[[str, str], bool] | None = None,
+    rival: Callable[[str], Rival | None] | None = None,
 ) -> NamedPlan:
     """Plan merging ``fragment`` (named mode) without mutating ``doc``.
 
@@ -688,8 +793,7 @@ def plan_named(
             plan.note = plan.note or note
 
     for key, desired in fragment.items():
-        if key in kept:
-            _plan_kept(plan, ctx, key, desired, owned.get(key), current)
+        if _settled_first(plan, ctx, key, desired, owned, current, kept, rival, refuse):
             continue
         if isinstance(desired, list):
             _plan_array(
@@ -713,29 +817,8 @@ def plan_named(
                 refuse(key, warning, note, drift=True)
         elif rec is not None:
             _plan_owned(plan, ctx, key, desired, rec, have, want)
-        elif (other := claimed(key)) is not None:
-            refuse(
-                key,
-                f"{ctx.ref}: {ctx.at(key)} is already provided by {other} — skipped. Disable "
-                "one of them or rename the entry.",
-                f"{ctx.at(key)} is already provided by {other}",
-            )
-        elif have == want:
-            plan.entries[key] = OwnedEntry(mode="named", fingerprint=want, preexisting=True)
-            plan.warnings.append(
-                f"{ctx.ref}: {ctx.file} already has an identical '{ctx.pointer}.{key}' (not "
-                "added by agentry) — using yours; agentry will never remove it."
-            )
         else:
-            what = f"'{key}'" if installed else ctx.ref
-            refuse(
-                key,
-                f"{ctx.ref}: {ctx.file} already has '{ctx.pointer}.{key}' (not added by "
-                f"agentry) — left unchanged; {what} was not merged into {ctx.target}. Rename or "
-                f"remove your entry, or disable {ctx.ref}, then re-run sync.",
-                f"{ctx.file} already has '{ctx.pointer}.{key}' (not added by agentry) — rename "
-                f"or remove your entry, or disable {ctx.ref}",
-            )
+            _plan_unowned(plan, ctx, key, want, have, claimed(key), refuse, installed=installed)
     if plan.refused:
         plan.writes.clear()
         plan.created = plan.updated = False
@@ -909,6 +992,7 @@ def named_state(
     *,
     installed: bool = False,
     shared: Callable[[str, str], bool] | None = None,
+    rival: Callable[[str], Rival | None] | None = None,
 ) -> tuple[str, str | None]:
     """Read-only drift check: ``(state, note)``; state ``ok`` | ``ok (kept)`` | ``missing`` |
     ``drift``.
@@ -917,7 +1001,9 @@ def named_state(
     note saying why; an owned entry the user edited is ``drift``; a component whose only
     differences are keys it keeps is ``ok (kept)``.
     """
-    plan = plan_named(doc, ctx, fragment, owned, claimed, kept, installed=installed, shared=shared)
+    plan = plan_named(
+        doc, ctx, fragment, owned, claimed, kept, installed=installed, shared=shared, rival=rival
+    )
     if plan.refused:
         return "missing", plan.note
     if plan.key_notes:  # a key refused on an installed component: the rest still applies

@@ -67,6 +67,12 @@ and `deps` take.
 (target, type) rule in [`target_profiles`](#target_profiles). A `strategy:` written under a
 `components:` entry is silently ignored.
 
+**Order matters when two components collide.** If two components install the same file path
+or the same named entry (for example the same MCP server name), the one listed first under
+`components:` wins, on every machine. The other is skipped for that path or entry with a
+warning. To change the winner, reorder the list. Dependencies pulled in by `requires` come after
+everything you list. Hook groups never collide: they're appended per event.
+
 ### `keep`
 
 For `mcp` and `hook` components. List the merged entries you want to own yourself, for example
