@@ -66,7 +66,8 @@ the breakage would be a missing binary rather than a clear error message.
 - **A frozen binary has exactly one executable name.** PyInstaller emits one file, so the
   aliases can't come from the build — every channel has to create them itself: symlinks for
   nfpm/Homebrew/`install.sh`/the macOS pkg, `.cmd` shims for Inno Setup and `install.ps1`
-  (Windows has no unprivileged symlink), and Scoop's `[exe, alias]` shim-pair form. Only
+  (Windows has no unprivileged symlink), and, in the not-yet-published Scoop manifest
+  (`packaging/scoop/`), its `[exe, alias]` shim-pair form. Only
   `[project.scripts]` gets three names for free. `tests/test_packaging.py` was rewritten
   around `BIN`/`ALIASES` constants for exactly this reason: a missed channel otherwise
   surfaces only as a broken release asset.

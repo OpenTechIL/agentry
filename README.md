@@ -194,11 +194,12 @@ installer prints the exact line to add.
 
 ```bash
 brew install OpenTechIL/tap/agentry   # macOS / Linux
-scoop install agentry                 # Windows
 ```
 
 The Homebrew tap is refreshed automatically on every release, so `brew upgrade agentry`
-always tracks the latest version.
+always tracks the latest version. On Windows, use the
+[`install.ps1` one-liner](#the-quickest-way-no-python-needed), the `.exe` installer below, or
+the [Python install](#if-youre-a-python-user).
 
 ### Double-click installers and native packages
 
@@ -267,7 +268,6 @@ originally:
 |---|---|
 | `install.sh` / `install.ps1` | Re-run the same curl/`irm` one-liner — it always fetches the latest release and overwrites the existing binary in place. |
 | Homebrew | `brew upgrade agentry` |
-| Scoop | `scoop update agentry` |
 | `.pkg` / `.exe` / `.deb` / `.rpm` | Download the newer asset from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest) and install it the same way — it replaces the previous version. |
 | `uv tool install` | `uv tool upgrade agentry` (falls back to `uv tool install --reinstall git+https://github.com/OpenTechIL/agentry` if it doesn't pick up new commits) |
 | `pipx` | `pipx upgrade agentry` |
