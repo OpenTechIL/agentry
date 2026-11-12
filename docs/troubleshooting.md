@@ -330,7 +330,7 @@ it isn't listed in `.agentry.yml`. Components you list always come before depend
 listed one wins, and the message tells you how to change that:
 
 ```text
-one/mcp/gh: 'mcpServers.github' in .mcp.json is already provided by two/mcp/gh — skipped. Rename the entry, declare one/mcp/gh in .agentry.yml above two/mcp/gh, or disable two/mcp/gh.
+one/mcp/gh: 'mcpServers.github' in .mcp.json is already provided by two/mcp/gh — skipped. Declare one/mcp/gh in .agentry.yml above two/mcp/gh, rename the entry, or disable two/mcp/gh.
 ```
 
 To let the dependency win, add it to `components:` above the other one. If both colliding
