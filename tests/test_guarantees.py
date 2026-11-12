@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from agentry.config import ConfigStore
 from agentry.lockfile import lock_path
 from agentry.models import Component, ComponentType, Source, SourceType, Target
@@ -165,6 +167,763 @@ def test_status_and_sync_share_one_resolution_path(tmp_path: Path, local_source:
     sync(proj)
     rows, _ = status(proj)
     assert rows and all(r.state == "ok" for r in rows)
+
+
+# --- Merge ownership: hand-added entries survive install, re-sync and uninstall ----------
+# Regression tests for QA D1-D3 / field D1-D2 / arch#2 (task T3). They assert the user-visible
+# invariant only (user values preserved), never internal manifest structure, so they hold
+# whatever ownership model ADR-001 settles on. Warning-text assertions wait for ADR-001.
+
+
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+
+
+def _hook_commands(proj: Path, event: str) -> list[str]:
+    """Every hook command registered for ``event`` in .claude/settings.json."""
+    groups = _read_json(proj / ".claude/settings.json").get("hooks", {}).get(event, [])
+    return [h.get("command") for g in groups for h in g.get("hooks", [])]
+
+
+def _native_hook(src: Path, name: str, event: str, command: str) -> None:
+    """A Claude-native hook fragment: an event-keyed array of matcher groups."""
+    (src / "hooks").mkdir(parents=True, exist_ok=True)
+    (src / "hooks" / f"{name}.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    event: [{"matcher": "*", "hooks": [{"type": "command", "command": command}]}]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_merge_never_clobbers_same_named_hand_authored_key(tmp_path: Path, local_source: Path):
+    """A hand-authored MCP server that shares a name with an agentry component is left
+    byte-for-byte as the user wrote it through sync, re-sync and disable. Guards QA D1."""
+    proj = tmp_path / "proj"
+    store = _project(proj, local_source, Component(source="s", type=_C.MCP, name="github"))
+    mine = {"command": "MINE", "args": ["--mine"]}
+    (proj / ".mcp.json").write_text(json.dumps({"mcpServers": {"github": mine}}), encoding="utf-8")
+
+    sync(proj)
+    assert _read_json(proj / ".mcp.json")["mcpServers"]["github"] == mine
+    res = sync(proj)
+    assert _read_json(proj / ".mcp.json")["mcpServers"]["github"] == mine
+    assert res.created == [] and res.updated == [] and res.removed == []  # re-sync is a no-op
+
+    store.set_enabled("s/mcp/github", False)
+    store.save()
+    sync(proj)
+    assert _read_json(proj / ".mcp.json").get("mcpServers", {}).get("github") == mine
+
+
+def test_merge_never_replaces_non_object_section(tmp_path: Path, local_source: Path):
+    """A target section the user set to a non-object value is never silently replaced.
+    Guards QA D3."""
+    proj = tmp_path / "proj"
+    _project(proj, local_source, Component(source="s", type=_C.MCP, name="github"))
+    (proj / ".mcp.json").write_text(json.dumps({"mcpServers": ["user", "list"]}), encoding="utf-8")
+
+    sync(proj)
+    assert _read_json(proj / ".mcp.json")["mcpServers"] == ["user", "list"]
+
+
+def test_hand_edited_managed_merge_entry_reports_drift(tmp_path: Path, local_source: Path):
+    """Hand-editing the value of an agentry-managed merge entry is reported as drift by
+    `status`, not as `ok`. Guards field D3 (presence-only drift check)."""
+    proj = tmp_path / "proj"
+    _project(proj, local_source, Component(source="s", type=_C.MCP, name="github"))
+    sync(proj)
+    doc = _read_json(proj / ".mcp.json")
+    doc["mcpServers"]["github"]["args"] = ["--edited-by-hand"]
+    (proj / ".mcp.json").write_text(json.dumps(doc), encoding="utf-8")
+
+    rows, _ = status(proj)
+    mcp_rows = [r for r in rows if ".mcp.json" in r.where]
+    assert mcp_rows, "status must report the merged MCP entry"
+    assert all(r.state != "ok" for r in mcp_rows)
+
+
+# --- ADR-001 PR1: named-mode ownership, proven by content fingerprint ---------------------
+
+
+_GH = {"command": "npx", "args": ["-y", "server-github"]}  # what local_source ships
+
+
+def _mcp_project(tmp_path: Path, local_source: Path) -> tuple[Path, ConfigStore]:
+    proj = tmp_path / "proj"
+    store = _project(proj, local_source, Component(source="s", type=_C.MCP, name="github"))
+    return proj, store
+
+
+def _disable(store: ConfigStore, ref: str) -> None:
+    store.set_enabled(ref, False)
+    store.save()
+
+
+def _mcp_rows(proj: Path):
+    rows, _ = status(proj)
+    return [r for r in rows if ".mcp.json" in r.where]
+
+
+def test_merge_refuses_preexisting_same_name_key(tmp_path: Path, local_source: Path):
+    """W1: a differing user entry under our key is refused, and the file is never written."""
+    proj, store = _mcp_project(tmp_path, local_source)
+    cfg = proj / ".mcp.json"
+    original = json.dumps({"mcpServers": {"github": {"command": "MINE"}}})
+    cfg.write_text(original, encoding="utf-8")
+
+    res = sync(proj)
+    assert any(
+        "mcpServers.github" in w and "not added by agentry" in w and "left unchanged" in w
+        for w in res.warnings
+    )
+    assert cfg.read_text(encoding="utf-8") == original
+    res2 = sync(proj)
+    assert res2.created == [] and res2.updated == [] and res2.removed == []
+    assert cfg.read_text(encoding="utf-8") == original
+    _disable(store, "s/mcp/github")
+    sync(proj)
+    assert cfg.read_text(encoding="utf-8") == original
+
+
+def test_identical_preexisting_entry_never_removed(tmp_path: Path, local_source: Path):
+    """W1a: an identical user entry satisfies the component, is marked preexisting, and is
+    never removed by agentry."""
+    from agentry.manifest import load_manifest
+
+    proj, store = _mcp_project(tmp_path, local_source)
+    cfg = proj / ".mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": {"github": _GH}}), encoding="utf-8")
+
+    first = sync(proj)
+    assert any("identical" in w and "using yours" in w for w in first.warnings)
+    (rec,) = [m for m in load_manifest(proj).merges if m.file == ".mcp.json"]
+    assert rec.entries["github"].preexisting is True
+    assert [r.state for r in _mcp_rows(proj)] == ["ok"]
+    second = sync(proj)
+    assert not any("identical" in w for w in second.warnings)  # first sync only
+
+    _disable(store, "s/mcp/github")
+    sync(proj)
+    assert _read_json(cfg)["mcpServers"]["github"] == _GH
+
+
+def test_owned_value_edited_is_kept_and_reported_drift(tmp_path: Path, local_source: Path):
+    """W2/W4: a hand-edit of an entry agentry wrote is kept on sync, shown as drift, and
+    left in place on removal."""
+    proj, store = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    cfg = proj / ".mcp.json"
+    doc = _read_json(cfg)
+    edited = {"command": "npx", "args": ["--edited"]}
+    doc["mcpServers"]["github"] = edited
+    cfg.write_text(json.dumps(doc), encoding="utf-8")
+
+    res = sync(proj)
+    assert any("edited after agentry installed it" in w for w in res.warnings)
+    assert _read_json(cfg)["mcpServers"]["github"] == edited
+    (row,) = _mcp_rows(proj)
+    assert row.state == "drift" and row.note and "edited by hand" in row.note
+
+    _disable(store, "s/mcp/github")
+    res = sync(proj)
+    assert any("left in place on removal" in w for w in res.warnings)
+    assert _read_json(cfg)["mcpServers"]["github"] == edited
+
+
+def test_upstream_change_of_owned_entry_is_an_update(tmp_path: Path, local_source: Path):
+    proj, _ = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    new = {"command": "npx", "args": ["-y", "server-github@2"]}
+    (local_source / "mcp" / "github.json").write_text(json.dumps({"github": new}), "utf-8")
+
+    res = sync(proj)
+    assert _read_json(proj / ".mcp.json")["mcpServers"]["github"] == new
+    assert any(".mcp.json" in u for u in res.updated)
+    assert not any(".mcp.json" in c for c in res.created)
+
+
+def test_owned_entry_deleted_by_user_is_recreated(tmp_path: Path, local_source: Path):
+    proj, _ = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    cfg = proj / ".mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": {"mine": {"command": "x"}}}), encoding="utf-8")
+
+    res = sync(proj)
+    assert _read_json(cfg)["mcpServers"] == {"mine": {"command": "x"}, "github": _GH}
+    assert any(".mcp.json" in c for c in res.created)
+
+
+def test_non_object_section_skipped_with_warning(tmp_path: Path, local_source: Path):
+    proj, _ = _mcp_project(tmp_path, local_source)
+    (proj / ".mcp.json").write_text(json.dumps({"mcpServers": ["x"]}), encoding="utf-8")
+
+    res = sync(proj)
+    assert any("is a list, not an object" in w and "not merged" in w for w in res.warnings)
+    (row,) = _mcp_rows(proj)
+    assert row.state == "missing" and row.note
+
+
+def test_v1_manifest_loads_and_migrates(tmp_path: Path, local_source: Path):
+    """A manifest written by an older agentry (no per-key `entries`) is migrated: status
+    does so in memory only, sync persists v2 with a content fingerprint, and removal still
+    takes out only our key."""
+    from agentry.installers.merge import fingerprint
+    from agentry.manifest import manifest_path
+
+    proj, store = _mcp_project(tmp_path, local_source)
+    cfg = proj / ".mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": {"mine": {"command": "x"}}}), encoding="utf-8")
+    sync(proj)
+    mp = manifest_path(proj)
+    payload = json.loads(mp.read_text(encoding="utf-8"))
+    payload["version"] = 1
+    for rec in payload.get("merges", []):
+        rec.pop("entries", None)
+    mp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    v1_bytes = mp.read_bytes()
+
+    status(proj)
+    assert mp.read_bytes() == v1_bytes  # status never writes the manifest
+
+    sync(proj)
+    saved = json.loads(mp.read_text(encoding="utf-8"))
+    assert saved["version"] == 2
+    (rec,) = [m for m in saved["merges"] if m["file"] == ".mcp.json"]
+    assert rec["entries"]["github"]["fingerprint"] == fingerprint(_GH)
+
+    _disable(store, "s/mcp/github")
+    sync(proj)
+    assert _read_json(cfg)["mcpServers"] == {"mine": {"command": "x"}}
+
+
+def test_doctor_strict_exits_1_on_w1_refusal(
+    tmp_path: Path, local_source: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from typer.testing import CliRunner
+
+    from agentry.cli import app
+
+    proj, _ = _mcp_project(tmp_path, local_source)
+    (proj / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"github": {"command": "MINE"}}}), encoding="utf-8"
+    )
+    sync(proj)
+    monkeypatch.chdir(proj)
+    assert CliRunner().invoke(app, ["doctor", "--strict"]).exit_code == 1
+
+
+def test_doctor_hint_uses_note_not_run_sync(tmp_path: Path, local_source: Path):
+    """A refused merge can't be fixed by re-running sync, so doctor must not suggest it."""
+    from agentry.doctor import run_checks
+
+    proj, _ = _mcp_project(tmp_path, local_source)
+    (proj / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"github": {"command": "MINE"}}}), encoding="utf-8"
+    )
+    sync(proj)
+    drift = [c.message for c in run_checks(proj) if c.category == "drift"]
+    (msg,) = [m for m in drift if "s/mcp/github" in m]
+    assert "not added by agentry" in msg
+    assert "run `agentry sync`)" not in msg
+
+
+def test_duplicate_claim_has_exactly_one_owner(tmp_path: Path):
+    """Two components shipping the same MCP key: one owns it, the other is skipped with a
+    warning, and disabling the skipped one leaves the key. (Interim W5; PR3 makes the
+    winner config-order deterministic, so this asserts only 'exactly one owner'.)"""
+    src = tmp_path / "src"
+    (src / "mcp").mkdir(parents=True)
+    vals = {"a": {"command": "from-a"}, "b": {"command": "from-b"}}
+    for name, val in vals.items():
+        (src / "mcp" / f"{name}.json").write_text(json.dumps({"dup": val}), encoding="utf-8")
+    proj = tmp_path / "proj"
+    store = _project(
+        proj,
+        src,
+        Component(source="s", type=_C.MCP, name="a"),
+        Component(source="s", type=_C.MCP, name="b"),
+    )
+
+    res = sync(proj)
+    dup_warnings = [w for w in res.warnings if "is already provided by" in w]
+    assert len(dup_warnings) == 1
+    loser = "a" if dup_warnings[0].startswith("s/mcp/a") else "b"
+    winner = "b" if loser == "a" else "a"
+    assert _read_json(proj / ".mcp.json")["mcpServers"]["dup"] == vals[winner]
+
+    _disable(store, f"s/mcp/{loser}")
+    sync(proj)
+    assert _read_json(proj / ".mcp.json")["mcpServers"]["dup"] == vals[winner]
+
+
+def test_link_merge_refused_merge_creates_no_symlink(tmp_path: Path):
+    """link+merge is atomic: when the merge half is refused (W1), the link half is not
+    installed either."""
+    src = tmp_path / "src"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "run.sh").write_text("echo hi\n", encoding="utf-8")
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "r"}]}]}}),
+        encoding="utf-8",
+    )
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / ".agentry.yml").write_text(
+        f"""version: 1
+targets: [claude]
+sources:
+  - name: s
+    type: local
+    path: {src}
+components:
+  - source: s
+    type: hook
+    name: hooks
+    path: hooks
+target_profiles:
+  claude:
+    hook:
+      strategy: link+merge
+      dest: ".claude/hooks/agentry/{{name}}"
+      file: .claude/settings.json
+      pointer: hooks
+""",
+        encoding="utf-8",
+    )
+    settings = proj / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    mine = json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "MINE"}]}]}})
+    settings.write_text(mine, encoding="utf-8")
+
+    sync(proj)
+    assert settings.read_text(encoding="utf-8") == mine
+    link = proj / ".claude/hooks/agentry/hooks"
+    assert not link.exists() and not link.is_symlink()
+
+
+def test_fingerprint_is_canonical():
+    import tomlkit
+
+    from agentry.installers.merge import fingerprint
+
+    assert fingerprint({"a": 1, "b": [1, 2]}) == fingerprint({"b": [1, 2], "a": 1})
+    assert fingerprint({"a": 1}) != fingerprint({"a": 2})
+    assert fingerprint({"c": "café"}) == fingerprint({"c": "café"})
+    doc = tomlkit.parse('[srv]\ncommand = "npx"\nargs = ["-y", "café"]\n')
+    assert fingerprint(doc["srv"]) == fingerprint({"command": "npx", "args": ["-y", "café"]})
+
+
+def _downgrade_manifest_to_v1(proj: Path) -> None:
+    """Rewrite the manifest as an older agentry wrote it: version 1, no per-key entries."""
+    from agentry.manifest import manifest_path
+
+    mp = manifest_path(proj)
+    payload = json.loads(mp.read_text(encoding="utf-8"))
+    payload["version"] = 1
+    for section in ("merges", "link_merges"):
+        for rec in payload.get(section, []):
+            rec.pop("entries", None)
+    mp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def test_v1_hook_key_with_user_additions_not_owned(tmp_path: Path):
+    """A v1 record claims a hook-event key, but the user has since appended their own group
+    to that event's array. Migration must not adopt the user-modified array as agentry's:
+    status reports drift, and disable leaves both groups and drops the record."""
+    from agentry.manifest import load_manifest
+
+    src = tmp_path / "src"
+    _native_hook(src, "guard", "PreToolUse", "agentry-guard")
+    proj = tmp_path / "proj"
+    store = _project(proj, src, Component(source="s", type=_C.HOOK, name="guard"))
+    sync(proj)
+    _downgrade_manifest_to_v1(proj)
+
+    settings = proj / ".claude/settings.json"
+    doc = _read_json(settings)
+    doc["hooks"]["PreToolUse"].append(
+        {"matcher": "Bash", "hooks": [{"type": "command", "command": "USER-HOOK"}]}
+    )
+    settings.write_text(json.dumps(doc, indent=2), encoding="utf-8")
+
+    rows, _ = status(proj)
+    (row,) = [r for r in rows if r.ref == "s/hook/guard"]
+    assert row.state == "drift" and row.note and "recorded by an older agentry" in row.note
+
+    _disable(store, "s/hook/guard")
+    res = sync(proj)
+    assert sorted(_hook_commands(proj, "PreToolUse")) == ["USER-HOOK", "agentry-guard"]
+    assert any("left in place on removal" in w for w in res.warnings)
+    assert not [m for m in load_manifest(proj).merges if m.component == "s/hook/guard"]
+
+
+def test_v1_hook_key_unchanged_is_owned_and_removed(tmp_path: Path):
+    """Control: a v1-claimed hook key whose array still equals exactly what the component
+    installs is provably agentry's, so disable removes it."""
+    src = tmp_path / "src"
+    _native_hook(src, "guard", "PreToolUse", "agentry-guard")
+    proj = tmp_path / "proj"
+    store = _project(proj, src, Component(source="s", type=_C.HOOK, name="guard"))
+    sync(proj)
+    _downgrade_manifest_to_v1(proj)
+
+    _disable(store, "s/hook/guard")
+    sync(proj)
+    assert _hook_commands(proj, "PreToolUse") == []
+
+
+def test_unproven_v1_key_never_removed(tmp_path: Path, local_source: Path):
+    """A v1 record claims `github` while the key is absent on disk. After migration the user
+    adds their own `github`: sync keeps it (W2/drift) and disable leaves it byte-identical."""
+    proj, store = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    _downgrade_manifest_to_v1(proj)
+    cfg = proj / ".mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+    sync(proj)  # migrates the v1 record while the key is absent
+
+    mine = json.dumps({"mcpServers": {"github": {"command": "MINE"}}})
+    cfg.write_text(mine, encoding="utf-8")
+    sync(proj)
+    assert cfg.read_text(encoding="utf-8") == mine
+    assert all(r.state != "ok" for r in _mcp_rows(proj))
+
+    _disable(store, "s/mcp/github")
+    sync(proj)
+    assert cfg.read_text(encoding="utf-8") == mine
+
+
+def test_unproven_v1_key_migrated_while_disabled_never_removed(tmp_path: Path, local_source: Path):
+    """R1 risk path: the v1 record migrates (no proof, fp=None) while its component is
+    disabled and the key is absent. A `github` the user adds later is never removed."""
+    proj, store = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    _downgrade_manifest_to_v1(proj)
+    cfg = proj / ".mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": {}}), encoding="utf-8")
+    _disable(store, "s/mcp/github")
+    sync(proj)
+
+    mine = json.dumps({"mcpServers": {"github": {"command": "MINE"}}})
+    cfg.write_text(mine, encoding="utf-8")
+    sync(proj)
+    assert cfg.read_text(encoding="utf-8") == mine
+
+
+def test_v1_claim_on_differing_user_value_not_adopted(tmp_path: Path, local_source: Path):
+    """A v1 record claims `github`, but the on-disk value is not what the component installs
+    (the user replaced it before the first v2 sync). With no proof of authorship the value
+    is the user's: sync must not overwrite it, and disable must not remove it."""
+    proj, store = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    _downgrade_manifest_to_v1(proj)
+    cfg = proj / ".mcp.json"
+    mine = json.dumps({"mcpServers": {"github": {"command": "MINE"}}})
+    cfg.write_text(mine, encoding="utf-8")
+
+    sync(proj)
+    assert cfg.read_text(encoding="utf-8") == mine
+    _disable(store, "s/mcp/github")
+    sync(proj)
+    assert cfg.read_text(encoding="utf-8") == mine
+
+
+def test_link_merge_move_blocked_by_unmanaged_file_keeps_old_install(tmp_path: Path):
+    """When a dest-template change moves a link+merge link onto a path occupied by an
+    unmanaged file, nothing is half-done: the user's file is untouched, and the old link and
+    its manifest record both survive (no FileExistsError half-state)."""
+    from agentry.manifest import load_manifest
+
+    src = tmp_path / "src"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "run.sh").write_text("echo hi\n", encoding="utf-8")
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "r"}]}]}}),
+        encoding="utf-8",
+    )
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / ".agentry.yml").write_text(
+        f"""version: 1
+targets: [claude]
+sources:
+  - name: s
+    type: local
+    path: {src}
+components:
+  - source: s
+    type: hook
+    name: hooks
+    path: hooks
+target_profiles:
+  claude:
+    hook:
+      strategy: link+merge
+      dest: ".claude/hooks/old/{{name}}"
+      file: .claude/settings.json
+      pointer: hooks
+""",
+        encoding="utf-8",
+    )
+    sync(proj)
+    old_link = proj / ".claude/hooks/old/hooks"
+    assert old_link.is_symlink()
+
+    cfg = proj / ".agentry.yml"
+    cfg.write_text(
+        cfg.read_text(encoding="utf-8").replace(".claude/hooks/old/", ".claude/hooks/new/"),
+        encoding="utf-8",
+    )
+    blocker = proj / ".claude/hooks/new/hooks"
+    blocker.parent.mkdir(parents=True)
+    blocker.write_text("user file\n", encoding="utf-8")
+
+    sync(proj)  # must not raise
+
+    assert blocker.read_text(encoding="utf-8") == "user file\n"
+    assert old_link.is_symlink()
+    assert [r.link_path for r in load_manifest(proj).link_merges] == [".claude/hooks/old/hooks"]
+    assert "Stop" in _read_json(proj / ".claude/settings.json")["hooks"]
+
+
+def _link_merge_hook_project(tmp_path: Path) -> tuple[Path, Path]:
+    """A claude link+merge hook profile whose merged commands are rewritten to the link."""
+    src = tmp_path / "src"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "run.sh").write_text("echo hi\n", encoding="utf-8")
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [{"hooks": [{"type": "command", "command": "${PLUGIN_ROOT}/run.sh"}]}]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / ".agentry.yml").write_text(
+        f"""version: 1
+targets: [claude]
+sources:
+  - name: s
+    type: local
+    path: {src}
+components:
+  - source: s
+    type: hook
+    name: hooks
+    path: hooks
+target_profiles:
+  claude:
+    hook:
+      strategy: link+merge
+      dest: ".claude/hooks/agentry/{{name}}"
+      file: .claude/settings.json
+      pointer: hooks
+      rewrite_from: "${{PLUGIN_ROOT}}"
+      rewrite_to: "${{CLAUDE_PROJECT_DIR}}/.claude/hooks/agentry/{{name}}"
+""",
+        encoding="utf-8",
+    )
+    return proj, src
+
+
+def test_v1_link_merge_hook_disable_does_not_leave_silent_dead_commands(tmp_path: Path):
+    """Disabling a link+merge hook recorded by v1 re-derives the rewritten fragment, so the
+    merged commands go together with the symlink — no dead command pointing at a removed
+    script dir."""
+    proj, _ = _link_merge_hook_project(tmp_path)
+    sync(proj)
+    link = proj / ".claude/hooks/agentry/hooks"
+    settings = proj / ".claude/settings.json"
+    assert link.is_symlink() and "Stop" in _read_json(settings)["hooks"]
+    _downgrade_manifest_to_v1(proj)
+
+    store = ConfigStore.load(proj)
+    _disable(store, "s/hook/hooks")
+    res = sync(proj)
+
+    assert not link.exists() and not link.is_symlink()
+    assert "Stop" not in _read_json(settings).get("hooks", {})
+    assert not any("installed by an older agentry with link+merge" in w for w in res.warnings)
+
+
+def test_v1_link_merge_hook_unresolvable_is_left_in_place_with_warning(tmp_path: Path):
+    """W6: when a v1 link+merge record's fragment can't be re-derived (its source artifact
+    is gone), agentry can't prove the merged entry is its own — it stays, loudly."""
+    import shutil
+
+    proj, src = _link_merge_hook_project(tmp_path)
+    sync(proj)
+    settings = proj / ".claude/settings.json"
+    before = _read_json(settings)["hooks"]["Stop"]
+    _downgrade_manifest_to_v1(proj)
+
+    shutil.rmtree(src / "hooks")
+    store = ConfigStore.load(proj)
+    _disable(store, "s/hook/hooks")
+    res = sync(proj)
+
+    assert _read_json(settings)["hooks"]["Stop"] == before
+    assert any(
+        "installed by an older agentry with link+merge" in w and "left in place on removal" in w
+        for w in res.warnings
+    )
+
+
+def test_v1_key_equal_to_desired_migrates_owned_and_removes_cleanly(
+    tmp_path: Path, local_source: Path
+):
+    """Happy path: a v1-claimed named key whose value equals what the component installs is
+    provably agentry's — migration owns it (v2 fingerprint), and disable removes exactly it
+    with no 'left in place' warning, leaving the user's other keys alone."""
+    from agentry.installers.merge import fingerprint
+    from agentry.manifest import load_manifest
+
+    proj, store = _mcp_project(tmp_path, local_source)
+    cfg = proj / ".mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": {"mine": {"command": "x"}}}), encoding="utf-8")
+    sync(proj)
+    _downgrade_manifest_to_v1(proj)
+
+    res = sync(proj)
+    assert not any("older agentry" in w for w in res.warnings)
+    (rec,) = [m for m in load_manifest(proj).merges if m.file == ".mcp.json"]
+    assert rec.entries["github"].fingerprint == fingerprint(_GH)
+    assert [r.state for r in _mcp_rows(proj)] == ["ok"]
+
+    _disable(store, "s/mcp/github")
+    res = sync(proj)
+    assert not any("left in place" in w for w in res.warnings)
+    assert _read_json(cfg)["mcpServers"] == {"mine": {"command": "x"}}
+
+
+def test_unproven_v1_entry_note_names_older_agentry(tmp_path: Path, local_source: Path):
+    """PM: the status/doctor note for an unproven v1 entry says it was recorded by an older
+    agentry — never the bare generic 'run sync' hint, which can't fix it."""
+    from agentry.doctor import run_checks
+
+    proj, _ = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    _downgrade_manifest_to_v1(proj)
+    (proj / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"github": {"command": "MINE"}}}), encoding="utf-8"
+    )
+    sync(proj)
+
+    (row,) = _mcp_rows(proj)
+    assert row.state != "ok" and row.note and "recorded by an older agentry" in row.note
+    (msg,) = [
+        c.message for c in run_checks(proj) if c.category == "drift" and "s/mcp/github" in c.message
+    ]
+    assert "recorded by an older agentry" in msg
+    assert "(run `agentry sync`)" not in msg
+
+
+def test_update_with_v1_manifest_advises_plain_sync_first(tmp_path: Path, local_source: Path):
+    """`sync(update=True)` on a v1 manifest warns once to run a plain sync first; a v2
+    manifest gets no such advisory."""
+    advisory = "manifest from an older agentry"
+    proj, _ = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    res = sync(proj, update=True)
+    assert not any(advisory in w for w in res.warnings)  # v2: silent
+
+    _downgrade_manifest_to_v1(proj)
+    res = sync(proj, update=True)
+    assert sum(advisory in w for w in res.warnings) == 1
+
+
+def test_doctor_strict_exits_1_on_unproven_v1_drift(
+    tmp_path: Path, local_source: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """PM ruling: an unproven v1 entry is not exempt from `doctor --strict`."""
+    from typer.testing import CliRunner
+
+    from agentry.cli import app
+
+    proj, _ = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    _downgrade_manifest_to_v1(proj)
+    (proj / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"github": {"command": "MINE"}}}), encoding="utf-8"
+    )
+    sync(proj)
+    monkeypatch.chdir(proj)
+    assert CliRunner().invoke(app, ["doctor", "--strict"]).exit_code == 1
+
+
+def _drift_lines(proj: Path, ref: str) -> list[str]:
+    from agentry.doctor import run_checks
+
+    return [
+        c.message
+        for c in run_checks(proj)
+        if c.level == "warn" and c.category == "drift" and f"(from {ref} " in c.message
+    ]
+
+
+def test_doctor_lists_each_hand_edited_entry_per_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """R5: doctor names every merge entry agentry can't vouch for, one line per key, with
+    its file, pointer.key, owning ref and the delete-or-disable action; --strict fails."""
+    from typer.testing import CliRunner
+
+    from agentry.cli import app
+
+    src = tmp_path / "src"
+    (src / "mcp").mkdir(parents=True)
+    (src / "mcp" / "servers.json").write_text(
+        json.dumps({"github": {"command": "gh"}, "gitlab": {"command": "gl"}}), encoding="utf-8"
+    )
+    proj = tmp_path / "proj"
+    _project(proj, src, Component(source="s", type=_C.MCP, name="servers"))
+    sync(proj)
+    cfg = proj / ".mcp.json"
+    doc = _read_json(cfg)
+    doc["mcpServers"]["github"] = {"command": "gh-edited"}
+    doc["mcpServers"]["gitlab"] = {"command": "gl-edited"}
+    cfg.write_text(json.dumps(doc), encoding="utf-8")
+
+    lines = _drift_lines(proj, "s/mcp/servers")
+    assert len(lines) == 2
+    from agentry.doctor import run_checks
+
+    # The per-entry lines replace the row-level "<ref> → <target>: drift" line.
+    assert not any(c.message.startswith("s/mcp/servers → claude:") for c in run_checks(proj))
+    for key in ("github", "gitlab"):
+        (line,) = [m for m in lines if f"'mcpServers.{key}'" in m]
+        assert line.startswith(".mcp.json: ")
+        assert "was edited by hand" in line
+        assert "disable s/mcp/servers to keep yours" in line
+
+    monkeypatch.chdir(proj)
+    assert CliRunner().invoke(app, ["doctor", "--strict"]).exit_code == 1
+
+
+def test_doctor_lists_unproven_v1_entry_per_key(tmp_path: Path, local_source: Path):
+    """R5: an unproven v1 entry gets its own key-level line saying an older agentry
+    recorded it."""
+    proj, _ = _mcp_project(tmp_path, local_source)
+    sync(proj)
+    _downgrade_manifest_to_v1(proj)
+    (proj / ".mcp.json").write_text(
+        json.dumps({"mcpServers": {"github": {"command": "MINE"}}}), encoding="utf-8"
+    )
+    sync(proj)
+
+    (line,) = _drift_lines(proj, "s/mcp/github")
+    assert "'mcpServers.github'" in line
+    assert "was recorded by an older agentry and differs from the current source" in line
+    assert "disable s/mcp/github to keep yours" in line
 
 
 # --- Malformed target config (D6): warn and skip, never a traceback ---------------------
