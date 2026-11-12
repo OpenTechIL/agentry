@@ -187,7 +187,11 @@ def _force_writable(func: Callable[..., object], path: str, _exc: object) -> Non
 
 
 def _remove(path: Path) -> None:
-    if path.is_symlink() or path.is_file():
+    if path.is_symlink():
+        path.unlink()  # the link itself — never touch (or chmod) what it points at
+    elif path.is_file():
+        # A read-only file can't be unlinked on Windows (PermissionError [WinError 5]).
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
         path.unlink()
     elif path.is_dir():
         # `onexc` replaced `onerror` in Python 3.12 (and `onerror` is deprecated there);
