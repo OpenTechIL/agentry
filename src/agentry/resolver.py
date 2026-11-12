@@ -10,7 +10,12 @@ a 40-char commit SHA for git, a ``sha256:`` content hash for local.
 from __future__ import annotations
 
 import hashlib
+import os
+import shutil
+import stat
 import subprocess
+import sys
+from collections.abc import Callable
 from pathlib import Path
 
 from .config import STORE_DIR
@@ -167,10 +172,27 @@ def _resolve_local(root: Path, source: Source, dest: Path, *, normalize: bool = 
     )
 
 
-def _remove(path: Path) -> None:
-    import shutil
+def _force_writable(func: Callable[..., object], path: str, _exc: object) -> None:
+    """rmtree error hook: clear the read-only bit and retry.
 
+    git marks pack files (``.git/objects/pack/*.idx`` / ``*.pack``) read-only. POSIX lets
+    you unlink them anyway (removal is a directory permission), but Windows refuses with
+    ``PermissionError [WinError 5]`` — so removing a store clone crashed on Windows.
+    """
+    os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+    parent = os.path.dirname(path)
+    if parent:  # a read-only directory also blocks unlinking its entries (POSIX)
+        os.chmod(parent, stat.S_IRWXU)
+    func(path)
+
+
+def _remove(path: Path) -> None:
     if path.is_symlink() or path.is_file():
         path.unlink()
     elif path.is_dir():
-        shutil.rmtree(path)
+        # `onexc` replaced `onerror` in Python 3.12 (and `onerror` is deprecated there);
+        # both receive (func, path, exc-or-excinfo), which the hook ignores.
+        if sys.version_info >= (3, 12):
+            shutil.rmtree(path, onexc=_force_writable)
+        else:
+            shutil.rmtree(path, onerror=_force_writable)
