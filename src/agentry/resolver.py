@@ -119,6 +119,10 @@ def resolve(root: Path, source: Source, *, pinned: str | None, normalize: bool =
 def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
     if source.url is None:  # normally guaranteed by Source._check_locator
         raise ResolveError(f"git source '{source.name}' has no url")
+    if (dest / ".git").is_dir() and _origin_url(dest) != source.url:
+        # The configured url moved (a fork, a renamed repo): the cached clone belongs to the
+        # old origin, and fetching it would silently install the old repo's content.
+        _remove(dest)
     if not (dest / ".git").is_dir():
         if dest.exists() or dest.is_symlink():
             _remove(dest)
@@ -135,6 +139,14 @@ def _resolve_git(source: Source, dest: Path, pinned: str | None) -> LockEntry:
         ref=source.ref,
         resolved=sha,
     )
+
+
+def _origin_url(clone: Path) -> str | None:
+    """The ``origin`` remote url of a store clone, or ``None`` if it has none/is broken."""
+    try:
+        return _git(["remote", "get-url", "origin"], cwd=clone)
+    except ResolveError:
+        return None
 
 
 def _resolve_local(root: Path, source: Source, dest: Path, *, normalize: bool = True) -> LockEntry:

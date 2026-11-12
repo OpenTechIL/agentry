@@ -341,8 +341,11 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
 
 ```
 1. Resolve sources + dependency closure   deps.resolve_graph(config, lock, update=…)
-   ├─ resolve every config source         resolver.resolve(source, pinned=lock_sha or None)
-   │    ├─ git:   clone once → fetch → checkout --detach <sha>  → resolved = SHA
+   ├─ resolve every config source         resolver.resolve(source, pinned=deps._choose_pin(…))
+   │    ├─ pin:   reuse the lock SHA only while the lock entry's type/url/ref still match the
+   │    │         config (deps.pin_mismatch); a changed identity re-resolves (--frozen: abort)
+   │    ├─ git:   clone once (re-clone if origin ≠ configured url) → fetch
+   │    │         → checkout --detach <sha>                       → resolved = SHA
    │    └─ local: symlink store/<name> → abspath(path)          → resolved = sha256(tree)
    ├─ walk requires from the enabled roots (BFS), recursing into each dep's own descriptor
    │    ├─ url dep → synthesize a lock-only source, download, recurse
@@ -404,7 +407,9 @@ an untrusted one is skipped with a warning unless consent is granted — via `ag
 or the interactive prompt in `agentry sync` (a `TrustCallback` the CLI supplies; non-TTY callers
 decline silently, so CI stays deterministic). Because trust is pinned to the SHA, a source that
 moves to a new revision drops its consent and must be re-confirmed (`deps.ensure_resolved`
-carries trust forward only while the hash is unchanged). Trust gates **generators only** — the
+carries trust forward only while the hash, the source type, **and the url** are all unchanged).
+A changed url revokes trust even at the same SHA (a fork shares history, not its owner); a ref
+change that lands on the same SHA keeps it, since trust is about content. Trust gates **generators only** — the
 single thing agentry itself executes; hooks are run by the harness, not agentry.
 
 ### Deterministic, OS-independent local-source hashing
