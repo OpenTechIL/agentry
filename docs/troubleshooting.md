@@ -95,6 +95,39 @@ shows exactly where agentry wants to install a component and why.
 Same principle: the path is a symlink, but it does not resolve into agentry's `.agentry/`
 store, so agentry will not touch it. Remove it by hand if it is stale.
 
+## `<file> is not valid JSON` — a component was not merged
+
+**Symptom.** `sync` (or `add`) prints a warning like this and the component is not installed
+for that target:
+
+```text
+demo/mcp/github: not merged into its config — .vscode/mcp.json is not valid JSON (line 2, column 3: Expecting property name enclosed in double quotes) — left unchanged; fix it (comments and trailing commas are not supported), then re-run sync
+```
+
+**Cause.** agentry merges `mcp` and `hook` components into config files such as `.mcp.json`,
+`.vscode/mcp.json`, `.claude/settings.json` and `.codex/config.toml`, and it reads them as
+strict JSON or TOML. Some tools accept looser files. VS Code, for example, reads
+`.vscode/mcp.json` as JSONC, so `//` comments and trailing commas are common there. agentry does
+not support JSONC. Instead of guessing, it leaves the file untouched and skips **only the
+components that merge into that file**; everything else still installs. A plugin-style hook
+skips its script symlink too, so nothing is left half-installed.
+
+The same applies when the file is not valid TOML (`<file> is not valid TOML (…)`), is not UTF-8
+text (`<file> is not UTF-8 text`), or has something other than an object at the top level
+(`<file> is not a JSON object`).
+
+`agentry status` shows the affected components as `missing` and lists the file problem once
+under the table. `agentry doctor` reports them as `missing (run agentry sync)`, but sync can't
+repair a file it can't parse, so fix the file first.
+
+**Fix.** Make the file valid. Delete the comments and trailing commas, starting at the line and
+column in the message, then run `agentry sync`. If you need to keep a commented file, disable the
+components that merge into it (`agentry disable <ref>`) and maintain that file by hand.
+
+If you remove a component while the file is broken, the warning says "not removed from its
+config" instead. agentry keeps its record of the entry, and the first sync after you fix the
+file removes it.
+
 ## Reading `agentry doctor`
 
 `doctor` is a read-only preflight. It exits non-zero on **errors** and, with `--strict`,

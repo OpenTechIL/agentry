@@ -165,3 +165,155 @@ def test_status_and_sync_share_one_resolution_path(tmp_path: Path, local_source:
     sync(proj)
     rows, _ = status(proj)
     assert rows and all(r.state == "ok" for r in rows)
+
+
+# --- Malformed target config (D6): warn and skip, never a traceback ---------------------
+
+
+def _read_cfg(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def test_sync_skips_a_malformed_merge_target_and_installs_the_rest(
+    tmp_path: Path, local_source: Path
+):
+    """A truncated .mcp.json makes sync skip that merge (left byte-identical) while other
+    components still install. Guards QA D6."""
+    proj = tmp_path / "proj"
+    _project(
+        proj,
+        local_source,
+        Component(source="s", type=_C.MCP, name="github"),
+        Component(source="s", type=_C.SKILL, name="code-reviewer"),
+    )
+    broken = '{"mcpServers": {'
+    (proj / ".mcp.json").write_text(broken, encoding="utf-8")
+
+    sync(proj)  # must not raise
+
+    assert (proj / ".mcp.json").read_text(encoding="utf-8") == broken
+    assert (proj / ".claude/skills/code-reviewer").is_symlink()
+
+
+def test_status_does_not_crash_on_a_malformed_merge_target(tmp_path: Path, local_source: Path):
+    """`status` reports on a project with a malformed .mcp.json instead of raising."""
+    proj = tmp_path / "proj"
+    _project(proj, local_source, Component(source="s", type=_C.MCP, name="github"))
+    sync(proj)
+    (proj / ".mcp.json").write_text('{"mcpServers": {', encoding="utf-8")
+
+    rows, _ = status(proj)  # must not raise
+    assert all(r.state != "ok" for r in rows if ".mcp.json" in r.where)
+
+
+def test_jsonc_comments_in_merge_target_are_left_unchanged(tmp_path: Path, local_source: Path):
+    """A JSONC-style file (comments, trailing comma) is unparseable as JSON: agentry must not
+    rewrite it (losing the comments), and sync must not crash."""
+    proj = tmp_path / "proj"
+    _project(proj, local_source, Component(source="s", type=_C.MCP, name="github"))
+    jsonc = '{\n  // my servers\n  "mcpServers": {"mine": {"command": "x"},},\n}\n'
+    (proj / ".mcp.json").write_text(jsonc, encoding="utf-8")
+
+    sync(proj)
+    assert (proj / ".mcp.json").read_text(encoding="utf-8") == jsonc
+
+
+def test_broken_codex_toml_is_left_unchanged(tmp_path: Path, local_source: Path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    ConfigStore.create(proj, [Target.CODEX]).save()
+    store = ConfigStore.load(proj)
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(local_source)))
+    store.add_component(Component(source="s", type=_C.MCP, name="github"))
+    store.save()
+    cfg = proj / ".codex" / "config.toml"
+    cfg.parent.mkdir()
+    broken = '[mcp_servers.mine\ncommand = "x"\n'
+    cfg.write_text(broken, encoding="utf-8")
+
+    sync(proj)  # must not raise
+    assert cfg.read_text(encoding="utf-8") == broken
+
+
+def test_remove_while_config_broken_is_retried_after_the_user_fixes_it(
+    tmp_path: Path, local_source: Path
+):
+    """Disabling a merge component while its config is unparseable leaves the file alone
+    and keeps the record; once the user repairs the file, the next sync removes our key
+    (and only ours)."""
+    proj = tmp_path / "proj"
+    store = _project(proj, local_source, Component(source="s", type=_C.MCP, name="github"))
+    cfg = proj / ".mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": {"mine": {"command": "x"}}}), encoding="utf-8")
+    sync(proj)
+    assert "github" in _read_cfg(cfg)["mcpServers"]
+
+    repaired = cfg.read_text(encoding="utf-8")
+    broken = repaired.rstrip()[:-1]  # drop the closing brace
+    cfg.write_text(broken, encoding="utf-8")
+    store.set_enabled("s/mcp/github", False)
+    store.save()
+    sync(proj)  # must not raise
+    assert cfg.read_text(encoding="utf-8") == broken
+
+    cfg.write_text(repaired, encoding="utf-8")
+    sync(proj)
+    assert _read_cfg(cfg)["mcpServers"] == {"mine": {"command": "x"}}
+
+
+def test_link_merge_with_broken_config_installs_nothing(tmp_path: Path):
+    """link+merge is all-or-nothing: if the settings file can't be parsed, the script dir
+    symlink is not created either (no half install)."""
+    src = tmp_path / "src"
+    (src / "hooks").mkdir(parents=True)
+    (src / "hooks" / "run.sh").write_text("echo hi\n", encoding="utf-8")
+    (src / "hooks" / "hooks.json").write_text(
+        json.dumps(
+            {
+                "hooks": {
+                    "Stop": [{"hooks": [{"type": "command", "command": "${PLUGIN_ROOT}/run.sh"}]}]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / ".agentry.yml").write_text(
+        f"""version: 1
+targets: [claude]
+sources:
+  - name: s
+    type: local
+    path: {src}
+components:
+  - source: s
+    type: hook
+    name: hooks
+    path: hooks
+target_profiles:
+  claude:
+    hook:
+      strategy: link+merge
+      dest: ".claude/hooks/agentry/{{name}}"
+      file: .claude/settings.json
+      pointer: hooks
+      rewrite_from: "${{PLUGIN_ROOT}}"
+      rewrite_to: "${{CLAUDE_PROJECT_DIR}}/.claude/hooks/agentry/{{name}}"
+""",
+        encoding="utf-8",
+    )
+    settings = proj / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    broken = '{"hooks": {'
+    settings.write_text(broken, encoding="utf-8")
+
+    sync(proj)  # must not raise
+    assert settings.read_text(encoding="utf-8") == broken
+    link = proj / ".claude/hooks/agentry/hooks"
+    assert not link.exists() and not link.is_symlink()
+
+    settings.write_text("{}", encoding="utf-8")  # control: the same config installs once fixed
+    sync(proj)
+    assert link.is_symlink()
+    assert "Stop" in _read_cfg(settings)["hooks"]
