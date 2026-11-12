@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrading from 0.1.x
+
+Read these before you upgrade. Each one changes what `sync` does to an existing project.
+
+1. **Run `agentry sync` once before `agentry update`.** agentry now records what it wrote into
+   config files. Entries an older version installed are verified on the first sync: matching
+   ones stay managed, and anything else is left untouched and reported as drift.
+   `agentry doctor` lists each one with its fix. Delete stale entries by hand, or keep yours
+   with `agentry keep`.
+2. **Hooks append to your own hooks** on the same event instead of replacing them.
+   Uninstalling removes only agentry's hook groups.
+3. **When two components install the same file or entry, the one listed first in
+   `.agentry.yml` wins**, on every machine. Where a later-listed component had silently
+   overwritten a file, the next sync switches it to the earlier one, so linked or copied
+   content can change.
+4. **An unknown target name is an error.** `sync`, `status`, `doctor`, and every command that
+   edits `.agentry.yml` and syncs exit 1 and change nothing, and they suggest the closest
+   name. (`catalog add`/`remove` still work, so you can install an overlay that defines the
+   target.) A typo that used to silently uninstall the intended target's components now
+   fails on purpose.
+5. **A component's `targets:` only narrows the project's `targets:`.** A target the project
+   doesn't list is skipped with a warning, and anything an earlier version installed there is
+   removed on the next sync (agentry's own entries only).
+6. **`agentry update NAME` updates only the named sources.** It used to update everything.
+7. **Repeated warnings are summarised** into one line. Pass `-v` / `--verbose` for the full
+   list, and add `-v` to scripts that parse warnings.
+8. **Per-harness variants replace the canonical fragment on their target**, as documented.
+   When a `hooks-cursor.json` or `mcp/<name>-opencode.json` is enabled from the same source
+   as the canonical file, only the variant installs on that target now, and the canonical
+   entry agentry had added there is removed.
+9. **Claude plugin sources now follow their plugin.json `commands`/`agents` paths and inline
+   hooks/MCP.** Check `agentry list` and `agentry doctor` after upgrading.
+10. **`install.sh` / `install.ps1` copies from before 0.1.4 can't install new releases**,
+    because the legacy `agy-*` release assets are gone. Download the current installer once,
+    or update through Homebrew.
+
 ### Added
 - **Format warnings for known cross-target mismatches.** agentry still installs components
   as-is. It now warns when the content visibly won't work in a target, and `agentry doctor`
@@ -130,12 +166,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports it as `drift`, and it won't remove that entry later. If you run `update` first, entries
   from the old upstream version no longer match and can't be verified. Delete stale entries by
   hand.
-
 - **CLI output change: repeated warnings are summarized.** When `sync`, `install`, `update` or
   `add` would print the same kind of warning two or more times, they now print one summary line
   instead. This affects:
   - components skipped on targets that don't support their type;
-  - merged entries that differ from their source and were kept.
+  - merged entries that differ from their source and were kept;
+  - format mismatches;
+  - component targets the project doesn't use;
+  - keys in `keep:` with no entry on a target;
+  - plugin sources that use features agentry doesn't install.
 
   A warning that occurs only once still prints in full. Every other warning still prints
   individually: refused merges, unparseable files, the trust gate, and unset `${VAR}`s. **To
