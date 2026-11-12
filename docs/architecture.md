@@ -709,7 +709,8 @@ installers/
   link_merge.py symlink + config merge together, rewriting plugin-root command paths
   generate.py   run a component's own installer (gated); track produced files for safe removal
   transform.py  copy-with-rewrite: materialize a component through a content provider
-reconcile.py    sync engine + status (drift report)
+reconcile.py    sync engine + status (drift report); plan_for_status() = one read-only resolve +
+                plan that doctor shares with status(planned=...)
 gitignore.py    ensure .agentry/ is ignored
 ```
 

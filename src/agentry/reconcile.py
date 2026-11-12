@@ -1874,15 +1874,48 @@ class DriftedEntry:
     keep_arg: str = ""  # the `agentry keep` argument: "<target>:<key>" or the bare key
 
 
-def status(root: Path) -> tuple[list[StatusRow], list[str]]:
-    store = ConfigStore.load(root)
-    config = store.parsed()
-    check_targets(config)  # same fail-fast as sync: a table missing a typo'd target misleads
+@dataclass(frozen=True)
+class Planned:
+    """One resolve + desired-plan computation, shared so a caller (``doctor``) and
+    :func:`status` don't each resolve and plan the project.
+
+    **Single-use for status:** :func:`status` mutates the plan's merges (it assigns their
+    bare-key sets), so pass a ``Planned`` to it at most once, after reading what you need.
+    """
+
+    config: Config  #: the declared config, as loaded
+    graph: deps.DepGraph
+    augmented: Config  #: ``config`` plus the graph's synthesized sources and components
+    plan: DesiredPlan
+    warnings: tuple[str, ...]  #: graph warnings, then planning warnings
+
+
+def plan_for_status(root: Path, config: Config) -> Planned:
+    """Resolve ``config``'s dependency graph from the lock and compute the desired plan.
+
+    Read-only. Raises :class:`~agentry.resolver.ResolveError` /
+    :class:`~agentry.deps.DependencyError` like :func:`status`.
+    """
     warnings: list[str] = []
     graph, _ = deps.resolve_graph(root, config, load_lock(root))
     warnings.extend(graph.warnings)
     augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
     plan = compute_desired(root, augmented, warnings, graph.transitive)
+    return Planned(config, graph, augmented, plan, tuple(warnings))
+
+
+def status(root: Path, *, planned: Planned | None = None) -> tuple[list[StatusRow], list[str]]:
+    """Per (component, target) install state, plus warnings. Read-only.
+
+    ``planned`` reuses a resolve + plan the caller already made (see :class:`Planned`;
+    single-use); without it, status resolves and plans itself.
+    """
+    config = planned.config if planned is not None else ConfigStore.load(root).parsed()
+    check_targets(config)  # same fail-fast as sync: a table missing a typo'd target misleads
+    if planned is None:
+        planned = plan_for_status(root, config)
+    warnings = list(planned.warnings)
+    graph, augmented, plan = planned.graph, planned.augmented, planned.plan
     links, copies, merges = plan.links, plan.copies, plan.merges
     generates, link_merges, transforms = plan.generates, plan.link_merges, plan.transforms
 
