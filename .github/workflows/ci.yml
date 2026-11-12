@@ -29,6 +29,12 @@ jobs:
         run: uvx ruff@0.15.20 check --output-format=github .
       - name: Ruff format check
         run: uvx ruff@0.15.20 format --check .
+      # uv.lock is what release binaries are frozen from, so it must match pyproject.toml.
+      # Without this, `uv run` silently re-locks a stale lock and CI tests versions the
+      # release never ships. Every `uv run` below also passes --locked for the same reason.
+      # Fix a failure with `uv lock` and commit the result.
+      - name: Check uv.lock is up to date
+        run: uv lock --check
       - name: Type check
         run: uv run --locked --extra dev mypy
 

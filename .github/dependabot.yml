@@ -1,6 +1,8 @@
 version: 2
 updates:
-  - package-ecosystem: pip
+  # `uv` (not `pip`): updates pyproject.toml *and* uv.lock together, so dependency PRs
+  # pass CI's `uv lock --check` / `--locked` instead of leaving the lock stale.
+  - package-ecosystem: uv
     directory: "/"
     schedule:
       interval: weekly

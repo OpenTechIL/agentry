@@ -61,6 +61,8 @@ jobs:
       - name: Ensure Rosetta 2 (macOS x86_64 cross build)
         if: matrix.pyarch == 'x86_64'
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
+      # --frozen: build from exactly the committed uv.lock, never re-resolve. CI (--locked /
+      # `uv lock --check`) guarantees that lock matches pyproject.toml before a tag exists.
       - name: Build binary
         shell: bash
         run: |
