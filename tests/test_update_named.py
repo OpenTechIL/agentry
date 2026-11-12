@@ -296,6 +296,34 @@ def test_update_named_source_keeps_dependency_pin_when_ref_unchanged(tmp_path: P
     assert "v1" in _skill_text(proj, "rc")
 
 
+def test_update_named_source_bumps_dep_when_required_ref_changes(tmp_path: Path):
+    repo_c, url_c = _repo(tmp_path, "c", {"rc": "v1"})
+    _git(repo_c, "checkout", "-qb", "dev")
+    dev_sha = _advance(repo_c, "rc", "dev")
+    _git(repo_c, "checkout", "-q", "main")
+    req = {"ra": [{"type": "skill", "name": "rc", "url": url_c, "ref": "main"}]}
+    repo_a, url_a = _repo(tmp_path, "a", {"ra": "v1"}, requires=req)
+    proj = _project(tmp_path, {"a": url_a}, [("a", "ra")])
+    sync(proj)
+
+    _descriptor(
+        repo_a,
+        [
+            {
+                "name": "ra",
+                "path": "skills/ra",
+                "requires": [{"type": "skill", "name": "rc", "url": url_c, "ref": "dev"}],
+            }
+        ],
+    )
+    _commit(repo_a, "require rc@dev")
+    sync(proj, update=True, update_only=frozenset({"a"}))
+
+    (dep,) = [e for e in load_lock(proj).sources if e.synthesized]
+    assert dep.ref == "dev" and dep.resolved == dev_sha
+    assert "dev" in _skill_text(proj, "rc")
+
+
 def test_named_source_needing_missing_component_from_pinned_source_fails(
     tmp_path: Path, monkeypatch
 ):
@@ -343,6 +371,27 @@ def test_named_source_needing_missing_component_from_pinned_source_fails(
     ok = runner.invoke(app, ["update", "a", "b"])
     assert ok.exit_code == 0, ok.output
     assert (proj / ".claude/skills/newthing/SKILL.md").exists()
+
+
+# --- interaction with T7 ---------------------------------------------------------------
+
+
+def test_url_change_still_repins_an_unnamed_source(two_sources, tmp_path: Path):
+    """`update a` doesn't freeze b: an edited url on b is a new identity, so b re-pins."""
+    proj, _, repo_b = two_sources
+    fork = tmp_path / "fork-b"
+    _git(tmp_path, "clone", "-q", str(repo_b), str(fork))
+    fork_sha = _advance(fork, "rb", "fork")
+    cfg = proj / ".agentry.yml"
+    cfg.write_text(
+        cfg.read_text(encoding="utf-8").replace(f"file://{repo_b}", f"file://{fork}"),
+        encoding="utf-8",
+    )
+
+    sync(proj, update=True, update_only=frozenset({"a"}))
+    entry = load_lock(proj).entry("b")
+    assert entry.url == f"file://{fork}" and entry.resolved == fork_sha
+    assert "fork" in _skill_text(proj, "rb")
 
 
 # --- a refused update leaves the installed content at the old revision --------------------
