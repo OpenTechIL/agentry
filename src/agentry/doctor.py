@@ -168,11 +168,11 @@ def run_checks(root: Path) -> list[Check]:
                             "drift",
                             f"{e.file}: '{e.pointer}.{e.key}' (from {r.ref} → {r.target}) {why}"
                             f" — delete it and run `{prog()} sync` to get the current version, "
-                            f"or disable {r.ref} to keep yours",
+                            f"or run `{prog()} keep {r.ref} {e.keep_arg or e.key}` to keep yours",
                         )
                     )
                 continue
-            if r.state != "ok":
+            if not r.state.startswith("ok"):  # "ok (kept)" is healthy: the user's choice
                 # A row with a note can't be fixed by sync (a refused merge, a hand edit):
                 # say why instead of the generic hint (ADR-001, PM C2).
                 hint = r.note or f"run `{prog()} sync`"

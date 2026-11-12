@@ -137,8 +137,16 @@ file removes it.
 `mcp` and `hook` components add named entries to a shared config file such as `.mcp.json`,
 `.claude/settings.json` or `.vscode/mcp.json`. agentry only changes entries it added itself, and
 it can tell whether an entry on disk is still the one it wrote. When it can't merge safely, it
-leaves the file alone, skips that component **for that file only**, and prints one of the
-warnings below. `sync` still exits 0.
+leaves your entry alone and prints one of the warnings below. `sync` still exits 0.
+- **On first install,** a conflict skips the whole component for that file, so nothing is
+  half-installed.
+- **Once the component is installed,** only the conflicting entry is skipped. The component's
+  other entries keep updating.
+
+Where a warning suggests `agentry keep`, it names the exact command, scoped as narrowly as
+possible. It names only the targets where the entry drifted (for example `claude:github`). It
+uses the bare `<key>` only when the entry drifted on every target the component writes it to,
+which includes a component with a single target.
 
 To find these later:
 - `agentry status` shows the row as `missing` (or `drift`) and prints the reason under the table.
@@ -154,7 +162,9 @@ Running `agentry sync` again does not fix these. Apply the fix first.
 
 **Cause.** The file already has an entry with that name, for example an MCP server called
 `github` that you added by hand, and it differs from the component's entry. agentry won't
-overwrite something it didn't create.
+overwrite something it didn't create. If the component was already installed and the entry is a
+new one from upstream, the message says `'<key>' was not merged into <target>`. Only that entry is
+skipped in that case.
 
 **Fix.** Choose one, then run `agentry sync`:
 - **Keep both.** Rename your entry.
@@ -178,14 +188,53 @@ creates and owns it.
 ### `is your entry (it matched <ref> earlier, but upstream has changed)`
 
 ```text
-<ref>: '<pointer>.<key>' in <file> is your entry (it matched <ref> earlier, but upstream has changed) — keeping yours. Delete it and re-run sync to take <ref>'s version.
+<ref>: '<pointer>.<key>' in <file> is your entry (it matched <ref> earlier, but upstream has changed) — keeping yours. Delete it to take <ref>'s version, or run `agentry keep <ref> [<target>:]<key>` to keep it.
 ```
 
 **Cause.** This follows the previous case. The source has since updated the entry, and yours no
-longer matches it. agentry still won't change your entry.
+longer matches it. agentry still won't change your entry. Only this entry is held back, and the
+component's other entries keep updating. `status` shows the row as `drift`.
 
-**Fix.** To take the new version, delete your entry and run `agentry sync`. To keep yours, run
-`agentry disable <ref>`.
+**Fix.** To take the new version, delete your entry and run `agentry sync`. To keep yours and
+stop the warning, run the `agentry keep …` command from the message.
+
+### `kept, but no entry on <target>`
+
+```text
+demo/mcp/servers: 'mcpServers.github' in .cursor/mcp.json — kept, but no entry on cursor; nothing installed. Add yours, remove it from `keep:` to let agentry install it, or narrow keep to `<target>:<key>`.
+```
+
+When this happens for two or more keys, sync prints one summary line instead, and
+`agentry doctor` lists each one:
+
+```text
+2 keys in keep: have no entry on one or more targets and were not installed — run `agentry doctor` for the list
+```
+
+**Cause.** The component's [`keep:`](config-reference.md#keep) list has a bare key such as
+`github`, which applies to every target, including targets you added later. On this target
+there's no entry with that name, and agentry never creates a kept entry. The usual causes are a
+target you added after keeping the key, or a kept entry you deleted. `status` shows the row as
+`missing`, and `doctor --strict` fails on it.
+
+**Fix.** Choose one:
+- **Add your own entry** to that file.
+- **Let agentry install it.** Remove the key from `keep:`.
+- **Scope the keep.** Change it to `<target>:<key>` (for example `claude:github`) so it covers
+  only the targets where you want your own value.
+
+### `is your entry (no longer in keep:)`
+
+```text
+demo/mcp/servers: 'mcpServers.github' in .mcp.json is your entry (no longer in keep:) — left unchanged. Delete it and re-run sync to take demo/mcp/servers's version.
+```
+
+**Cause.** You removed this entry from the component's [`keep:`](config-reference.md#keep) list,
+but your own value is still in the file. agentry still treats it as yours and leaves it alone.
+The component's other entries keep updating.
+
+**Fix.** To hand it back to agentry, delete the entry and run `agentry sync`. To keep it after
+all, add it back with `agentry keep <ref> [<target>:]<key>`.
 
 ### `'<pointer>' in <file> is a <type>, not an object`
 
@@ -207,7 +256,7 @@ anything you need from the old value. Then run `agentry sync`.
 ```
 
 **Cause.** Two enabled components ship an entry with the same name for the same file. Only one
-of them can have it.
+of them can have it. Only that entry is skipped. The component's other entries still install.
 
 **Fix.** Run `agentry disable` on whichever component you don't want. If you need both, rename
 the entry in one of the sources, or ask its author to.
@@ -215,7 +264,20 @@ the entry in one of the sources, or ask its author to.
 ### `was edited after agentry installed it` (status shows `drift`)
 
 ```text
-<ref>: '<pointer>.<key>' in <file> was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's.
+<ref>: '<pointer>.<key>' in <file> was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's, or run `agentry keep <ref> [<target>:]<key>` to keep yours.
+```
+
+For example, with `claude` and `copilot` as targets and the entry edited only in `.mcp.json`:
+
+```text
+demo/mcp/servers: 'mcpServers.github' in .mcp.json was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's, or run `agentry keep demo/mcp/servers claude:github` to keep yours.
+```
+
+If you edited it in both `.mcp.json` and `.vscode/mcp.json`, each warning suggests the bare key:
+
+```text
+demo/mcp/servers: 'mcpServers.github' in .mcp.json was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's, or run `agentry keep demo/mcp/servers github` to keep yours.
+demo/mcp/servers: 'servers.github' in .vscode/mcp.json was edited after agentry installed it — keeping your version. Delete it and re-run sync to restore agentry's, or run `agentry keep demo/mcp/servers github` to keep yours.
 ```
 
 **Cause.** You changed an entry that agentry installed. agentry keeps your edit and stops
@@ -223,14 +285,20 @@ updating that entry from upstream. The warning repeats on every sync until you r
 `agentry doctor` lists every such entry with its file and component (see the
 [example below](#was-recorded-by-an-older-agentry-and-differs-from-the-current-source)).
 
-**Fix.** To keep your edit, leave it. agentry won't delete it on removal either (see the next
-entry). To go back to agentry's version and receive upstream updates again, delete the entry and
-run `agentry sync`.
+**Fix.** Choose one:
+- **Keep your edit.** Run the `agentry keep …` command from the message. This adds the key to
+  the component's [`keep:`](config-reference.md#keep) list, so agentry stops warning and never
+  writes or removes the entry. `status` shows it as `ok (kept)`.
+- **Go back to agentry's version** and receive upstream updates again. Delete the entry and run
+  `agentry sync`.
+
+If a hook pack's events depend on each other (for example `PreToolUse` and `PostToolUse` scripts
+sharing state), keep or delete them together. agentry handles each entry independently.
 
 ### `was recorded by an older agentry and differs from the current source`
 
 ```text
-demo/mcp/github: 'mcpServers.github' in .mcp.json was recorded by an older agentry and differs from the current source — keeping it. If you didn't edit it, delete it and re-run sync to get the current version.
+demo/mcp/github: 'mcpServers.github' in .mcp.json was recorded by an older agentry and differs from the current source — keeping it. If you didn't edit it, delete it and re-run sync to get the current version, or run `agentry keep demo/mcp/github github` to keep yours.
 ```
 
 `agentry status` shows the row as `drift`. To get the full list of affected entries, run
@@ -239,8 +307,8 @@ component that installed it, and the fix. It also lists entries you edited by ha
 format, and `--strict` fails on any of them:
 
 ```text
-! drift  .mcp.json: 'mcpServers.github' (from demo/mcp/github → claude) was recorded by an older agentry and differs from the current source — delete it and run `agentry sync` to get the current version, or disable demo/mcp/github to keep yours
-! drift  .mcp.json: 'mcpServers.slack' (from demo/mcp/slack → claude) was edited by hand — delete it and run `agentry sync` to get the current version, or disable demo/mcp/slack to keep yours
+! drift  .mcp.json: 'mcpServers.github' (from demo/mcp/github → claude) was recorded by an older agentry and differs from the current source — delete it and run `agentry sync` to get the current version, or run `agentry keep demo/mcp/github github` to keep yours
+! drift  .mcp.json: 'mcpServers.slack' (from demo/mcp/slack → claude) was edited by hand — delete it and run `agentry sync` to get the current version, or run `agentry keep demo/mcp/slack slack` to keep yours
 ```
 
 **Cause.** You upgraded from an agentry version that didn't record what it wrote into config
@@ -256,27 +324,32 @@ in place, agentry reminds you:
 manifest from an older agentry: run `agentry sync` before `agentry update` so installed entries can be verified
 ```
 
-**Fix.** Go through `agentry doctor`'s list. For each entry you edited and want to keep, leave
-it, or run `agentry disable <ref>` to stop the warning. Delete every other entry and run
-`agentry sync`. agentry then installs the current version and manages it from then on.
+**Fix.** Go through `agentry doctor`'s list:
+- **For each entry you edited and want to keep,** run the `agentry keep …` command doctor prints.
+  agentry then stops warning about it and never touches it.
+- **Delete every other entry** and run `agentry sync`. agentry installs the current version and
+  manages it from then on.
 
 ### `was edited after install — left in place on removal`
 
 ```text
-<ref>: '<pointer>.<key>' in <file> was edited after install — left in place on removal; delete it by hand if unused.
+<ref>: '<pointer>.<key>' in <file> was edited after install — left in place on removal; delete it by hand if unused, or run `agentry keep <ref> [<target>:]<key>` to keep it as yours.
 ```
 
 **Cause.** You removed or disabled a component whose entry you had edited. agentry treats the
 edited entry as yours, so it doesn't delete it.
 
-**Fix.** If you no longer need the entry, delete it from the file by hand.
+**Fix.** If you no longer need the entry, delete it from the file by hand. If you want it, leave
+it. This warning appears only once, when the component is removed. To record the entry as yours
+in `.agentry.yml`, in case you enable the component again later, run the `agentry keep …` command
+from the message.
 
 If you remove a component whose entry agentry couldn't verify after an upgrade (see
 [the previous entry](#was-recorded-by-an-older-agentry-and-differs-from-the-current-source)),
 you get a variant of this warning:
 
 ```text
-<ref>: '<pointer>.<key>' in <file> could not be verified as agentry's (recorded by an older agentry) — left in place on removal; delete it by hand if unused.
+<ref>: '<pointer>.<key>' in <file> could not be verified as agentry's (recorded by an older agentry) — left in place on removal; delete it by hand if unused, or run `agentry keep <ref> [<target>:]<key>` to keep it as yours.
 ```
 
 The fix is the same.

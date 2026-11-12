@@ -903,7 +903,7 @@ def test_doctor_lists_each_hand_edited_entry_per_key(
         (line,) = [m for m in lines if f"'mcpServers.{key}'" in m]
         assert line.startswith(".mcp.json: ")
         assert "was edited by hand" in line
-        assert "disable s/mcp/servers to keep yours" in line
+        assert f"run `agentry keep s/mcp/servers {key}` to keep yours" in line
 
     monkeypatch.chdir(proj)
     assert CliRunner().invoke(app, ["doctor", "--strict"]).exit_code == 1
@@ -923,7 +923,7 @@ def test_doctor_lists_unproven_v1_entry_per_key(tmp_path: Path, local_source: Pa
     (line,) = _drift_lines(proj, "s/mcp/github")
     assert "'mcpServers.github'" in line
     assert "was recorded by an older agentry and differs from the current source" in line
-    assert "disable s/mcp/github to keep yours" in line
+    assert "run `agentry keep s/mcp/github github` to keep yours" in line
 
 
 # --- Malformed target config (D6): warn and skip, never a traceback ---------------------

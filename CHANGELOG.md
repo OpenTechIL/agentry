@@ -9,14 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`agentry keep <ref> [<target>:]<key>` and a per-component `keep:` list.** Use these to own
+  a merged `mcp` or `hook` entry yourself, for example an MCP server you've customized. agentry
+  stops writing, updating or removing that entry, and `status` shows it as `ok (kept)` instead
+  of `drift`. The "edited" and "left in place" warnings, the upgrade warning and `agentry doctor`
+  now suggest the exact `agentry keep …` command. It names only the targets where the entry
+  drifted (`claude:github`), and uses the bare key only when the entry drifted on every target. A
+  bare key also covers targets you add later, and agentry won't create the entry there. Disabling or removing the
+  component leaves kept entries in place. To hand an entry back, remove it from `keep:` and
+  delete your entry. If a hook pack's events depend on each other, keep or delete them together;
+  agentry handles each entry independently.
+
 ### Changed
 - **Behavior change: agentry no longer overwrites config entries it didn't add.** Previously,
   when an `mcp` or `hook` component merged a key that already existed in the target file
   (`.mcp.json`, `.claude/settings.json`, `.vscode/mcp.json`, …), agentry overwrote your entry,
-  and removing the component later deleted it. Now sync leaves your entry unchanged, does not
-  merge that component into that file, and warns. `agentry status` shows the component as
-  `missing` with the reason, and `agentry doctor --strict` fails. If your entry is identical to
-  the one the component ships, agentry uses yours and never removes it.
+  and removing the component later deleted it. Now sync leaves your entry unchanged and warns.
+  On first install, the component is not merged into that file at all, so nothing is
+  half-installed. Once a component is installed, a conflict holds back only that entry, and the
+  component's other entries keep updating. `agentry status` shows the reason and
+  `agentry doctor --strict` fails. If your entry is identical to the one the component ships,
+  agentry uses yours and never removes it.
 - **Hand edits to entries agentry installed are kept.** If you edit an entry agentry merged,
   sync keeps your version instead of reverting it, and reports it as `drift` in `status` and
   `doctor`. To get agentry's version back, delete the entry and run `agentry sync`.
@@ -46,6 +60,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Warning lines from `sync`, `add` and `update` are no longer broken at the terminal width when
   output goes to a log or pipe. Each warning is one line, so it's easy to grep. In a terminal,
   long lines still wrap on screen.
+
+### Fixed
+- A component's `transform:` was dropped from `.agentry.yml` when the component was added through
+  the Python config API (`ConfigStore.add_component`). A `transform:` you write by hand in
+  `.agentry.yml` was not affected, and is kept when agentry commands rewrite the file.
 
 ## [0.1.5] — 2026-09-09
 

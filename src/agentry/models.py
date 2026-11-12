@@ -248,6 +248,22 @@ class ComponentTransform(BaseModel):
         return self
 
 
+def parse_keep(entry: str, owner: str = "component") -> tuple[str | None, str]:
+    """Split a ``keep:`` entry into ``(target or None, key)``; raise on a malformed one.
+
+    ``key`` applies to every target; ``<target>:<key>`` to one. The first ``:`` separates
+    them, so a key that itself contains ``:`` must be target-qualified.
+    """
+    if not isinstance(entry, str) or not entry.strip() or entry != entry.strip():
+        raise ValueError(f"{owner}: keep entry {entry!r} must be a non-empty key")
+    target, sep, key = entry.partition(":")
+    if not sep:
+        return None, entry
+    if not target or not key:
+        raise ValueError(f"{owner}: keep entry {entry!r} must be '<key>' or '<target>:<key>'")
+    return target, key
+
+
 class Component(BaseModel):
     """A single installable component declared in the config."""
 
@@ -266,6 +282,9 @@ class Component(BaseModel):
     # If set, the component self-installs by running this spec's command (GENERATE strategy)
     # instead of linking/merging an artifact. Mutually exclusive with ``path``.
     generate: GeneratorSpec | None = None
+    # Merged keys the user keeps as their own (ADR-001 "keep"): agentry never writes or
+    # removes them again. A bare ``key`` applies to every target; ``<target>:<key>`` to one.
+    keep: list[str] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_path(self) -> Component:
@@ -275,12 +294,23 @@ class Component(BaseModel):
             raise ValueError(f"{self.ref}: 'generate' and 'transform' are mutually exclusive")
         if self.path:
             _check_rel(f"{self.ref}: path", self.path)
+        for entry in self.keep:
+            parse_keep(entry, self.ref)
         return self
 
     @property
     def ref(self) -> str:
         """Stable identifier used on the CLI: ``<source>/<type>/<name>``."""
         return f"{self.source}/{self.type.value}/{self.name}"
+
+    def kept_keys(self, target: str) -> frozenset[str]:
+        """The merged keys this component keeps as the user's on ``target``."""
+        out = set()
+        for entry in self.keep:
+            scope, key = parse_keep(entry, self.ref)
+            if scope is None or scope == target:
+                out.add(key)
+        return frozenset(out)
 
     def applies_to(self, project_targets: list[str]) -> list[str]:
         return self.targets if self.targets is not None else project_targets
@@ -596,6 +626,7 @@ class OwnedEntry(BaseModel):
     mode: Literal["named", "array"] = "named"
     fingerprint: str | None = None  # named: fp of the value agentry wrote
     preexisting: bool = False  # named: identical user entry; never removed
+    kept: bool = False  # named, with preexisting: became the user's via the component's keep:
     items: list[str] = Field(default_factory=list)  # array: fps agentry appended, in order
     created_key: bool = False  # array: agentry created the event key itself
 

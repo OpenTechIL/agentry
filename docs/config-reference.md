@@ -58,6 +58,7 @@ A source is a git repo or a directory on this machine.
 | `path` | str | `null` | Explicit path to the artifact within the source, overriding discovery. Must be relative and inside the repo. |
 | `generate` | [GeneratorSpec](#generate) | `null` | The component installs itself by running its own CLI. |
 | `transform` | `{provider, prompt}` | `null` | Materialize through a content provider instead of a live symlink. `provider` is `strip-frontmatter` or `agent`. |
+| `keep` | list of str | `[]` | Merged entries (`mcp`/`hook` keys) you own instead of agentry. Each is `<key>` for every target, or `<target>:<key>` for one. See [keep](#keep). |
 
 Its identifier on the CLI is `<source>/<type>/<name>` — that's what `add`, `remove`, `why`
 and `deps` take.
@@ -65,6 +66,56 @@ and `deps` take.
 **There is no `strategy` key on a component.** The install strategy belongs to the
 (target, type) rule in [`target_profiles`](#target_profiles). A `strategy:` written under a
 `components:` entry is silently ignored.
+
+### `keep`
+
+For `mcp` and `hook` components. List the merged entries you want to own yourself, for example
+an MCP server whose arguments you've customized. agentry then never writes, updates or removes
+those entries, and `agentry status` shows them as `ok (kept)` instead of `drift`.
+
+```yaml
+components:
+  - source: demo
+    type: mcp
+    name: github
+    keep:
+      - claude:github   # only in .mcp.json (the claude target)
+      # - github        # or: in every target's config file
+```
+
+Each item is the entry's key, which is its name in the merged section, such as `mcpServers.github`
+→ `github`. Prefix it with a target name to keep it in one target only. Prefer the prefixed
+form when the component installs into several targets: a bare key also freezes the entry on
+targets where agentry's version is still fine.
+
+A bare key also covers **targets you add to the project later**. agentry never creates a kept
+entry, so a new target won't get one. `status` reports that target as `missing` (`kept, but no
+entry on cursor — …`), and `doctor --strict` fails. If you expect to add targets, use
+`<target>:<key>`.
+
+`agentry keep <ref> [<target>:]<key>` adds an item and syncs. A target the component doesn't
+install into is rejected:
+
+```text
+Unknown target 'a' for demo/mcp/servers — it installs into: claude, copilot. Use '<target>:<key>' with one of those, or a bare '<key>' for all of them.
+```
+
+An item that matches no key the component merges gets a warning on every sync, so check the
+spelling.
+
+The component's other entries keep updating as normal. Disabling or removing the component
+leaves a kept entry in place, which is intended: it's yours.
+
+If a hook pack's events depend on each other (for example `PreToolUse` and `PostToolUse` scripts
+sharing state), keep or delete them together. agentry handles each entry independently.
+
+**To hand an entry back,** remove it from `keep:` and delete your entry from the config file. The
+next sync re-creates agentry's version. If you remove it from `keep:` but leave your value in the
+file, agentry leaves that one entry unchanged and warns on each sync until you delete it:
+
+```text
+demo/mcp/servers: 'mcpServers.github' in .mcp.json is your entry (no longer in keep:) — left unchanged. Delete it and re-run sync to take demo/mcp/servers's version.
+```
 
 ### `generate`
 

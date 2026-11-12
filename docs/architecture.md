@@ -388,11 +388,32 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
     and the component is not merged into that destination, with a warning. An identical value
     is recorded as `preexisting`: it satisfies the component, but is never removed. Install
     also refuses a pointer section that is not an object, and a key another component already
-    owns. A refused component is all-or-nothing for that destination. For link+merge, the
+    owns. Refusal is all-or-nothing only on **first install** in a destination (W3, the
+    non-object section, is always whole-destination). Once a component is installed there, a
+    conflicting key is refused **per key**: the warning names it, the status row shows `drift`,
+    and the component's other keys keep updating (ADR-001 rev 4). For link+merge, the
     script directory is not linked either.
   - **User edits win.** If the on-disk value no longer matches the recorded fingerprint, sync
     keeps the user's version. It warns, and `status` and `doctor` report `drift` with a note.
     Sync does not revert the edit.
+  - **Keeping your own value** (`keep:`). A component's `keep:` list in `.agentry.yml` names
+    merged keys the user takes over. A bare `key` applies to every target; `<target>:<key>` limits
+    it to one. `agentry keep <ref> [<target>:]<key>` appends to the list.
+    - **Effect.** Agentry records a kept key as `preexisting` and never writes or removes it
+      again. That holds on disable and removal too, because keep is read from the declared
+      config, including disabled components. No drift warning is emitted, and `status` shows
+      `ok (kept)`.
+    - **Kept but missing.** A kept key is never created. Where a target has no entry for it (a
+      target added after a bare keep, or the user deleted their entry), `status` reports
+      `missing` with a note, and sync and `doctor` warn. Nothing is written.
+    - **Typos.** A `keep` entry that matches no key the component merges gets one warning.
+    - **Hints.** Drift and refusal messages suggest `agentry keep`. They give the bare key only
+      when it drifted on every target the component writes it to; otherwise they give
+      `<target>:<key>`, so following the hint never freezes a healthy target.
+    - **No reclaim.** Removing a key from `keep:` takes nothing back. The entry stays the user's
+      until they delete it; the next sync then re-creates agentry's version and owns it.
+    - **Why config, not the manifest.** The decision lives in committed config so it is shared
+      and reviewable. The manifest is gitignored and per-machine.
   - **Removal** deletes only owned, non-preexisting keys whose fingerprint still matches. An
     edited entry is left in place, with a warning. A key whose ownership was never proven (no
     fingerprint) is never removed.

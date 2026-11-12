@@ -203,6 +203,15 @@ def merge_state(root: Path, dest: MergeDest, keys: list[str]) -> str:
 # value still matches what it wrote. Keys it did not write are never touched.
 
 
+def keep_hint(ref: str, arg: str) -> str:
+    """The ``agentry keep`` invocation that hands an entry over to the user (backticked).
+
+    ``arg`` is the keep: entry — ``<target>:<key>`` or a bare ``<key>`` (see
+    :meth:`MergeContext.keep_arg`).
+    """
+    return f"`{prog()} keep {ref} {arg}`"
+
+
 def fingerprint(value: object) -> str:
     """Stable content hash of a merged value (tomlkit items are unwrapped first)."""
     unwrap = getattr(value, "unwrap", None)
@@ -277,6 +286,14 @@ class NamedPlan:
     #: CLI summarizes these; doctor lists them per key.
     drift_warnings: list[str] = field(default_factory=list)
     note: str | None = None  # why the component isn't installed (status row note)
+    kept: list[str] = field(default_factory=list)  # keys present on disk the user keeps
+    #: Keys refused one at a time on an installed component (W1/W1b/W5 after install), with
+    #: the status note for each; the component's other keys still apply.
+    key_notes: dict[str, str] = field(default_factory=dict)
+    #: Kept keys with no entry on disk here: never created, but reported (status missing).
+    missing_notes: dict[str, str] = field(default_factory=dict)
+    #: The warnings for ``missing_notes`` (summarized as kind "kept" by the CLI).
+    kept_missing_warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -287,9 +304,72 @@ class MergeContext:
     target: str
     file: str
     pointer: str
+    #: Keys whose keep hint is the bare key: they drifted on *every* target the component
+    #: writes them to, so keeping them everywhere is exactly right. Any other key's hint
+    #: names this target (``<target>:<key>``) so keep never freezes a healthy target.
+    bare: frozenset[str] = frozenset()
 
     def at(self, key: str) -> str:
         return f"'{self.pointer}.{key}' in {self.file}"
+
+    def keep_arg(self, key: str) -> str:
+        return key if key in self.bare else f"{self.target}:{key}"
+
+    def keep(self, key: str) -> str:
+        return keep_hint(self.ref, self.keep_arg(key))
+
+
+def _users_entry_differs(ctx: MergeContext, key: str, rec: OwnedEntry) -> tuple[str, str]:
+    """(warning, note) for a pre-existing user entry that no longer matches the source."""
+    if rec.kept:  # it became the user's through keep:, which has since been removed
+        return (
+            f"{ctx.ref}: {ctx.at(key)} is your entry (no longer in keep:) — left unchanged. "
+            f"Delete it and re-run sync to take {ctx.ref}'s version.",
+            f"{ctx.at(key)} is your entry (no longer in keep:) — delete it to take "
+            f"{ctx.ref}'s version",
+        )
+    return (
+        f"{ctx.ref}: {ctx.at(key)} is your entry (it matched {ctx.ref} earlier, but upstream "
+        f"has changed) — keeping yours. Delete it to take {ctx.ref}'s version, or run "
+        f"{ctx.keep(key)} to keep it.",
+        f"{ctx.at(key)} is your entry and differs from upstream — delete it to take "
+        f"{ctx.ref}'s version, or run {ctx.keep(key)} to keep it",
+    )
+
+
+def _plan_owned(
+    plan: NamedPlan,
+    ctx: MergeContext,
+    key: str,
+    desired: object,
+    rec: OwnedEntry,
+    have: str,
+    want: str,
+) -> None:
+    """A key agentry recorded: update it if untouched, keep it (W2) if the user edited it."""
+    if have != rec.fingerprint:
+        # The user edited what we wrote (or a v1 record never proved it): theirs now. Keep
+        # the record so status reports drift; never write over it.
+        plan.entries[key] = rec
+        if rec.fingerprint is None:  # v1 record, value never proven to be agentry's
+            w2 = (
+                f"{ctx.ref}: {ctx.at(key)} was recorded by an older agentry and differs from "
+                "the current source — keeping it. If you didn't edit it, delete it and re-run "
+                f"sync to get the current version, or run {ctx.keep(key)} to keep yours."
+            )
+        else:
+            w2 = (
+                f"{ctx.ref}: {ctx.at(key)} was edited after agentry installed it — keeping "
+                "your version. Delete it and re-run sync to restore agentry's, or run "
+                f"{ctx.keep(key)} to keep yours."
+            )
+        plan.warnings.append(w2)
+        plan.drift_warnings.append(w2)
+        return
+    plan.entries[key] = OwnedEntry(mode="named", fingerprint=want)
+    if have != want:
+        plan.writes[key] = desired
+        plan.updated = True
 
 
 def plan_named(
@@ -298,11 +378,21 @@ def plan_named(
     fragment: dict,
     owned: dict[str, OwnedEntry],
     claimed: Callable[[str], str | None],
+    kept: frozenset[str] = frozenset(),
+    *,
+    installed: bool = False,
 ) -> NamedPlan:
     """Plan merging ``fragment`` (named mode) without mutating ``doc``.
 
+    A conflict (W1 the user's entry, W1b an adopted entry upstream changed, W5 another
+    component's) refuses the **whole** component on its first install into a destination —
+    no half-installed MCP server or hook set. Once ``installed`` (it already has a record
+    there), only the offending key is refused and the other keys keep updating (ADR-001
+    Rev 4). W3 (non-object section) always refuses the whole destination.
+
     ``owned`` is this component's recorded ownership for the destination; ``claimed(key)``
-    names another live component that owns ``key`` there, if any.
+    names another live component that owns ``key`` there, if any. ``kept`` keys (the
+    component's ``keep:``) are the user's: recorded as pre-existing, never written.
     """
     plan = NamedPlan()
     section = doc.get(ctx.pointer, _ABSENT)
@@ -316,7 +406,47 @@ def plan_named(
         return plan
     current: MutableMapping = section if isinstance(section, MutableMapping) else {}
 
+    def refuse(key: str, warning: str, note: str, *, drift: bool = False) -> None:
+        plan.warnings.append(warning)
+        if drift:
+            plan.drift_warnings.append(warning)
+        if installed:
+            plan.key_notes[key] = note
+            rec = owned.get(key)
+            if rec is not None:
+                plan.entries[key] = rec  # still the record it was; nothing written
+        else:
+            plan.refused = True
+            plan.note = plan.note or note
+
     for key, desired in fragment.items():
+        if key in kept:
+            # The user keeps this key: theirs from now on — no write, no warning. Recorded as
+            # pre-existing (kept-origin) so removal never touches it and un-keeping
+            # reclaims nothing.
+            if key in current:
+                plan.entries[key] = OwnedEntry(
+                    mode="named",
+                    fingerprint=fingerprint(current[key]),
+                    preexisting=True,
+                    kept=True,
+                )
+                plan.kept.append(key)
+            else:
+                # Never created while kept — but not silent (e.g. a target added after a
+                # bare keep, or the user deleted their kept entry).
+                plan.missing_notes[key] = (
+                    f"kept, but no entry on {ctx.target} — add yours, remove it from `keep:` "
+                    f"to let agentry install it, or narrow keep to `<target>:<key>`"
+                )
+                w = (
+                    f"{ctx.ref}: {ctx.at(key)} — kept, but no entry on {ctx.target}; nothing "
+                    "installed. Add yours, remove it from `keep:` to let agentry install it, "
+                    "or narrow keep to `<target>:<key>`."
+                )
+                plan.warnings.append(w)
+                plan.kept_missing_warnings.append(w)
+            continue
         want = fingerprint(desired)
         rec = owned.get(key)
         if key not in current:
@@ -329,71 +459,39 @@ def plan_named(
         if rec is not None and rec.preexisting:
             if have == want:
                 plan.entries[key] = rec
-                continue
-            plan.refused = True
-            plan.warnings.append(
-                f"{ctx.ref}: {ctx.at(key)} is your entry (it matched {ctx.ref} earlier, but "
-                f"upstream has changed) — keeping yours. Delete it and re-run sync to take "
-                f"{ctx.ref}'s version."
-            )
-            plan.note = (
-                f"{ctx.at(key)} is your entry and differs from upstream — delete it to take "
-                f"{ctx.ref}'s version"
-            )
-            continue
-        if rec is not None:
-            if have != rec.fingerprint:
-                # The user edited what we wrote: theirs now. Keep the record so status
-                # reports drift; never write over it.
-                plan.entries[key] = rec
-                if rec.fingerprint is None:  # v1 record, value never proven to be agentry's
-                    w2 = (
-                        f"{ctx.ref}: {ctx.at(key)} was recorded by an older agentry and "
-                        "differs from the current source — keeping it. If you didn't edit it, "
-                        "delete it and re-run sync to get the current version."
-                    )
-                else:
-                    w2 = (
-                        f"{ctx.ref}: {ctx.at(key)} was edited after agentry installed it — "
-                        "keeping your version. Delete it and re-run sync to restore agentry's."
-                    )
-                plan.warnings.append(w2)
-                plan.drift_warnings.append(w2)
-                continue
-            plan.entries[key] = OwnedEntry(mode="named", fingerprint=want)
-            if have != want:
-                plan.writes[key] = desired
-                plan.updated = True
-            continue
-        other = claimed(key)
-        if other is not None:
-            plan.refused = True
-            plan.warnings.append(
+            else:
+                warning, note = _users_entry_differs(ctx, key, rec)
+                refuse(key, warning, note, drift=True)
+        elif rec is not None:
+            _plan_owned(plan, ctx, key, desired, rec, have, want)
+        elif (other := claimed(key)) is not None:
+            refuse(
+                key,
                 f"{ctx.ref}: {ctx.at(key)} is already provided by {other} — skipped. Disable "
-                "one of them or rename the entry."
+                "one of them or rename the entry.",
+                f"{ctx.at(key)} is already provided by {other}",
             )
-            plan.note = f"{ctx.at(key)} is already provided by {other}"
-            continue
-        if have == want:
+        elif have == want:
             plan.entries[key] = OwnedEntry(mode="named", fingerprint=want, preexisting=True)
             plan.warnings.append(
                 f"{ctx.ref}: {ctx.file} already has an identical '{ctx.pointer}.{key}' (not "
                 "added by agentry) — using yours; agentry will never remove it."
             )
-            continue
-        plan.refused = True
-        plan.warnings.append(
-            f"{ctx.ref}: {ctx.file} already has '{ctx.pointer}.{key}' (not added by agentry) "
-            f"— left unchanged; {ctx.ref} was not merged into {ctx.target}. Rename or remove "
-            f"your entry, or disable {ctx.ref}, then re-run sync."
-        )
-        plan.note = (
-            f"{ctx.file} already has '{ctx.pointer}.{key}' (not added by agentry) — rename or "
-            f"remove your entry, or disable {ctx.ref}"
-        )
+        else:
+            what = f"'{key}'" if installed else ctx.ref
+            refuse(
+                key,
+                f"{ctx.ref}: {ctx.file} already has '{ctx.pointer}.{key}' (not added by "
+                f"agentry) — left unchanged; {what} was not merged into {ctx.target}. Rename or "
+                f"remove your entry, or disable {ctx.ref}, then re-run sync.",
+                f"{ctx.file} already has '{ctx.pointer}.{key}' (not added by agentry) — rename "
+                f"or remove your entry, or disable {ctx.ref}",
+            )
     if plan.refused:
         plan.writes.clear()
         plan.created = plan.updated = False
+        plan.key_notes.clear()
+        plan.missing_notes.clear()
     return plan
 
 
@@ -434,13 +532,15 @@ def remove_named(
                 unverified(key)
                 if unverified is not None
                 else f"{ctx.ref}: {ctx.at(key)} could not be verified as agentry's (recorded "
-                "by an older agentry) — left in place on removal; delete it by hand if unused."
+                "by an older agentry) — left in place on removal; delete it by hand if unused, "
+                f"or run {ctx.keep(key)} to keep it as yours."
             )
             continue
         if fingerprint(section[key]) != rec.fingerprint:
             warnings.append(
                 f"{ctx.ref}: {ctx.at(key)} was edited after install — left in place on "
-                "removal; delete it by hand if unused."
+                f"removal; delete it by hand if unused, or run {ctx.keep(key)} to "
+                "keep it as yours."
             )
             continue
         del section[key]
@@ -475,7 +575,11 @@ def migrate_named(
 
 
 def drifted_keys(
-    doc: MutableMapping, pointer: str, fragment: dict, owned: dict[str, OwnedEntry]
+    doc: MutableMapping,
+    pointer: str,
+    fragment: dict,
+    owned: dict[str, OwnedEntry],
+    kept: frozenset[str] = frozenset(),
 ) -> list[tuple[str, bool]]:
     """Keys agentry recorded whose on-disk value it can't vouch for: ``(key, unproven)``.
 
@@ -487,7 +591,7 @@ def drifted_keys(
     out: list[tuple[str, bool]] = []
     for key in fragment:
         rec = owned.get(key)
-        if rec is None or rec.preexisting or key not in current:
+        if rec is None or rec.preexisting or key in kept or key not in current:
             continue
         if rec.fingerprint is None or rec.fingerprint != fingerprint(current[key]):
             out.append((key, rec.fingerprint is None))
@@ -500,21 +604,31 @@ def named_state(
     fragment: dict,
     owned: dict[str, OwnedEntry],
     claimed: Callable[[str], str | None],
+    kept: frozenset[str] = frozenset(),
+    *,
+    installed: bool = False,
 ) -> tuple[str, str | None]:
-    """Read-only drift check: ``(state, note)`` with state ``ok`` | ``missing`` | ``drift``.
+    """Read-only drift check: ``(state, note)``; state ``ok`` | ``ok (kept)`` | ``missing`` |
+    ``drift``.
 
     A refused install (user's entry, non-object section, duplicate) is ``missing`` with a
-    note saying why; an owned entry the user edited is ``drift``.
+    note saying why; an owned entry the user edited is ``drift``; a component whose only
+    differences are keys it keeps is ``ok (kept)``.
     """
-    plan = plan_named(doc, ctx, fragment, owned, claimed)
+    plan = plan_named(doc, ctx, fragment, owned, claimed, kept, installed=installed)
     if plan.refused:
         return "missing", plan.note
+    if plan.key_notes:  # a key refused on an installed component: the rest still applies
+        return "drift", next(iter(plan.key_notes.values()))
+    if plan.missing_notes:  # a kept key with no entry here: reported, never created
+        return "missing", next(iter(plan.missing_notes.values()))
     section = doc.get(ctx.pointer)
     current: MutableMapping = section if isinstance(section, MutableMapping) else {}
     for key in fragment:
         rec = owned.get(key)
         if (
-            key in current
+            key not in kept
+            and key in current
             and rec is not None
             and not rec.preexisting
             and rec.fingerprint != fingerprint(current[key])
@@ -522,13 +636,15 @@ def named_state(
             if rec.fingerprint is None:
                 return "drift", (
                     "recorded by an older agentry; value differs from the current source — if "
-                    "you didn't edit it, delete the entry and run sync to get the current version"
+                    "you didn't edit it, delete the entry and run sync to get the current "
+                    f"version, or run {ctx.keep(key)} to keep yours"
                 )
             return "drift", (
-                f"edited by hand — delete the entry and run `{prog()} sync` to restore it"
+                f"edited by hand — delete the entry and run `{prog()} sync` to restore it, or "
+                f"run {ctx.keep(key)} to keep yours"
             )
     if plan.created:
         return "missing", None
     if plan.updated:
         return "drift", None
-    return "ok", None
+    return ("ok (kept)" if plan.kept else "ok"), None

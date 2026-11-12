@@ -23,6 +23,7 @@ behind these commands.
 | `agentry status` | Report drift between config and what's installed |
 | `agentry doctor [--strict]` | Preflight: undefined targets, unprovided components, unset `${VARs}`, unsupported combos, drift. Exits 1 on errors (or warnings with `--strict`) |
 | `agentry why <ref>` | Explain a component: its source + pinned revision and exactly which targets it installs to |
+| `agentry keep <ref> [<target>:]<key>` | Keep your own value for a merged `mcp`/`hook` entry: adds it to the component's [`keep:`](config-reference.md#keep) list, then syncs. agentry stops writing or removing it. `<target>:<key>` keeps it on one target, a bare `<key>` on every target. An unknown target is rejected |
 | `agentry trust <source>` | Consent for a source to run code at install (generators), pinned to its SHA in the lock. Trusted sources run without `--allow-run`; trust drops if the source moves |
 | `agentry deps` | Show the resolved dependency map (transitive closure of enabled components) |
 

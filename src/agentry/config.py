@@ -190,6 +190,14 @@ class ConfigStore:
             item["targets"] = CommentedSeq(comp.targets)
         if comp.path is not None:
             item["path"] = comp.path
+        if comp.keep:
+            item["keep"] = CommentedSeq(comp.keep)
+        if comp.transform is not None:
+            tr = CommentedMap()
+            tr["provider"] = comp.transform.provider
+            if comp.transform.prompt is not None:
+                tr["prompt"] = comp.transform.prompt
+            item["transform"] = tr
         if comp.generate is not None:
             gen = CommentedMap()
             if comp.generate.setup:
@@ -211,6 +219,23 @@ class ConfigStore:
                 c["enabled"] = enabled
                 return True
         return False
+
+    def add_keep(self, ref: str, entry: str) -> bool | None:
+        """Append ``entry`` to a component's ``keep:`` list (round-trip, idempotent).
+
+        Returns True if added, False if already present, None if ``ref`` is not declared.
+        """
+        for c in self._seq("components"):
+            if _comp_ref(c) == ref:
+                keep = c.get("keep")
+                if keep is None:
+                    keep = CommentedSeq()
+                    c["keep"] = keep
+                if entry in keep:
+                    return False
+                keep.append(entry)
+                return True
+        return None
 
     # -- persistence ------------------------------------------------------
 

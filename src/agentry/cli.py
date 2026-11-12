@@ -14,6 +14,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Prompt
 from rich.table import Table
 from rich.tree import Tree
@@ -32,6 +33,7 @@ from .models import (
     Source,
     SourceType,
     Target,
+    parse_keep,
 )
 from .progname import CANONICAL, prog
 from .reconcile import SyncResult, status, sync
@@ -64,8 +66,10 @@ emit_app = typer.Typer(
 )
 app.add_typer(emit_app, name="emit")
 
-console = Console()
-err = Console(stderr=True)
+# emoji=False: user-supplied names (keys, refs, paths) must print verbatim — with emoji on,
+# Rich turns e.g. a keep entry "a:b:c" into "a🅱c". agentry never prints emoji codes itself.
+console = Console(emoji=False)
+err = Console(stderr=True, emoji=False)
 
 #: Built-in driver names in a stable, canonical order (registration order in drivers/__init__.py).
 _BUILTIN_TARGET_ORDER: list[str] = list(BUILTIN_DRIVERS)
@@ -232,6 +236,12 @@ _SUMMARY_MIN = 2
 
 
 def _summary_line(kind: str, n: int) -> str:
+    if kind == "kept":
+        return (
+            f"{_plural(n, 'key in keep: has', 'keys in keep: have')} no entry on one or more "
+            f"targets and {'was' if n == 1 else 'were'} not installed — run `{prog()} doctor` "
+            "for the list"
+        )
     if kind == "unsupported":
         return (
             f"{_plural(n, 'component', 'components')} skipped on targets that don't support "
@@ -268,7 +278,7 @@ def _print_result(res: SyncResult, *, verbose: bool = False) -> None:
         if hidden[w] > 0:
             hidden[w] -= 1
             continue
-        err.print(f"  [yellow]! {w}[/yellow]", soft_wrap=True)
+        err.print(f"  [yellow]! {escape(w)}[/yellow]", soft_wrap=True)
     for line in summaries:
         err.print(f"  [yellow]! {line}[/yellow]", soft_wrap=True)
     if res.gitignore_changed:
@@ -854,14 +864,14 @@ def status_cmd() -> None:
     table.add_column("target")
     table.add_column("where", style="dim")
     table.add_column("state")
-    style = {"ok": "green", "missing": "red", "drift": "yellow"}
+    style = {"ok": "green", "ok (kept)": "green", "missing": "red", "drift": "yellow"}
     for r in rows:
         table.add_row(r.ref, r.target, r.where, f"[{style.get(r.state, 'white')}]{r.state}[/]")
     if rows:
         console.print(table)
         for r in rows:
             if r.note:
-                console.print(f"[yellow]  {r.ref} → {r.target}: {r.note}[/yellow]")
+                console.print(f"[yellow]  {escape(f'{r.ref} → {r.target}: {r.note}')}[/yellow]")
     else:
         console.print("[dim]Nothing installed yet.[/dim]")
     for w in warnings:
@@ -893,7 +903,7 @@ def doctor_cmd(
     mark = {"error": "[red]✗[/red]", "warn": "[yellow]![/yellow]", "ok": "[green]✓[/green]"}
     for c in checks:
         out = err if c.level == "error" else console
-        out.print(f"  {mark.get(c.level, '?')} [dim]{c.category}[/dim]  {c.message}")
+        out.print(f"  {mark.get(c.level, '?')} [dim]{c.category}[/dim]  {escape(c.message)}")
     errors = sum(c.level == "error" for c in checks)
     warns = sum(c.level == "warn" for c in checks)
     if errors:
@@ -951,7 +961,7 @@ def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/
     )
     tree.add(f"source: {_source_provenance(store, component.source)}")
     targets = tree.add("installs to")
-    style = {"ok": "green", "missing": "red", "drift": "yellow"}
+    style = {"ok": "green", "ok (kept)": "green", "missing": "red", "drift": "yellow"}
     mine = [r for r in rows if r.ref == ref]
     if mine:
         for r in mine:
@@ -960,9 +970,59 @@ def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/
             )
     else:
         targets.add("[dim]no target resolves this component[/dim]")
+    if component.keep:
+        kept = tree.add("keeps (yours, never written or removed by agentry)")
+        for entry in component.keep:
+            kept.add(entry)
     console.print(tree)
     for w in warnings:
         err.print(f"[yellow]! {w}[/yellow]")
+
+
+@app.command(
+    name="keep",
+    help=(
+        "Keep your own value for a merged entry: agentry stops writing or removing it.\n\n"
+        "Adds KEY to the component's keep: list in .agentry.yml, then syncs. "
+        "To hand the entry back, remove it from keep: and delete your entry; "
+        "the next sync re-creates agentry's."
+    ),
+)
+def keep_cmd(
+    ref: str = typer.Argument(..., help="Component ref: <source>/<type>/<name>."),
+    key: str = typer.Argument(
+        ..., help="Merged entry to keep as yours: '<key>' (all targets) or '<target>:<key>'."
+    ),
+) -> None:
+    try:
+        scope, _ = parse_keep(key, ref)
+    except ValueError as exc:
+        err.print(escape(str(exc)), style="red")
+        raise typer.Exit(1)
+    store = _load()
+    config = store.parsed()
+    component = config.find_component(ref)
+    if component is None:
+        err.print(escape(f"No such component in config: {ref}"), style="red")
+        raise typer.Exit(1)
+    if scope is not None:
+        installs_into = component.applies_to(config.targets)
+        if scope not in installs_into:
+            err.print(
+                escape(
+                    f"Unknown target '{scope}' for {ref} — it installs into: "
+                    f"{', '.join(installs_into) or '(no targets)'}. Use '<target>:<key>' with "
+                    "one of those, or a bare '<key>' for all of them."
+                ),
+                style="red",
+            )
+            raise typer.Exit(1)
+    if not store.add_keep(ref, key):
+        console.print(escape(f"{ref} already keeps {key}"), style="dim")
+        return
+    store.save()
+    console.print(f"[green]Keeping[/green] {escape(key)} for {escape(ref)}")
+    _do_sync()
 
 
 @app.command(name="trust")

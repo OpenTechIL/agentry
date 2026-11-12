@@ -14,7 +14,7 @@ Idempotent: running it twice changes nothing the second time.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -50,6 +50,7 @@ from .models import (
     Source,
     SourceType,
     Strategy,
+    parse_keep,
 )
 from .naming import repo_basename
 from .progname import prog
@@ -81,6 +82,8 @@ class DesiredMerge:
     dest: MergeDest
     fragment: dict
     keys: list[str]
+    kept: frozenset[str] = frozenset()  # the component's ``keep:`` keys for this target
+    bare: frozenset[str] = frozenset()  # keys whose keep hint is bare (see MergeContext.bare)
 
 
 @dataclass
@@ -99,6 +102,8 @@ class DesiredLinkMerge:
     dest: MergeDest
     fragment: dict  # rewritten, unwrapped entries to merge
     keys: list[str]
+    kept: frozenset[str] = frozenset()  # the component's ``keep:`` keys for this target
+    bare: frozenset[str] = frozenset()  # see DesiredMerge.bare
 
 
 @dataclass
@@ -214,7 +219,29 @@ def compute_desired(root: Path, config: Config, warnings: list[str]) -> DesiredP
                 continue  # already warned via unresolved_targets
             _desired_for_target(comp, src, tname, driver, artifact, plan, warnings)
 
+    _warn_unmatched_keep(config, plan, warnings)
     return plan
+
+
+def _warn_unmatched_keep(config: Config, plan: DesiredPlan, warnings: list[str]) -> None:
+    """One warning per ``keep:`` entry that matches no key the component merges (a typo)."""
+    merged: dict[str, set[tuple[str, str]]] = {}
+    for dm in plan.merges:
+        merged.setdefault(dm.component, set()).update((dm.target, k) for k in dm.fragment)
+    for dlm in plan.link_merges:
+        merged.setdefault(dlm.component, set()).update((dlm.target, k) for k in dlm.fragment)
+    for comp in config.components:
+        if not comp.enabled or not comp.keep:
+            continue
+        have = merged.get(comp.ref, set())
+        for entry in comp.keep:
+            scope, key = parse_keep(entry, comp.ref)
+            if not any(k == key and (scope is None or t == scope) for t, k in have):
+                warnings.append(
+                    f"{comp.ref}: keep entry '{entry}' matches no key this component merges — "
+                    "check the spelling (keep: takes merged entry names, optionally "
+                    "'<target>:<key>')"
+                )
 
 
 def _desired_for_target(
@@ -310,7 +337,9 @@ def _desired_for_target(
                 )
         # Seam: a driver.transform (currently always None) would reshape `entries`
         # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
-        plan.merges.append(DesiredMerge(comp.ref, tname, dest, entries, list(entries)))
+        plan.merges.append(
+            DesiredMerge(comp.ref, tname, dest, entries, list(entries), comp.kept_keys(tname))
+        )
 
 
 def _link_merge_vars(comp: Component, src: Source) -> dict[str, str]:
@@ -376,7 +405,14 @@ def _compute_link_merge(
     for cmd in leftovers:
         warnings.append(f"{comp.ref}: command not rewritten, may not resolve: {cmd}")
     return DesiredLinkMerge(
-        comp.ref, tname, link_path, link_src, lmdest.merge, rewritten, list(rewritten)
+        comp.ref,
+        tname,
+        link_path,
+        link_src,
+        lmdest.merge,
+        rewritten,
+        list(rewritten),
+        comp.kept_keys(tname),
     )
 
 
@@ -703,14 +739,117 @@ def _source_fragments(root: Path, config: Config, declared: Config) -> FragmentL
     return lookup
 
 
-def _ctx(who: Who, file: str, pointer: str) -> merge_inst.MergeContext:
-    return merge_inst.MergeContext(ref=who[0], target=who[1], file=file, pointer=pointer)
+def _ctx(
+    who: Who, file: str, pointer: str, bare: frozenset[str] = frozenset()
+) -> merge_inst.MergeContext:
+    return merge_inst.MergeContext(ref=who[0], target=who[1], file=file, pointer=pointer, bare=bare)
+
+
+def _differs(rec: OwnedEntry | None, have: str, want: str) -> bool:
+    """Whether a recorded entry is one the user now owns a different value of (W2/W1b)."""
+    if rec is None:
+        return False
+    if rec.preexisting:
+        return have != want
+    return rec.fingerprint != have
+
+
+def _bare_keys(seen: dict[tuple[str, str], tuple[set[str], set[str]]]) -> dict[str, set[str]]:
+    """``(component, key) -> (targets written, targets drifted)`` ⇒ ``component -> bare keys``.
+
+    A key's keep hint is bare only when it drifted on every target the component writes it
+    to; otherwise the hint names the drifted target, so keep never freezes a healthy one.
+    """
+    out: dict[str, set[str]] = {}
+    for (ref, key), (written, drifted) in seen.items():
+        if written and drifted == written:
+            out.setdefault(ref, set()).add(key)
+    return out
+
+
+def _mark_bare_desired(
+    docs: merge_inst.Documents,
+    desired: list[DesiredMerge] | list[DesiredLinkMerge],
+    old_records: dict[Who, InstalledMerge | InstalledLinkMerge],
+    seen: dict[tuple[str, str], tuple[set[str], set[str]]],
+) -> None:
+    """Accumulate, per (component, key), which targets write it and which drifted."""
+    for d in desired:
+        try:
+            doc = docs.get(d.dest.file)
+        except merge_inst.MergeTargetError:
+            continue
+        section = doc.get(d.dest.pointer)
+        current = section if isinstance(section, MutableMapping) else {}
+        rec = old_records.get((d.component, d.target))
+        same = rec is not None and (rec.file, rec.pointer) == (d.dest.file, d.dest.pointer)
+        owned = rec.entries if rec is not None and same else {}
+        for key, value in d.fragment.items():
+            if key in d.kept:
+                continue
+            written, drifted = seen.setdefault((d.component, key), (set(), set()))
+            written.add(d.target)
+            if key in current and _differs(
+                owned.get(key),
+                merge_inst.fingerprint(current[key]),
+                merge_inst.fingerprint(value),
+            ):
+                drifted.add(d.target)
+
+
+def _assign_bare(
+    merges: list[DesiredMerge],
+    link_merges: list[DesiredLinkMerge],
+    docs: merge_inst.Documents,
+    records: list[InstalledMerge | InstalledLinkMerge],
+) -> None:
+    """Set each desired merge's ``bare`` keep-hint keys from the cross-target drift state."""
+    old = {(r.component, r.target): r for r in records}
+    seen: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
+    _mark_bare_desired(docs, merges, old, seen)
+    _mark_bare_desired(docs, link_merges, old, seen)
+    bare = _bare_keys(seen)
+    for dm in merges:
+        dm.bare = frozenset(bare.get(dm.component, set()))
+    for dlm in link_merges:
+        dlm.bare = frozenset(bare.get(dlm.component, set()))
+
+
+def _orphan_bare(
+    docs: merge_inst.Documents, orphans: list[InstalledMerge] | list[InstalledLinkMerge]
+) -> dict[str, set[str]]:
+    """Bare keep-hint keys for records being removed (W4): edited on every target they had."""
+    seen: dict[tuple[str, str], tuple[set[str], set[str]]] = {}
+    for r in orphans:
+        try:
+            doc = docs.get(r.file)
+        except merge_inst.MergeTargetError:
+            continue
+        section = doc.get(r.pointer)
+        current = section if isinstance(section, MutableMapping) else {}
+        for key, e in r.entries.items():
+            if e.preexisting:
+                continue
+            written, drifted = seen.setdefault((r.component, key), (set(), set()))
+            written.add(r.target)
+            if key in current and (
+                e.fingerprint is None or e.fingerprint != merge_inst.fingerprint(current[key])
+            ):
+                drifted.add(r.target)
+    return _bare_keys(seen)
 
 
 def _remove_record(
-    docs: merge_inst.Documents, rec: InstalledMerge | InstalledLinkMerge, result: SyncResult
+    docs: merge_inst.Documents,
+    rec: InstalledMerge | InstalledLinkMerge,
+    result: SyncResult,
+    kept: frozenset[str] = frozenset(),
+    bare: frozenset[str] = frozenset(),
 ) -> bool | None:
-    """Remove a record's owned entries. ``None`` when its file can't be parsed (kept)."""
+    """Remove a record's owned entries, never its ``kept`` keys (the user's by ``keep:``).
+
+    ``None`` when its file can't be parsed (the record is kept for a later retry).
+    """
     try:
         doc = docs.get(rec.file)
     except merge_inst.MergeTargetError as exc:
@@ -729,7 +868,10 @@ def _remove_record(
             )
 
     removed, warnings = merge_inst.remove_named(
-        doc, _ctx((rec.component, rec.target), rec.file, rec.pointer), rec.entries, unverified
+        doc,
+        _ctx((rec.component, rec.target), rec.file, rec.pointer, bare),
+        {k: e for k, e in rec.entries.items() if k not in kept},
+        unverified,
     )
     result.warnings.extend(warnings)
     return removed
@@ -743,6 +885,8 @@ def _plan_record(
     old: InstalledMerge | InstalledLinkMerge | None,
     claims: _Claims,
     result: SyncResult,
+    kept: frozenset[str] = frozenset(),
+    bare: frozenset[str] = frozenset(),
 ) -> tuple[merge_inst.NamedPlan, dict[str, OwnedEntry]] | None:
     """Plan one desired merge against its document. ``None`` when the file can't be parsed.
 
@@ -757,16 +901,19 @@ def _plan_record(
         return None
     moved = old is not None and (old.file, old.pointer) != (dest.file, dest.pointer)
     owned = dict(old.entries) if old is not None and not moved else {}
-    stale = {k: e for k, e in owned.items() if k not in fragment}
+    stale = {k: e for k, e in owned.items() if k not in fragment and k not in kept}
     plan = merge_inst.plan_named(
         doc,
-        _ctx(who, dest.file, dest.pointer),
+        _ctx(who, dest.file, dest.pointer, bare),
         fragment,
         owned,
         claims.lookup(who, dest.file, dest.pointer),
+        kept,
+        installed=old is not None and not moved,  # per-key refusal once installed here
     )
     result.warnings.extend(plan.warnings)
     result.summarized.setdefault("drift", []).extend(plan.drift_warnings)
+    result.summarized.setdefault("kept", []).extend(plan.kept_missing_warnings)
     return plan, stale
 
 
@@ -779,13 +926,16 @@ def _commit_record(
     stale: dict[str, OwnedEntry],
     claims: _Claims,
     result: SyncResult,
+    kept: frozenset[str] = frozenset(),
+    bare: frozenset[str] = frozenset(),
 ) -> None:
     """Apply a non-refused plan: drop a moved record's old entries, then stale keys, then
     the writes; re-point this record's claims at what it now owns."""
     if old is not None and (old.file, old.pointer) != (dest.file, dest.pointer):
-        _remove_record(docs, old, result)  # destination moved: never orphan the old entries
+        # Destination moved: never orphan the old entries (kept keys stay the user's).
+        _remove_record(docs, old, result, kept, bare)
     doc = docs.get(dest.file)
-    ctx = _ctx(who, dest.file, dest.pointer)
+    ctx = _ctx(who, dest.file, dest.pointer, bare)
     if stale:
         _, warnings = merge_inst.remove_named(doc, ctx, stale)
         result.warnings.extend(warnings)
@@ -828,9 +978,23 @@ def _reconcile_merge_targets(
         _source_fragments(root, config, declared),
     )
     claims = _Claims(records)
-    _reconcile_merges(docs, merges, manifest, result, claims)
-    _reconcile_link_merges(root, docs, link_merges, manifest, result, claims)
+    _assign_bare(merges, link_merges, docs, records)
+    kept_for = _kept_lookup(config, declared)
+    _reconcile_merges(docs, merges, manifest, result, claims, kept_for)
+    _reconcile_link_merges(root, docs, link_merges, manifest, result, claims, kept_for)
     docs.flush()
+
+
+def _kept_lookup(config: Config, declared: Config) -> Callable[[Who], frozenset[str]]:
+    """``(component, target) -> keep: keys`` — including disabled/removed-from-plan components,
+    so a component being uninstalled still never removes a key the user keeps."""
+    comps = {c.ref: c for c in [*declared.components, *config.components]}
+
+    def lookup(who: Who) -> frozenset[str]:
+        comp = comps.get(who[0])
+        return comp.kept_keys(who[1]) if comp is not None else frozenset()
+
+    return lookup
 
 
 def _reconcile_merges(
@@ -839,15 +1003,19 @@ def _reconcile_merges(
     manifest: Manifest,
     result: SyncResult,
     claims: _Claims,
+    kept_for: Callable[[Who], frozenset[str]],
 ) -> None:
     desired_by_key = {(d.component, d.target): d for d in desired}
     old_by_key = {(m.component, m.target): m for m in manifest.merges}
+    orphan_bare = _orphan_bare(docs, [m for k, m in old_by_key.items() if k not in desired_by_key])
 
     new_records: list[InstalledMerge] = []
     for k, m in old_by_key.items():
         if k in desired_by_key:
             continue
-        removed = _remove_record(docs, m, result)
+        removed = _remove_record(
+            docs, m, result, kept_for(k), frozenset(orphan_bare.get(m.component, set()))
+        )
         if removed is None:
             new_records.append(m)  # unparseable: keep it so removal is retried
             continue
@@ -857,13 +1025,13 @@ def _reconcile_merges(
 
     for k, d in desired_by_key.items():
         old = old_by_key.get(k)
-        planned = _plan_record(docs, k, d.dest, d.fragment, old, claims, result)
+        planned = _plan_record(docs, k, d.dest, d.fragment, old, claims, result, d.kept, d.bare)
         if planned is None or planned[0].refused:
             if old is not None:
                 new_records.append(old)  # still owned; reconciled once the conflict clears
             continue
         plan, stale = planned
-        _commit_record(docs, k, d.dest, old, plan, stale, claims, result)
+        _commit_record(docs, k, d.dest, old, plan, stale, claims, result, d.kept, d.bare)
         where = f"merge {d.dest.file}:{d.dest.pointer} ({', '.join(d.keys)})"
         if plan.created:
             result.created.append(where)
@@ -954,9 +1122,11 @@ def _reconcile_link_merges(
     manifest: Manifest,
     result: SyncResult,
     claims: _Claims,
+    kept_for: Callable[[Who], frozenset[str]],
 ) -> None:
     desired_by_key = {(d.component, d.target): d for d in desired}
     old_by_key = {(m.component, m.target): m for m in manifest.link_merges}
+    orphan_bare = _orphan_bare(docs, [m for k, m in old_by_key.items() if k not in desired_by_key])
 
     # Remove orphans: the owned merge entries first, then the symlink. If the config can't
     # be parsed, the pair (link and record) is kept so the whole removal is retried later.
@@ -964,7 +1134,9 @@ def _reconcile_link_merges(
     for k, m in old_by_key.items():
         if k in desired_by_key:
             continue
-        merge_removed = _remove_record(docs, m, result)
+        merge_removed = _remove_record(
+            docs, m, result, kept_for(k), frozenset(orphan_bare.get(m.component, set()))
+        )
         if merge_removed is None:
             new_records.append(m)
             continue
@@ -976,7 +1148,7 @@ def _reconcile_link_merges(
         old = old_by_key.get(k)
         # Plan the merge half before touching the link: link+merge is atomic as a pair, so
         # a refused or unparseable config never leaves a linked script with no hooks.
-        planned = _plan_record(docs, k, d.dest, d.fragment, old, claims, result)
+        planned = _plan_record(docs, k, d.dest, d.fragment, old, claims, result, d.kept, d.bare)
         if planned is None or planned[0].refused:
             if old is not None:
                 new_records.append(old)
@@ -993,7 +1165,7 @@ def _reconcile_link_merges(
         # but only now that the new link exists, so a failed install never loses both.
         if old is not None and old.link_path != d.link_path:
             link_inst.remove_link(root, old.link_path)
-        _commit_record(docs, k, d.dest, old, plan, stale, claims, result)
+        _commit_record(docs, k, d.dest, old, plan, stale, claims, result, d.kept, d.bare)
         if link_status == "created" or plan.created:
             result.created.append(f"link+merge {d.link_path} + {d.dest.file}:{d.dest.pointer}")
         elif link_status == "updated" or plan.updated:
@@ -1020,7 +1192,7 @@ class StatusRow:
     ref: str
     target: str
     where: str
-    state: str  # ok | missing | drift
+    state: str  # ok | ok (kept) | missing | drift
     # Why the row is not ok, when re-running sync won't fix it (a refused merge, a
     # hand-edited entry). Doctor uses it instead of the generic "run sync" hint.
     note: str | None = None
@@ -1037,6 +1209,7 @@ class DriftedEntry:
     pointer: str
     key: str
     unproven: bool  # True: recorded by an older agentry; False: edited by hand
+    keep_arg: str = ""  # the `agentry keep` argument: "<target>:<key>" or the bare key
 
 
 def status(root: Path) -> tuple[list[StatusRow], list[str]]:
@@ -1077,9 +1250,10 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
     )
     claims = _Claims(records)
     old_records = {(r.component, r.target): r for r in records}
+    _assign_bare(merges, link_merges, docs, records)
 
     def merge_state(
-        who: Who, dest: MergeDest, fragment: dict
+        who: Who, dest: MergeDest, fragment: dict, kept: frozenset[str], bare: frozenset[str]
     ) -> tuple[str, str | None, list[DriftedEntry]]:
         try:
             doc = docs.get(dest.file)
@@ -1090,21 +1264,26 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
         rec = old_records.get(who)
         same = rec is not None and (rec.file, rec.pointer) == (dest.file, dest.pointer)
         owned = dict(rec.entries) if rec is not None and same else {}
+        ctx = _ctx(who, dest.file, dest.pointer, bare)
         state, note = merge_inst.named_state(
             doc,
-            _ctx(who, dest.file, dest.pointer),
+            ctx,
             fragment,
             owned,
             claims.lookup(who, dest.file, dest.pointer),
+            kept,
+            installed=same,
         )
         drifted = [
-            DriftedEntry(dest.file, dest.pointer, key, unproven)
-            for key, unproven in merge_inst.drifted_keys(doc, dest.pointer, fragment, owned)
+            DriftedEntry(dest.file, dest.pointer, key, unproven, ctx.keep_arg(key))
+            for key, unproven in merge_inst.drifted_keys(doc, dest.pointer, fragment, owned, kept)
         ]
         return state, note, drifted
 
     for dm in merges:
-        state, note, drifted = merge_state((dm.component, dm.target), dm.dest, dm.fragment)
+        state, note, drifted = merge_state(
+            (dm.component, dm.target), dm.dest, dm.fragment, dm.kept, dm.bare
+        )
         rows.append(
             StatusRow(
                 dm.component,
@@ -1121,11 +1300,15 @@ def status(root: Path) -> tuple[list[StatusRow], list[str]]:
         rows.append(StatusRow(dg.component, dg.target, where, state))
     for dlm in link_merges:
         link_ok = link_inst.link_state(root, dlm.artifact, dlm.link_path) == "ok"
-        mstate, note, drifted = merge_state((dlm.component, dlm.target), dlm.dest, dlm.fragment)
+        mstate, note, drifted = merge_state(
+            (dlm.component, dlm.target), dlm.dest, dlm.fragment, dlm.kept, dlm.bare
+        )
         if mstate == "drift" and link_ok:
             state = "drift"
+        elif link_ok and mstate in ("ok", "ok (kept)"):
+            state = mstate
         else:
-            state = "ok" if (link_ok and mstate == "ok") else "missing"
+            state = "missing"
         rows.append(
             StatusRow(
                 dlm.component,
