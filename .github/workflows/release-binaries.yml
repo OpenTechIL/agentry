@@ -45,11 +45,12 @@ jobs:
       matrix:
         include:
           - { runner: ubuntu-latest,  target: linux-x86_64,   ext: "",     pyarch: "" }
-          # GitHub retired the macos-13 (Intel) image in Dec 2025, so macOS
-          # x86_64 is cross-built on the arm64 runner via an x86_64 CPython
-          # under Rosetta 2 (see the "Build binary" step).
-          - { runner: macos-14,       target: macos-x86_64,    ext: "",     pyarch: x86_64 }
-          - { runner: macos-14,       target: macos-arm64,     ext: "",     pyarch: "" }
+          # Pinned (not macos-latest) so the image only changes when we choose to:
+          # macos-14 was retired on 2026-11-02 and silently cancelled both macOS legs.
+          # macOS x86_64 is cross-built on this arm64 runner via an x86_64 CPython
+          # under Rosetta 2 (see the "Ensure Rosetta 2" and "Build binary" steps).
+          - { runner: macos-15,       target: macos-x86_64,    ext: "",     pyarch: x86_64 }
+          - { runner: macos-15,       target: macos-arm64,     ext: "",     pyarch: "" }
           - { runner: windows-latest, target: windows-x86_64,  ext: ".exe", pyarch: "" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
