@@ -748,6 +748,10 @@ See [`target '<name>' is not in the project's targets — skipped`](#target-name
 `2 keys in keep: have no entry on one or more targets and were not installed — …`. See
 [`kept, but no entry on <target>`](#kept-but-no-entry-on-target).
 
+**Plugin sources with features agentry doesn't install** are summarized as
+`2 plugin sources use features agentry doesn't install — run with --verbose for the list`. See
+[plugin.json warnings](#a-claude-plugin-source-reports-pluginjson-warnings).
+
 **Format mismatches** have their own summary:
 
 ```text
@@ -770,19 +774,19 @@ files, the trust gate, and unset `${VAR}`s.
 ## Reading `agentry doctor`
 
 `doctor` is a read-only preflight. It exits non-zero on **errors** and, with `--strict`,
-on warnings too — which makes it a good CI gate.
+on warnings too — which makes it a good CI gate. Errors are listed first below, then warnings.
 
 | Category | Level | Meaning |
 |---|---|---|
 | `target` | error | A target in `targets:` has no built-in driver, no `target_profiles` entry, and no installed overlay. See [not defined](#target-name-is-not-defined-nothing-was-changed). |
-| `target` | warn | A component's `targets:` names a target the project doesn't list, so it's skipped there. See [not in the project's targets](#target-name-is-not-in-the-projects-targets-skipped). |
 | `resolve` | error | A source or dependency couldn't be resolved: git failed or timed out, a ref doesn't exist, a local source path is missing, or a dependency conflicts. The remaining checks are skipped until this is fixed. |
 | `component` | error | A component references a source that isn't declared (`unknown source`), or the source doesn't actually provide it (`not provided by source`). Run `agentry list` for the real names. |
+| `target` | warn | A component's `targets:` names a target the project doesn't list, so it's skipped there. See [not in the project's targets](#target-name-is-not-in-the-projects-targets-skipped). |
 | `support` | warn | No active target installs this component type, so it goes nowhere. |
-| `plugin` | warn | A Claude plugin source's `plugin.json` has something agentry couldn't install or follow. See [plugin.json warnings](#a-claude-plugin-source-reports-pluginjson-warnings). |
+| `format` | warn | A component's content visibly won't work in that target. It's installed as-is. See [format warnings](#a-component-may-not-work-on-its-target-format-warnings). |
+| `plugin` | warn | A Claude plugin source's `plugin.json` has something agentry couldn't install or follow, or a plugin entry references `${CLAUDE_PLUGIN_DATA}`. See [plugin.json warnings](#a-claude-plugin-source-reports-pluginjson-warnings). |
 | `env` | warn | A merge fragment references `${VAR}`, which is unset. agentry ships the placeholder; your agent resolves it at runtime. |
 | `drift` | warn | On-disk state doesn't match config/lock. The line says why and what to do: usually `agentry sync`, but for an entry you edited by hand or a merge agentry refused, follow the fix it names. |
-| `format` | warn | A component's content visibly won't work in that target. It's installed as-is. See [format warnings](#a-component-may-not-work-on-its-target-format-warnings). |
 | `command` | warn | The `agy` alias on `PATH` belongs to another tool (see above). |
 
 ## `target '<name>' is not defined` — nothing was changed
