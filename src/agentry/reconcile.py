@@ -540,6 +540,7 @@ def sync(
     frozen: bool = False,
     allow_transform: bool = False,
     trust_callback: TrustCallback | None = None,
+    update_only: frozenset[str] | None = None,
 ) -> SyncResult:
     store = ConfigStore.load(root)
     config = store.parsed()
@@ -549,7 +550,9 @@ def sync(
     result = SyncResult()
 
     # 1. Resolve sources + the transitive dependency closure into the store.
-    graph, lock = deps.resolve_graph(root, config, load_lock(root), update=update, frozen=frozen)
+    graph, lock = deps.resolve_graph(
+        root, config, load_lock(root), update=update, frozen=frozen, update_only=update_only
+    )
     result.resolved = graph.resolved
     result.warnings.extend(graph.warnings)
     save_lock(root, lock)
@@ -577,6 +580,7 @@ def sync(
         update=update,
         lock=lock,
         trust_callback=trust_callback,
+        update_only=update_only,
     )
     # One pass over every merge destination, after generators (ADR-001 §8).
     _reconcile_merge_targets(
@@ -1172,6 +1176,7 @@ def _reconcile_generated(
     update: bool,
     lock: Lock | None = None,
     trust_callback: TrustCallback | None = None,
+    update_only: frozenset[str] | None = None,
 ) -> bool:
     """Run generators (gated by per-source consent). Returns True if trust was newly granted."""
     desired_by_ref = {d.component: d for d in desired}
@@ -1192,12 +1197,13 @@ def _reconcile_generated(
     have = {g.component for g in manifest.generated}
     for ref, d in desired_by_ref.items():
         already = ref in have and gen_inst.produces_present(root, d.spec)
-        if already and not update:
-            continue  # idempotent: outputs present and tracked
+        source = ref.split("/", 1)[0]
+        updating = update and (update_only is None or source in update_only)
+        if already and not updating:
+            continue  # idempotent: outputs present and tracked (and not being updated)
         # Consent gate: a source whose component runs code at install must be trusted —
         # via a persisted `agentry trust` decision (SHA-pinned in the lock), the interactive
         # prompt, or the one-shot `--allow-run` blanket override.
-        source = ref.split("/", 1)[0]
         entry = lock.entry(source) if lock is not None else None
         if not allow_run and not (entry and entry.trusted):
             sha = entry.resolved if entry else "?"

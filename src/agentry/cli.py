@@ -36,6 +36,7 @@ from .models import (
     Target,
     parse_keep,
 )
+from .naming import closest
 from .progname import CANONICAL, prog
 from .reconcile import SyncResult, status, sync
 from .resolver import ResolveError, effective_root, resolve
@@ -509,6 +510,7 @@ def _do_sync(
     frozen: bool = False,
     allow_transform: bool = False,
     verbose: bool = False,
+    update_only: frozenset[str] | None = None,
 ) -> None:
     try:
         res = sync(
@@ -518,6 +520,7 @@ def _do_sync(
             frozen=frozen,
             allow_transform=allow_transform,
             trust_callback=_interactive_trust,
+            update_only=update_only,
         )
     except (ResolveError, DependencyError) as exc:
         err.print(f"[red]{_e(exc)}[/red]")
@@ -858,13 +861,34 @@ def install_command(
 
 @app.command()
 def update(
-    source: str = typer.Argument(None, help="Only update this source (default: all)."),
+    sources: list[str] = typer.Argument(
+        None, help="Only update these sources (default: all). Others keep their lock pins."
+    ),
     verbose: bool = _VERBOSE,
 ) -> None:
-    """Re-resolve refs to latest, rewrite .agentry.lock, and reinstall."""
-    # `source` is accepted for forward-compat; v1 re-resolves all sources.
-    _ = source
-    _do_sync(update=True, verbose=verbose)
+    """Re-resolve refs to latest, rewrite .agentry.lock, and reinstall.
+
+    With SOURCES, only those sources move; every other source keeps its pinned revision.
+    """
+    if not sources:
+        _do_sync(update=True, verbose=verbose)
+        return
+    config = _load().parsed()
+    known = {s.name for s in config.sources} | {e.name for e in load_lock(_root()).sources}
+    unknown = [n for n in sources if n not in known]
+    if unknown:
+        parts = []
+        for n in unknown:
+            guess = closest(n, known)
+            parts.append(
+                f"unknown source '{n}'" + (f" — did you mean '{guess}'?" if guess else ".")
+            )
+        err.print(
+            _e(" ".join(parts) + f" Nothing was changed. See `{prog()} source list`."),
+            style="red",
+        )
+        raise typer.Exit(1)
+    _do_sync(update=True, verbose=verbose, update_only=frozenset(sources))
 
 
 @app.command(name="deps")

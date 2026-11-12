@@ -627,6 +627,28 @@ target 'opencode' isn't in the project's targets — add it with `agentry target
 **Fix.** If you do want that tool, activate it for the project with
 `agentry target use <name>`. Otherwise remove the name from the component's `targets:`.
 
+## `agentry update <source>` fails: `now requires … but the pinned source … doesn't provide`
+
+**Symptom.**
+
+```text
+a/skill/ra now requires b/skill/newthing, but the pinned source 'b' doesn't provide 'newthing'. Nothing was changed. Update both: `agentry update a b`
+```
+
+**Cause.** `agentry update a` updates only source `a`. Every other source keeps the revision
+pinned in `.agentry.lock`. The new revision of `a` depends on a component that the pinned
+revision of `b` doesn't have yet. Rather than install half of it, agentry stops before writing
+anything.
+
+**Fix.** Update both sources together, as the message says (`agentry update a b`), or run a bare
+`agentry update` to update everything.
+
+A misspelled name fails the same way, without changes:
+
+```text
+unknown source 'aa' — did you mean 'a'? Nothing was changed. See `agentry source list`.
+```
+
 ## `--frozen` fails in CI
 
 `sync --frozen` installs strictly from `.agentry.lock` and refuses to resolve anything new.

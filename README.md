@@ -446,7 +446,7 @@ Grouped by what you're trying to do. Full reference with every flag:
 | `agentry remove <ref>` | Uninstall and drop from config. Fully reverses the install. |
 | `agentry list` | Every component your configured sources provide, with its state. |
 | `agentry sync` | Make the filesystem match your config + lock. Safe to re-run; does nothing if already correct. |
-| `agentry update [SOURCE]` | Pull upstream changes: re-resolve to the latest commit and rewrite the lock. |
+| `agentry update [SOURCES]...` | Pull upstream changes: re-resolve to the latest commit and rewrite the lock. Name sources to update only those; the rest stay pinned. |
 
 ### Inspecting and debugging
 

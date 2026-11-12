@@ -433,9 +433,28 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
 4. Persist manifest; ensure .agentry/ is in .gitignore.
 ```
 
-`sync` is **idempotent**: a second run with the same inputs is a no-op. With
-`update=True` it ignores the locked SHA, re-resolves each ref to its tip, and rewrites
-the lock — the only operation that advances versions.
+`sync` is **idempotent**: a second run with the same inputs is a no-op. **`agentry update`** is
+the only operation that advances versions. It ignores the locked SHA, re-resolves each ref to its
+tip, and rewrites the lock. With no argument it does this for every source.
+`agentry update A [B…]` (`resolve_graph(update_only=…)`) scopes it to the named sources, which may be configured or synthesized
+lock entries:
+- **Validation.** Unknown names fail before any network call or write, with exit 1 and a
+  did-you-mean.
+- **Other sources.** Every other source keeps its pin, its trust and its lock bytes.
+- **Generators.** Only generators of the updated sources re-run.
+- **Transitive dependencies** of a named source are not re-pinned automatically. If the source's
+  new revision requires a dependency at a *different* ref, the pin-identity rule (step 1) re-pins
+  that dependency anyway; if it requires the same ref, its pin is kept. Two exceptions:
+  - A dependency the new revision **newly introduces** has no pin, so it resolves normally.
+  - If the new revision needs a component that the **pinned** dependency doesn't provide, a scoped
+    update **exits 1 before the lock is written**, suggesting `agentry update A <dep>`
+    (`deps._check_provided`, which runs inside `resolve_graph`). Plain `sync` keeps its existing
+    "not provided" warning in the same situation.
+- **A failed resolve changes nothing.** Link installs are live symlinks into the store, so if
+  `resolve_graph` fails part-way, every git source this run already moved is checked back out
+  at its locked SHA before the error propagates (`deps._restore_checkouts`). That covers a
+  refused scoped update and any failure in the middle of an unscoped `update`. The checkout is
+  local, with no network, and the lock is never written.
 
 ## 7. Safety model
 

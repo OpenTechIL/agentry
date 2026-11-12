@@ -16,8 +16,6 @@ A component type absent from a target's map is *unsupported* — reconcile skips
 
 from __future__ import annotations
 
-import difflib
-
 from .drivers import BUILTIN_DRIVERS
 from .drivers.claude import CLAUDE_HOOK_EVENTS
 from .models import (
@@ -28,6 +26,7 @@ from .models import (
     ProfileRule,
     Strategy,
 )
+from .naming import closest
 from .progname import prog
 from .resolver import ResolveError
 from .spec import FormatExpectation, LinkMergeDest, MergeDest, TargetSpec
@@ -153,9 +152,7 @@ class UnresolvedTargetError(ResolveError):
 
 def suggest_target(name: str, config: Config) -> str | None:
     """The closest defined target name to ``name`` (built-ins + target_profiles), if any."""
-    known = sorted(set(BUILTIN_TARGET_NAMES) | set(config.target_profiles))
-    matches = difflib.get_close_matches(name, known, n=1, cutoff=0.6)
-    return matches[0] if matches else None
+    return closest(name, set(BUILTIN_TARGET_NAMES) | set(config.target_profiles))
 
 
 def describe_unresolved(name: str, config: Config) -> str:

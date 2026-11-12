@@ -33,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   agentry handles each entry independently.
 
 ### Changed
+- **Behavior change: `agentry update <source>` now updates only the named sources.** It used to
+  ignore its argument and update everything. Now `agentry update a b` re-resolves `a` and `b`
+  only. Every other source keeps its pinned revision in `.agentry.lock` and its trust, and only
+  the named sources' generators re-run. Bare `agentry update` still updates every source. A name
+  can be a source in `.agentry.yml` or a transitive `url` dependency recorded only in the lock.
+  There's one exception to "only the named sources": if a named source's new revision adds a
+  dependency source that isn't in the lock yet, that source is resolved and installed too,
+  because otherwise the update couldn't complete. An unknown name exits 1 and changes nothing (`unknown source 'aa' — did you mean 'a'? …`). If a
+  named source's new revision needs a component that a still-pinned dependency doesn't provide,
+  the update also exits 1 and changes nothing, and the message names the command to update both
+  (`agentry update a b`).
 - **Behavior change: a component's `targets:` now only narrows the project's `targets:`.** A
   target that is valid but not in the project's list is skipped with a warning that suggests
   `agentry target use <name>`. Earlier versions installed there anyway. If one did, the next
