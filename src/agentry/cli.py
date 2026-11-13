@@ -424,7 +424,7 @@ def _add_from_catalog(
 
     for comp in comps:
         store.add_component(comp)
-    profiles = reg.build_install_profiles(entry, repo, comps, config.active_targets())
+    profiles = reg.build_install_profiles(entry, repo, comps, config.targets)  # config order
     if profiles and store.merge_target_profiles(profiles):
         console.print(
             "  [dim]added target_profiles from catalog (install overrides for this repo)[/dim]"
