@@ -173,6 +173,7 @@ for that tool. Two uses:
 | `pointer` | str | `merge`, `link+merge` | Top-level key in that file that agentry owns. |
 | `rewrite_from` / `rewrite_to` | str | optional, `link+merge` | Rewrite a command-path prefix in the merged fragment so symlinked scripts resolve. Set both or neither. |
 | `expect` | [ExpectRule](#expect) | optional | What this tool needs from the component's *content*. Omitted inherits the built-in check. See [expect](#expect). |
+| `identity` | `"frontmatter:name"` \| `null` | optional | How the tool identifies this type other than by file path. See [identity](#identity). |
 
 `dest` and `file` are validated as project-relative on load and re-checked when they are
 joined onto the project root, because a catalog can publish them.
@@ -193,6 +194,30 @@ ref — `.claude/hooks/agentry/{repo}@{ref}/{name}` — rather than colliding on
 `rewrite_to` expands the same set, and substitution is literal replacement (not
 `str.format`), so a template may safely contain `${SHELL_STYLE}` variables for the agent to
 resolve at runtime.
+
+### `identity`
+
+Some tools identify a component by a name inside the file, not by where the file is. Claude
+Code does this for agents: it loads one agent per frontmatter `name`, so two agent files with
+the same `name` collide even at different paths. The built-in `claude` driver sets
+`identity: "frontmatter:name"` for `agent`. agentry then checks agent names as well as paths,
+and treats a shared name like a shared file: the component listed first wins, and the other is
+skipped with a warning.
+
+| `identity` on the rule | Effect |
+|---|---|
+| omitted | Inherit the built-in setting. An override that only changes `strategy` keeps the name check. |
+| `"frontmatter:name"` | Identify this type by the `name` in its frontmatter. Use this for a tool you define yourself that works the same way. |
+| `null` | Turn the name check off for this rule. Only paths are compared. |
+
+```yaml
+target_profiles:
+  mytool:
+    agent:
+      strategy: link
+      dest: ".mytool/agents/{name}.md"
+      identity: "frontmatter:name"
+```
 
 ### `expect`
 

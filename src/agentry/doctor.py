@@ -173,6 +173,8 @@ def run_checks(root: Path) -> list[Check]:
             *(Check("warn", "target", issue) for issue in plan.inactive),
             # plugin.json paths, name clashes, unsupported keys, ${CLAUDE_PLUGIN_DATA}
             *(Check("warn", "plugin", note) for note in plan.plugin_notes),
+            # agent frontmatter `name` missing or containing ':' (ADR-003)
+            *(Check("warn", "component", note) for note in plan.identity_notes),
         ]
     )
 

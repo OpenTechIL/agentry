@@ -262,6 +262,8 @@ def _profile_rule_map(rule: ProfileRule) -> CommentedMap:
         value = getattr(rule, field)
         if value is not None:
             item[field] = value
+    if "identity" in rule.model_fields_set:
+        item["identity"] = rule.identity
     return item
 
 
