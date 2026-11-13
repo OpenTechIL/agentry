@@ -173,6 +173,10 @@ class TargetSpec:
     memory_file: str | None = None
     #: component type -> content expectations (phase A: warn on mismatch, install as-is)
     expect: dict[ComponentType, FormatExpectation] = field(default_factory=dict)
+    #: component type -> how the tool identifies a component of that type, when it isn't
+    #: by path. ``"frontmatter:name"``: by the artifact's frontmatter ``name`` (Claude
+    #: agents) — two installs declaring one name collide even at different paths (ADR-003).
+    identity: dict[ComponentType, str] = field(default_factory=dict)
 
     def supports(self, ctype: ComponentType) -> bool:
         return (
