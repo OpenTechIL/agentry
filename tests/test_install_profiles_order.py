@@ -55,13 +55,25 @@ def _add_with_seed(tmp_path: Path, repo: Path, seed: int, monkeypatch) -> bytes:
     ConfigStore.create(proj, list(_TARGETS)).save()
     monkeypatch.chdir(proj)
     assert CliRunner().invoke(app, ["catalog", "add", "r", str(catalog)]).exit_code == 0
-    env = {**os.environ, "PYTHONHASHSEED": str(seed)}
+    # Portable and non-interactive: an explicit --type selection never reaches the picker
+    # (on Windows even a NUL stdin reports isatty()), stdin is closed, and output is UTF-8 so
+    # Rich can't hit a cp1252 encode error. `copy: true` means no symlinks are needed.
+    env = {
+        **os.environ,
+        "PYTHONHASHSEED": str(seed),
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8",
+        "COLUMNS": "200",
+    }
+    types = [arg for t in ("command", "agent", "skill") for arg in ("--type", t)]
     run = subprocess.run(
-        [sys.executable, "-c", "from agentry.cli import app; app()", "add", "kit"],
+        [sys.executable, "-c", "from agentry.cli import app; app()", "add", "kit", *types],
         cwd=proj,
         env=env,
+        stdin=subprocess.DEVNULL,
         capture_output=True,
-        text=True,
+        encoding="utf-8",
+        errors="replace",
         timeout=120,
     )
     assert run.returncode == 0, run.stdout + run.stderr
