@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Windows scripts and CI no longer exit 1 on prompts.** On Windows, input redirected from `NUL`
+  (or any input that ends immediately) looks like a terminal, so `agentry add`, the trust prompt,
+  `target add` and `emit agents-md --agent` used to prompt and then fail. They now fall back to
+  their non-interactive behaviour. `add` installs every component of the repo and says so:
+  `` no input — installing all 2 component(s). To choose, use `agentry add two@name[,name]` or `--type <type>`. ``
+  The trust prompt declines, and `target add` refuses the overlay unless you pass `--yes`.
+  `emit agents-md --agent` writes nothing and exits 1 unless you pass `--yes`:
+  `` Not writing AGENTS.md without confirmation. Re-run with `--yes` to apply. ``
+
+### Changed
+- **Prompts now need both input and output to be a terminal.** With output piped, as in
+  `agentry add <repo> | tee log`, you couldn't see the prompt, so agentry no longer shows one:
+  `add` installs every component, the trust prompt declines, and `target add` and
+  `emit agents-md --agent` refuse unless you pass `--yes`. To choose components in a piped run,
+  use `add <repo>@name[,name]` or `--type <type>`.
+
 ## [0.3.0] — 2026-11-14
 
 ### Upgrading from 0.2.x

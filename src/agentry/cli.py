@@ -431,8 +431,8 @@ def _add_from_catalog(
 
     if names or types:
         comps = _select_components(name, available, names, types)
-    elif sys.stdin.isatty():
-        comps = _interactive_pick(available)
+    elif _interactive():
+        comps = _interactive_pick(available, repo)
     else:
         comps = available
     if not comps:
@@ -632,19 +632,56 @@ def _select_components(
     return selected
 
 
-def _interactive_pick(available: list[Component]) -> list[Component]:
-    """Prompt the user to pick from ``available``; default installs everything."""
+def _interactive() -> bool:
+    """Whether to prompt: stdin *and* stdout are terminals, and on Windows stdin is a real
+    console. A Windows NUL device reports ``isatty()`` True, so scripts and CI that run
+    ``agentry add … < NUL`` would otherwise get a prompt they can't answer. Never raises."""
+    try:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return False
+        return sys.platform != "win32" or _windows_console(sys.stdin.fileno())
+    except (AttributeError, OSError, ValueError):
+        return False
+
+
+def _windows_console(fd: int) -> bool:
+    """True if ``fd`` is a Windows console handle (``GetConsoleMode`` succeeds).
+
+    NUL, files and pipes fail it. Stdlib only; any failure counts as "not a console".
+    """
+    try:
+        import ctypes
+        import msvcrt
+        from ctypes import wintypes
+
+        handle = msvcrt.get_osfhandle(fd)  # type: ignore[attr-defined]
+        mode = wintypes.DWORD()
+        kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+        return bool(kernel32.GetConsoleMode(wintypes.HANDLE(handle), ctypes.byref(mode)))
+    except Exception:  # noqa: BLE001 — a probe: anything unexpected means "no console"
+        return False
+
+
+def _interactive_pick(available: list[Component], repo: str = "<repo>") -> list[Component]:
+    """Prompt the user to pick from ``available``; default installs everything.
+
+    No input (EOF) is the non-interactive outcome: everything, with a note on how to choose.
+    """
     console.print(f"[bold]{_e(len(available))} component(s) available:[/bold]")
     for i, c in enumerate(available, 1):
         console.print(f"  [cyan]{i:>2}[/cyan]  [magenta]{_e(c.type.value)}[/magenta]/{_e(c.name)}")
-    answer = (
-        Prompt.ask(
+    try:
+        raw = Prompt.ask(
             "Install which? [dim](numbers comma-separated, 'a' for all, or a type name)[/dim]",
             default="a",
         )
-        .strip()
-        .lower()
-    )
+    except EOFError:
+        console.print(
+            f"  [dim]no input — installing all {_e(len(available))} component(s). To choose, "
+            f"use `{prog()} add {_e(repo)}@name[,name]` or `--type <type>`.[/dim]"
+        )
+        return available
+    answer = raw.strip().lower()
     if answer in ("a", "all", ""):
         return available
     try:  # a type name installs that whole type
@@ -660,19 +697,38 @@ def _interactive_pick(available: list[Component]) -> list[Component]:
     return picks
 
 
+def _confirm_write(output: object) -> bool:
+    """Ask before writing ``output``. With no terminal or no input, refuse: write nothing,
+    point at ``--yes``, exit 1 (as ``target add`` does)."""
+    refuse = (
+        f"[red]Not writing {_e(output)} without confirmation.[/red] Re-run with `--yes` to apply."
+    )
+    if not _interactive():
+        err.print(refuse)
+        raise typer.Exit(1)
+    try:
+        return typer.confirm(f"Write {output}?")
+    except (EOFError, typer.Abort):
+        err.print(refuse)
+        raise typer.Exit(1) from None
+
+
 def _short_sha(sha: str) -> str:
     return sha[len("sha256:") : len("sha256:") + 12] if sha.startswith("sha256:") else sha[:12]
 
 
 def _interactive_trust(source: str, sha: str) -> bool:
     """Prompt to trust a code-executing source. Declines silently when not a TTY (CI/scripts)."""
-    if not sys.stdin.isatty():
+    if not _interactive():
         return False
     console.print(
         f"[yellow]Source '{_e(source)}' runs code at install (a generator)[/yellow], pinned at "
         f"[cyan]{_e(_short_sha(sha))}[/cyan]."
     )
-    return typer.confirm(f"Trust '{source}' to execute its installer?", default=False)
+    try:
+        return typer.confirm(f"Trust '{source}' to execute its installer?", default=False)
+    except (EOFError, typer.Abort):
+        return False  # no input: decline, as when not a terminal
 
 
 def _save_validated(store: ConfigStore) -> None:
@@ -1722,13 +1778,19 @@ def target_add(
     for line in _describe_overlay(profile):
         console.print(f"[dim]{_e(line)}[/dim]")
     if not yes:
-        if not sys.stdin.isatty():
-            err.print(
-                f"[red]Refusing to add overlay '{_e(name)}' without confirmation.[/red] "
-                "Re-run with `--yes` to accept these destinations non-interactively."
-            )
+        refuse = (
+            f"[red]Refusing to add overlay '{_e(name)}' without confirmation.[/red] "
+            "Re-run with `--yes` to accept these destinations non-interactively."
+        )
+        if not _interactive():
+            err.print(refuse)
             raise typer.Exit(1)
-        if not typer.confirm(f"Add driver overlay '{name}' and sync?", default=False):
+        try:
+            accepted = typer.confirm(f"Add driver overlay '{name}' and sync?", default=False)
+        except (EOFError, typer.Abort):
+            err.print(refuse)  # no input: the non-interactive refusal
+            raise typer.Exit(1) from None
+        if not accepted:
             console.print("[dim]Aborted — nothing was written.[/dim]")
             raise typer.Exit(1)
     if store.merge_target_profiles({name: profile}):
@@ -2007,7 +2069,7 @@ def emit_agents_md(
             console.print(f"[green]{_e(output)} already matches the synthesized output.[/green]")
             return
         _print_unified_diff(current, content, str(output))
-        if not yes and not typer.confirm(f"Write {output}?"):
+        if not yes and not _confirm_write(output):
             console.print("[dim]Aborted; nothing written.[/dim]")
             raise typer.Exit(0)
     else:
