@@ -346,7 +346,9 @@ def test_symlinked_user_agent_not_scanned(tmp_path: Path):
 
     res = sync(proj)
     assert (proj / ".claude/agents/a.md").is_symlink()
-    assert link.is_symlink() and os.readlink(link) == str(elsewhere)
+    # Compare resolved paths: on Windows os.readlink returns a \\?\-prefixed path.
+    assert link.is_symlink() and link.resolve() == elsewhere.resolve()
+    assert elsewhere.read_text("utf-8") == _agent("reviewer", "linked")  # target untouched
     assert not any("linked.md" in w for w in res.warnings)
 
 
