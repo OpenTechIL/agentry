@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-11-15
+
 ### Fixed
 - **Windows scripts and CI no longer exit 1 on prompts.** On Windows, input redirected from `NUL`
   (or any input that ends immediately) looks like a terminal, so `agentry add`, the trust prompt,
