@@ -195,6 +195,47 @@ agentry catalog add-repo https://github.com/you/my-kit my-kit \
 `--discover` clones the repo, runs discovery, and fills `expose` from what it actually finds
 — which is also a useful check that your layout works before anyone else depends on it.
 
+### Claude Code plugin marketplaces
+
+A Claude Code plugin marketplace (`.claude-plugin/marketplace.json`) works as a catalog. Register
+it with `agentry catalog add`, using the marketplace's folder, its repo or tree URL, or the
+`marketplace.json` path or URL. Then install plugins by name:
+
+```bash
+agentry catalog add mkt ./my-marketplace
+agentry search                 # lists the plugins, with their descriptions (and version)
+agentry add alpha              # installs the plugin as a source of its own
+```
+
+Each plugin becomes an ordinary source in `.agentry.yml`, named after the plugin, and is pinned
+in `.agentry.lock` like any git source. A fresh checkout needs only the config and lock, not the
+marketplace. Inside the plugin, discovery follows its
+[`plugin.json`](#claude-code-plugins-claude-pluginpluginjson).
+
+- **Commands are organised per plugin**, for example `.claude/commands/alpha/review.md`, which
+  Claude Code shows as `/alpha:review`, the name plugin users already type. The plugin's agents
+  and skills install flat, as `.claude/agents/<file>.md` and `.claude/skills/<name>/`. Claude
+  identifies agents by the `name` in their frontmatter, so two plugins that ship an agent with
+  the same name collide, and only the one listed first installs (see
+  [agent name already used](troubleshooting.md#agent-name-name-is-already-used)).
+- **Plugin hooks that call `${CLAUDE_PLUGIN_ROOT}/…`** work: agentry links the plugin folder
+  into `.claude/plugins/agentry/<plugin>/` and rewrites the path. This is recorded as a
+  per-source [`profiles:`](config-reference.md#sources) override, so it never changes how your
+  other hooks install.
+- **A `sha` in the marketplace pins the plugin.** `agentry update` leaves it where it is and says
+  so. Re-run `agentry add <plugin>` to take a new pin from the marketplace.
+- **Skipped:** plugins with an `npm`, `archive` or `command` source, with one warning each. Also
+  skipped: entry fields that only Claude uses, and component definitions written into
+  `marketplace.json` itself instead of the plugin's own files.
+- **No empty installs.** If none of a plugin's components install into your targets, `add` exits
+  1 and changes nothing.
+- **npm dependencies aren't installed.** If a plugin ships `package.json` with a lockfile, `add`
+  and `sync` tell you which command to run yourself.
+
+**Everyone on the project needs agentry 0.3.0 or later.** An older agentry ignores the
+per-source `profiles:` and `pinned_by` keys. See
+[plugin hooks don't run](troubleshooting.md#plugin-hooks-dont-run-after-a-teammate-syncs).
+
 ### Index schema
 
 ```json

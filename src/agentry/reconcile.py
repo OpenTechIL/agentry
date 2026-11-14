@@ -20,7 +20,13 @@ from pathlib import Path
 
 from . import deps, discovery, envscan, identity, plugin_manifest
 from .config import ConfigStore
-from .drivers import BUILTIN_DRIVERS, Driver, resolve_drivers
+from .drivers import (
+    BUILTIN_DRIVERS,
+    Driver,
+    resolve_drivers,
+    source_drivers,
+    source_identity_overrides,
+)
 from .gitignore import ensure_gitignore
 from .installers import copy as copy_inst
 from .installers import generate as gen_inst
@@ -56,7 +62,7 @@ from .naming import repo_basename
 from .progname import prog
 from .resolver import effective_root
 from .spec import LinkMergeDest, MergeDest, check_format
-from .targets import check_targets, unresolved_targets
+from .targets import check_targets, resolve_targets, unresolved_targets
 
 
 @dataclass
@@ -128,6 +134,11 @@ class SyncResult:
     # (``"unsupported"``: type/target skips; ``"drift"``: W2). Every string here is also in
     # ``warnings``, which stays the complete list.
     summarized: dict[str, list[str]] = field(default_factory=dict)
+    #: Units components lost to earlier claimants (W5), path and key alike.
+    collisions: list[merge_inst.Collision] = field(default_factory=list)
+    #: ``(summary line, the warnings it stands for)``: the CLI prints the line instead of
+    #: those warnings unless ``--verbose`` (ADR-002 §4: one line per plugin pair).
+    grouped: list[tuple[str, list[str]]] = field(default_factory=list)
 
 
 # -- desired-state computation -------------------------------------------
@@ -166,11 +177,16 @@ class DesiredPlan:
     #: Path claims lost in config order, dropped from the plan: ``(loser, target, path,
     #: winner ref, note)`` — status shows them as missing with the note.
     path_losers: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    #: The W5-path lines behind ``path_losers``, for the grouped collision line.
+    collisions: list[merge_inst.Collision] = field(default_factory=list)
     #: plugin.json findings (also in the caller's warnings): rejected paths, name clashes,
     #: unsupported keys, ``${CLAUDE_PLUGIN_DATA}`` references — doctor reports them too.
     plugin_notes: list[str] = field(default_factory=list)
     #: The unsupported-key subset of ``plugin_notes``, kept apart so the CLI can summarize.
     plugin_unsupported: list[str] = field(default_factory=list)
+    #: Ignored parts of a source's ``profiles:`` (an ``identity`` override, an undefined
+    #: target), also in the caller's warnings — doctor reports them as target problems.
+    profile_notes: list[str] = field(default_factory=list)
     #: Name units lost in claim order (ADR-003): ``(loser, loser path, winner, unit, mode)``
     #: — the transfer line when the loser was the one installed.
     name_transfers: list[tuple[str, str, str, str, str]] = field(default_factory=list)
@@ -200,14 +216,8 @@ def compute_desired(
 
     # Build a (type, name) -> path index per source.
     plan = DesiredPlan()
-    indexes: dict[str, dict[tuple[ComponentType, str], Path]] = {}
-    for indexed in config.sources:
-        sp = effective_root(root, indexed)
-        if sp.exists():
-            indexes[indexed.name] = discovery.index(sp)
-            notes, unsupported = discovery.plugin_source_warnings(sp, indexed.name)
-            plan.plugin_notes.extend(notes)
-            plan.plugin_unsupported.extend(unsupported)
+    indexes = _index_sources(root, config, plan)
+    warnings.extend(plan.profile_notes)
     warnings.extend(plan.plugin_notes)
 
     variants = _enabled_variants(config)
@@ -248,11 +258,15 @@ def compute_desired(
         if comp.type in MERGE_TYPES and artifact.is_file():
             _warn_placeholders(comp, artifact, plan, warnings)
 
+        # A source's own `profiles:` override target_profiles for its components only.
+        own = source_drivers(drivers, src)
         for tname in comp.applies_to(config.targets):
-            driver = drivers.get(tname)
+            driver = own.get(tname)
             if driver is None:
                 continue  # already warned via unresolved_targets
-            _desired_for_target(comp, src, tname, driver, artifact, plan, warnings, variants)
+            _desired_for_target(
+                comp, src, tname, driver, artifact, plan, warnings, variants, root=root
+            )
 
     _warn_unmatched_keep(config, plan, warnings)
     _resolve_claims(config, plan, warnings, frozenset(transitive), root=root, drivers=drivers)
@@ -284,7 +298,17 @@ def _resolve_claims(
 
     _resolve_path_claims(plan, warnings, transitive, rank)
     if root is not None and drivers is not None:
-        _resolve_name_claims(root, plan, drivers, warnings, transitive, rank)
+        own: dict[str, dict[str, Driver]] = {}
+
+        def driver_of(ref: str, target: str) -> Driver | None:
+            """The driver a component installs with: its source's ``profiles:`` applied."""
+            name = ref.split("/", 1)[0]
+            if name not in own:
+                src = config.source(name)
+                own[name] = source_drivers(drivers, src) if src is not None else drivers
+            return own[name].get(target)
+
+        _resolve_name_claims(root, plan, driver_of, warnings, transitive, rank)
     _resolve_key_claims(plan, transitive, rank)
 
 
@@ -328,7 +352,7 @@ def _identity_name(
 
 def _named_installs(
     plan: DesiredPlan,
-    drivers: dict[str, Driver],
+    driver_of: Callable[[str, str], Driver | None],
     warnings: list[str],
     rank: Callable[[str], int],
 ) -> list[_Named]:
@@ -339,7 +363,7 @@ def _named_installs(
         *plan.transforms,
     ]
     for d in items:
-        driver = drivers.get(d.target)
+        driver = driver_of(d.component, d.target)
         ctype = ComponentType(d.component.split("/")[1])
         if driver is None or driver.spec.identity.get(ctype) != identity.FRONTMATTER_NAME:
             continue
@@ -351,7 +375,7 @@ def _named_installs(
 
 
 def _user_names(
-    root: Path, drivers: dict[str, Driver], named: list[_Named]
+    root: Path, driver_of: Callable[[str, str], Driver | None], named: list[_Named]
 ) -> dict[str, dict[str, str]]:
     """Per target: ``casefold(name) -> path`` of agents agentry doesn't manage (W1-name).
 
@@ -369,10 +393,11 @@ def _user_names(
     }
     out: dict[str, dict[str, str]] = {}
     for target in sorted({n.target for n in named}):
-        driver = drivers[target]
         dirs: list[str] = []
         builtin = BUILTIN_DRIVERS.get(target)
-        for spec in (builtin.spec if builtin else None, driver.spec):
+        specs = [builtin.spec if builtin else None]
+        specs += [d.spec for n in named if n.target == target and (d := driver_of(n.ref, target))]
+        for spec in specs:
             if spec is None:
                 continue
             for table in (spec.link, spec.copy):
@@ -387,7 +412,7 @@ def _user_names(
 def _resolve_name_claims(
     root: Path,
     plan: DesiredPlan,
-    drivers: dict[str, Driver],
+    driver_of: Callable[[str, str], Driver | None],
     warnings: list[str],
     transitive: frozenset[str],
     rank: Callable[[str], int],
@@ -395,10 +420,10 @@ def _resolve_name_claims(
     """Name units (ADR-003): a target that identifies a type by frontmatter ``name`` sees
     two installs with one name as one claim, wherever their paths are. The user's own agent
     with that name wins (W1-name); otherwise the earliest in claim order (W5-name)."""
-    named = _named_installs(plan, drivers, warnings, rank)
+    named = _named_installs(plan, driver_of, warnings, rank)
     if not named:
         return
-    users = _user_names(root, drivers, named)
+    users = _user_names(root, driver_of, named)
     losers: set[tuple[str, str]] = set()  # (component, casefolded path)
     by_unit: dict[tuple[str, str], list[_Named]] = {}
     for n in named:
@@ -429,6 +454,8 @@ def _resolve_name_claims(
             plan.path_losers.append((n.ref, target, n.path, winner.ref, note))
             unit = f"agent name '{n.name}' on {target}"
             plan.name_transfers.append((n.ref, n.path, winner.ref, unit, mode))
+            # MP1's grouped per-pair line counts name units like paths (ADR-002 §4).
+            plan.collisions.append(merge_inst.Collision(n.ref, winner.ref, unit, mode, msg))
     if losers:
         plan.links = [d for d in plan.links if (d.component, d.path.casefold()) not in losers]
         plan.copies = [d for d in plan.copies if (d.component, d.path.casefold()) not in losers]
@@ -517,6 +544,7 @@ def _resolve_path_claims(
             if msg not in warnings:
                 warnings.append(msg)
             plan.path_losers.append((ref, target, path, winner, note))
+            plan.collisions.append(merge_inst.Collision(ref, winner, path, mode, msg))
     if losers:
         plan.links = [d for d in plan.links if (d.component, d.path.casefold()) not in losers]
         plan.copies = [d for d in plan.copies if (d.component, d.path.casefold()) not in losers]
@@ -659,6 +687,8 @@ def _desired_for_target(
     plan: DesiredPlan,
     warnings: list[str],
     variants: frozenset[tuple[str, ComponentType, str, str]] = frozenset(),
+    *,
+    root: Path | None = None,
 ) -> None:
     """Dispatch one (component, target) pair to the right strategy, appending to ``plan``.
 
@@ -714,7 +744,7 @@ def _desired_for_target(
         )
     elif strat is Strategy.LINK_MERGE:
         lm = _compute_link_merge(
-            comp, src, tname, driver.link_merge_dest(comp.type), artifact, warnings
+            comp, src, tname, driver.link_merge_dest(comp.type), artifact, warnings, root=root
         )
         if lm is not None:
             _check_format(comp, tname, driver, plan, warnings, entries=lm.fragment)
@@ -883,26 +913,34 @@ def _compute_link_merge(
     lmdest: LinkMergeDest,
     artifact: Path,
     warnings: list[str],
+    *,
+    root: Path | None = None,
 ) -> DesiredLinkMerge | None:
-    """Resolve a link+merge component: the script dir to link + the rewritten fragment.
+    """Resolve a link+merge component: the dir to link + the rewritten fragment.
 
     ``artifact`` is the script directory (``--path hooks``) or, if a file was resolved,
-    its parent. The config to merge is ``<dir>/hooks.json`` (or the file itself).
+    its parent. The config to merge is ``<dir>/hooks.json`` (or the file itself). With
+    ``link_from: source_root`` the link is the whole source instead (a Claude plugin's root,
+    so ``${CLAUDE_PLUGIN_ROOT}`` paths resolve under it); a plugin.json artifact merges only
+    its ``hooks`` / ``mcpServers`` value.
     """
     if artifact.is_dir():
         link_src, config = artifact, artifact / "hooks.json"
     else:
         link_src, config = artifact.parent, artifact
+    if lmdest.link_from == "source_root" and root is not None:
+        link_src = effective_root(root, src)
     if not config.is_file():
         warnings.append(
             f"{comp.ref}: link+merge config '{config.name}' not found in '{comp.source}'"
         )
         return None
     try:
-        entries = merge_inst.select_entries(merge_inst.load_fragment(config), lmdest.merge)
+        entries, notes = _fragment_entries(config, comp.type, lmdest.merge)
     except (ValueError, OSError) as exc:
         warnings.append(f"{comp.ref}: {exc}")
         return None
+    warnings.extend(f"{comp.ref}: {note}" for note in notes)
     variables = _link_merge_vars(comp, src)
     link_path = _expand(lmdest.link_dest, variables)
     rewrite_to = _expand(lmdest.rewrite_to, variables)
@@ -1032,7 +1070,46 @@ def sync(
 
     # 3. Housekeeping.
     result.gitignore_changed = ensure_gitignore(root)
+    result.collisions[:0] = plan.collisions  # path losses first, as warned
+    result.grouped = group_collisions(result.collisions)
     return result
+
+
+def group_collisions(collisions: list[merge_inst.Collision]) -> list[tuple[str, list[str]]]:
+    """One line per (loser source, winner source) pair that lost 2+ units (ADR-002 §4).
+
+    A pair with a single unit, or two components of one source, keeps the individual W5
+    lines. Wording follows T22: the
+    transitive variants when either side is transitive.
+    """
+    pairs: dict[tuple[str, str], list[merge_inst.Collision]] = {}
+    for c in collisions:
+        pairs.setdefault((c.loser.split("/", 1)[0], c.winner.split("/", 1)[0]), []).append(c)
+    out: list[tuple[str, list[str]]] = []
+    for (loser, winner), items in pairs.items():
+        units = list(dict.fromkeys(c.unit for c in items))
+        if len(units) < 2 or loser == winner:  # one source's own clashes stay individual
+            continue
+        shown = ", ".join(units[:3]) + (", …" if len(units) > 3 else "")
+        modes = {c.mode for c in items}
+        head = f"{loser}: {len(units)} entries are already installed by {winner}"
+        if "winner" in modes:
+            line = (
+                f"{head} — skipped ({shown}). To change that, declare {loser} in .agentry.yml "
+                "to give it priority."
+            )
+        elif "loser" in modes:
+            line = (
+                f"{head} — skipped ({shown}). Declare {loser} in .agentry.yml above {winner}, "
+                f"or disable {winner}."
+            )
+        else:
+            line = (
+                f"{head}, listed earlier in .agentry.yml — skipped ({shown}). Disable one of "
+                "them, or reorder components to choose which wins."
+            )
+        out.append((line, list(dict.fromkeys(c.message for c in items))))
+    return out
 
 
 def _prune_links(
@@ -1435,6 +1512,49 @@ def _hand_over_created_keys(
             heirs[0].created_key = True
 
 
+def _index_sources(
+    root: Path, config: Config, plan: DesiredPlan
+) -> dict[str, dict[tuple[ComponentType, str], Path]]:
+    """``(type, name) -> artifact`` per resolved source, collecting its plugin.json findings
+    (and a plugin's npm/Bun install hint) into ``plan.plugin_notes``."""
+    indexes: dict[str, dict[tuple[ComponentType, str], Path]] = {}
+    for src in config.sources:
+        sp = effective_root(root, src)
+        if not sp.exists():
+            continue
+        indexes[src.name] = discovery.index(sp)
+        for tname, ctype in source_identity_overrides(src):
+            plan.profile_notes.append(
+                f"source '{src.name}': profiles: sets `identity` for {tname}.{ctype} — "
+                "ignored; identity describes how the target tool names components and can "
+                "only be set in target_profiles."
+            )
+        for tname in src.profiles:
+            if tname not in resolve_targets(config):
+                plan.profile_notes.append(
+                    f"source '{src.name}': profiles: sets target '{tname}', which this project "
+                    "doesn't define — ignored. Define the target first (`"
+                    f"{prog()} target add {tname}`), or remove it from the source's profiles."
+                )
+        notes, unsupported = discovery.plugin_source_warnings(sp, src.name)
+        plan.plugin_notes.extend(notes)
+        plan.plugin_unsupported.extend(unsupported)
+        is_plugin = (sp / plugin_manifest.MANIFEST_PATH).is_file()
+        if src.pinned_by or src.profiles or is_plugin:
+            hint = plugin_manifest.install_hint(sp, src.name, _shown(root, sp))
+            if hint is not None:
+                plan.plugin_notes.append(hint)
+    return indexes
+
+
+def _shown(root: Path, path: Path) -> str:
+    """``path`` for display: relative to the project when it's inside it."""
+    try:
+        return path.relative_to(root).as_posix()
+    except ValueError:
+        return str(path)
+
+
 def _desired_fragments(
     merges: list[DesiredMerge], link_merges: list[DesiredLinkMerge]
 ) -> dict[Who, tuple[MergeDest, dict]]:
@@ -1484,11 +1604,11 @@ def _source_fragments(root: Path, config: Config, declared: Config) -> FragmentL
         if artifact is None or not artifact.exists():
             return None
         if isinstance(rec, InstalledLinkMerge):
-            driver = drivers.get(rec.target)
+            driver = source_drivers(drivers, src).get(rec.target)
             if driver is None or driver.strategy(ctype) is not Strategy.LINK_MERGE:
                 return None
             lm = _compute_link_merge(
-                comp, src, rec.target, driver.link_merge_dest(ctype), artifact, []
+                comp, src, rec.target, driver.link_merge_dest(ctype), artifact, [], root=root
             )
             if lm is None or (lm.dest.file, lm.dest.pointer) != (rec.file, rec.pointer):
                 return None
@@ -1692,6 +1812,7 @@ def _plan_record(
     result.warnings.extend(plan.warnings)
     result.summarized.setdefault("drift", []).extend(plan.drift_warnings)
     result.summarized.setdefault("kept", []).extend(plan.kept_missing_warnings)
+    result.collisions.extend(plan.collisions)
     return plan, stale
 
 

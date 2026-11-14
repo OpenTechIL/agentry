@@ -270,6 +270,17 @@ def _json_type(value: object) -> str:
     return "null" if value is None else type(value).__name__
 
 
+@dataclass(frozen=True)
+class Collision:
+    """One unit a component lost to an earlier claimant (a W5 line), for grouping."""
+
+    loser: str  #: component ref
+    winner: str  #: component ref
+    unit: str  #: the path, or ``file:pointer.key``
+    mode: str  #: "" / "loser" / "winner" — see :class:`Rival`
+    message: str  #: the individual W5 line, as warned
+
+
 @dataclass
 class NamedPlan:
     """What applying one component's fragment to a document would do.
@@ -300,6 +311,8 @@ class NamedPlan:
     #: Array-mode keys with elements of ours that no longer match (edited or removed): the
     #: status note per key (drift; never re-appended — ADR-001 Rev 5 §4).
     array_notes: dict[str, str] = field(default_factory=dict)
+    #: Keys lost to an earlier claimant (W5), for the grouped collision line.
+    collisions: list[Collision] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -691,7 +704,10 @@ def _settled_first(
         return True
     winner = rival(key) if rival is not None else None
     if winner is not None:
-        refuse(key, *w5_texts(ctx, key, winner))
+        warning, note = w5_texts(ctx, key, winner)
+        refuse(key, warning, note)
+        unit = f"{ctx.file}:{ctx.pointer}.{key}"
+        plan.collisions.append(Collision(ctx.ref, winner.ref, unit, winner.transitive, warning))
         return True
     return False
 

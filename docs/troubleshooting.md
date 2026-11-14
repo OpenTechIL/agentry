@@ -772,6 +772,106 @@ plug/hook/hooks: references ${CLAUDE_PLUGIN_DATA}, which only exists inside an i
 Claude Code sets `CLAUDE_PLUGIN_DATA` only for plugins it installed itself. Installed through
 agentry, the entry still lands, but the variable is empty unless you set it.
 
+## Plugins from a Claude Code marketplace catalog
+
+### Plugin hooks don't run after a teammate syncs
+
+**Symptom.** Plugin commands lose their prefix (`/alpha:review` becomes `/review`), plugin hooks
+stop running, and the teammate's sync printed something like:
+
+```text
++ link .claude/commands/review.md
+- link .claude/commands/alpha/review.md
+- link+merge .claude/plugins/agentry/alpha/hooks + .claude/settings.json:hooks
+! alpha/hook/hooks: hook command references a plugin-root variable ('${CLAUDE_PLUGIN_ROOT}/hooks/run.sh'), which only resolves inside an installed plugin — merged into .claude/settings.json it will fail at startup. Configure a 'link+merge' hook profile under target_profiles for this repo (see the superpowers/arckit catalog entries).
+```
+
+**Cause.** Someone synced with an agentry older than 0.3.0. Marketplace plugins rely on the
+per-source `profiles:` key in `.agentry.yml`, and an older agentry ignores it. It installs the
+plugin with the default rules, which flattens the command names and drops the plugin-root hook.
+
+**Fix.** Everyone on the project upgrades to agentry 0.3.0 or later, then runs `agentry sync`.
+One sync on the current version restores the plugin layout and hooks.
+
+### `profiles: sets identity … — ignored`
+
+```text
+source 's': profiles: sets `identity` for claude.agent — ignored; identity describes how the target tool names components and can only be set in target_profiles.
+```
+
+A source's `profiles:` sets [`identity`](config-reference.md#identity), which describes how
+the target tool names components, so it can't vary per source. agentry ignores that key, but
+the rest of the rule still applies (here, the agent installed normally). `agentry doctor`
+lists the warning under `target`, so `doctor --strict` fails until you remove it:
+
+```text
+! target  source 's': profiles: sets `identity` for claude.agent — ignored; identity describes how the target tool names components and can only be set in target_profiles.
+```
+ Move the
+setting to `target_profiles` if you meant to change it for the whole target, or delete it.
+
+### `profiles: sets target '<name>', which this project doesn't define`
+
+```text
+source 's': profiles: sets target 'cursr', which this project doesn't define — ignored. Define the target first (`agentry target add cursr`), or remove it from the source's profiles.
+```
+
+A source's `profiles:` has rules for a target the project has no driver, `target_profiles`
+entry or overlay for, often a typo. agentry ignores those rules, and the source's other rules
+still apply. `agentry doctor` lists it under `target` as a warning. Fix the name, define the
+target, or remove it from the source's `profiles:`.
+
+### `pinned to … by marketplace … — not moved`
+
+```text
+pinned: pinned to aa3eed9 by marketplace 'mkt' — not moved. Re-run `agentry add pinned` to take the marketplace's current pin.
+```
+
+**Cause.** The marketplace pins this plugin to an exact commit (`sha`), and agentry recorded that
+in the source's `pinned_by`. `agentry update` deliberately doesn't move a pin the marketplace
+chose.
+
+**Fix.** To take the marketplace's current pin, re-run `agentry add <plugin>`. agentry prints the
+move:
+
+```text
+pinned: aa3eed9 → 6fdc3c9
+```
+
+### `none of its components install into your targets`
+
+```text
+hookonly: none of its components install into your targets (codex) — it ships hook, which codex doesn't support. Nothing was added.
+```
+
+**Cause.** Every component the plugin ships is a type your targets can't install, such as a
+hooks-only plugin on a Codex-only project. Rather than add a source that installs nothing,
+`add` exits 1 and leaves `.agentry.yml` and `.agentry.lock` unchanged.
+
+**Fix.** Add a target that supports those types (`agentry target use claude`, say), or skip the
+plugin.
+
+### `this plugin ships <lockfile>; … may need node_modules`
+
+```text
+nodey: this plugin ships package-lock.json; its hooks or MCP servers may need node_modules. agentry doesn't run installers — run `npm ci` in .agentry/nodey yourself.
+```
+
+**Cause.** The plugin has a `package.json` and a lockfile, so its hooks or MCP servers probably
+need its Node dependencies. agentry never runs package installers for you.
+
+**Fix.** Run the command it names in that folder (`cd .agentry/nodey && npm ci`). Re-run it after
+the plugin updates.
+
+### `uses a … source, which agentry can't install`
+
+```text
+catalog 'mkt': plugin 'fromnpm' uses an npm source, which agentry can't install — skipped. Install it in Claude Code directly.
+```
+
+Plugins distributed as `npm`, `archive` or `command` sources aren't supported. The rest of the
+marketplace still works. Install that plugin in Claude Code itself.
+
 ## A summary line instead of individual warnings
 
 To keep output readable, `sync`, `install`, `update` and `add` collapse a warning that occurs two
@@ -842,7 +942,7 @@ on warnings too — which makes it a good CI gate. Errors are listed first below
 | `target` | error | A target in `targets:` has no built-in driver, no `target_profiles` entry, and no installed overlay. See [not defined](#target-name-is-not-defined-nothing-was-changed). |
 | `resolve` | error | A source or dependency couldn't be resolved: git failed or timed out, a ref doesn't exist, a local source path is missing, or a dependency conflicts. The remaining checks are skipped until this is fixed. |
 | `component` | error | A component references a source that isn't declared (`unknown source`), or the source doesn't actually provide it (`not provided by source`). Run `agentry list` for the real names. |
-| `target` | warn | A component's `targets:` names a target the project doesn't list, so it's skipped there. See [not in the project's targets](#target-name-is-not-in-the-projects-targets-skipped). |
+| `target` | warn | A component's `targets:` names a target the project doesn't list, so it's skipped there. See [not in the project's targets](#target-name-is-not-in-the-projects-targets-skipped). Also: a source's `profiles:` sets `identity` (ignored) or names a target the project doesn't define. |
 | `support` | warn | No active target installs this component type, so it goes nowhere. |
 | `component` | warn | An agent has no `name` in its frontmatter, or its name contains `:`. It's installed, but see [no name](#agent-has-no-name-in-its-frontmatter) and [contains ':'](#agent-name-name-contains). |
 | `format` | warn | A component's content visibly won't work in that target. It's installed as-is. See [format warnings](#a-component-may-not-work-on-its-target-format-warnings). |

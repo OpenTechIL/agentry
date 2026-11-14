@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from ..models import Config
+from ..models import Config, Source
 from . import agents, claude, codex, copilot, cursor, gemini, kimi, kiro, opencode, windsurf
 from .base import Driver, HookEventPolicy, NamespacePolicy, TransformFn
 
@@ -50,6 +50,38 @@ def resolve_drivers(config: Config) -> dict[str, Driver]:
     return out
 
 
+def source_drivers(drivers: dict[str, Driver], source: Source) -> dict[str, Driver]:
+    """``drivers`` with ``source.profiles`` applied over them, for that source's components.
+
+    Precedence for a (target, type): the source's profile, then ``target_profiles`` (already
+    in ``drivers``), then the built-in. A source profile only overrides a target the project
+    already defines; it never creates one. Returns ``drivers`` itself when there's none.
+    """
+    if not source.profiles:
+        return drivers
+    from ..targets import _apply_profile
+
+    out = dict(drivers)
+    for tname, rules in source.profiles.items():
+        base = drivers.get(tname)
+        if base is not None:
+            spec = _apply_profile(base.spec, tname, rules)
+            # Identity describes the target tool, not a source: a source profile never
+            # changes it (else its agents could shadow others again — ADR-003).
+            out[tname] = replace(base, spec=replace(spec, identity=dict(base.spec.identity)))
+    return out
+
+
+def source_identity_overrides(source: Source) -> list[tuple[str, str]]:
+    """``(target, type)`` pairs where ``source.profiles`` tries to set ``identity`` (ignored)."""
+    return [
+        (tname, ctype.value)
+        for tname, rules in source.profiles.items()
+        for ctype, rule in rules.items()
+        if "identity" in rule.model_fields_set
+    ]
+
+
 __all__ = [
     "BUILTIN_DRIVERS",
     "Driver",
@@ -57,4 +89,6 @@ __all__ = [
     "NamespacePolicy",
     "TransformFn",
     "resolve_drivers",
+    "source_drivers",
+    "source_identity_overrides",
 ]

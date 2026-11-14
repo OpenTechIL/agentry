@@ -173,6 +173,36 @@ list with agentry's own curated catalog (`agentry` → `registry/repositories.js
 `raw.githubusercontent.com`, see `DEFAULT_CATALOG_URL` in `config.py`) so name-based installs
 work on a fresh project; `--no-default-catalog` starts empty.
 
+**Claude plugin marketplaces as catalogs (MP1, ADR-002).** `agentry catalog add <name> <location>`
+also accepts a Claude Code marketplace — a `marketplace.json` file or URL, or a marketplace root
+(local dir or GitHub repo/tree URL → `<root>/.claude-plugin/marketplace.json`). `registry.load_catalog`
+detects it by content (a `plugins` list + an `owner` object) and `marketplace.to_index` — a pure
+data translator, like `apm_import` — turns each plugin entry into an ordinary catalog entry, so
+`agentry add <plugin>` / `remove` reuse the catalog machinery unchanged:
+- **Sources.** Relative entries resolve against the marketplace's repo (git url + `subdir`) or local
+  dir; `github` / `url` / `git-subdir` map to git sources; `npm` / `archive` / `command` are skipped
+  with a warning, as is a relative entry from a bare JSON URL with no repo. Catalog-added source
+  identity is `(type, url|path, subdir, ref)`, and each source is named after its plugin
+  (path-safe). A GitHub repo URL without a ref uses the tree URL's ref, else the remote's default
+  branch (`git ls-remote --symref`, once, at authoring time), else `main` with a note.
+- **Pinning.** A marketplace `sha` beats `ref` and becomes the source's `ref` — a hard pin,
+  recorded with `pinned_by: <catalog>`. `agentry update <plugin>` says it was not moved and how to
+  take a new pin (re-run `agentry add`, which prints old → new). `version` is a display label only;
+  the lock pins the commit as for any git source, and the marketplace itself is not locked.
+- **Discovery.** No `expose`: each plugin installs through discovery, i.e. its own
+  `.claude-plugin/plugin.json` (above). Entry-level component fields in `marketplace.json`,
+  plugin `dependencies` and private-registry headers are ignored with a warning.
+- **Claude placement** comes from the plugin source's own `profiles:` (§5), written by the
+  translator: commands namespaced as `.claude/commands/<plugin>/{name}.md` (`/<plugin>:<name>`),
+  and plugin-root hooks as `link+merge` with `link_from: source_root`, rewriting
+  `${CLAUDE_PLUGIN_ROOT}` → `${CLAUDE_PROJECT_DIR}/.claude/plugins/agentry/{source}/{name}`.
+  Plugin-root MCP servers stay skipped: a project `.mcp.json` does not expand a plain
+  `${CLAUDE_PROJECT_DIR}`. Skills and agents install flat (agents are claimed by name, §7).
+- **Add outcomes.** A plugin with nothing installable into the active targets makes `add` exit 1
+  and write nothing; when every component is blocked by existing entries, `add` says so. Repeated
+  collisions between the same two plugins print one grouped line (`doctor` lists each), and
+  plugins shipping npm/Bun lockfiles get a warning — agentry runs no installers.
+
 A conventional-layout repo needs only a `source`; `expose` declares curated components (and
 carries the `path`/`generate` for artifacts discovery can't infer). Two optional per-repo flags
 shape the install layout at `agentry add` time:
@@ -376,6 +406,19 @@ dataclass that *composes* two things:
      The reason is that `expect` describes the tool's *content* schema, not placement. A
      placement-only override (for example `strategy: copy` on Windows) must not silently lose the
      check. This follows the same precedent as `memory_file`, which also survives an override.
+
+**Per-source profiles.** A source entry may carry `profiles:` — the same shape and validation as
+`target_profiles[<tool>]` — that apply **only to that source's components**
+(`drivers.source_drivers`). Precedence for a (target, type): the source's profile, then
+`target_profiles`, then the built-in; a source profile only overrides a target the project already
+defines. Removing the source removes its override with it, and `agentry why` shows when a source
+profile decided placement. Marketplace plugins use this for their claude command and hook rules.
+
+**`link_from`.** A `link+merge` rule links the artifact's directory by default
+(`link_from: artifact`, the historical behaviour). `link_from: source_root` links the
+component's source root instead — needed when a fragment (e.g. inline `plugin.json` hooks) lives
+apart from the scripts it runs. An older agentry ignores the field and would link the wrong
+directory, so projects using it need a current agentry.
 
 `resolve_drivers(config)` is the effective map. It reuses `resolve_targets(config)` — the
 single place that deep-merges the project's `target_profiles` over the built-in capability

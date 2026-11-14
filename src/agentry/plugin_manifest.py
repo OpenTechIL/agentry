@@ -392,3 +392,31 @@ def plugin_data_refs(ref: str, ctype: ComponentType, artifact: Path) -> list[str
         "Claude plugin — installed as-is, but it won't resolve. Set CLAUDE_PLUGIN_DATA in your "
         "environment, or ask the plugin author for a fallback."
     ]
+
+
+#: Lockfile → the install command it implies (first match wins, in this order).
+LOCKFILES = (
+    ("package-lock.json", "npm ci"),
+    ("bun.lock", "bun install --frozen-lockfile"),
+    ("bun.lockb", "bun install --frozen-lockfile"),
+    ("pnpm-lock.yaml", "pnpm install --frozen-lockfile"),
+    ("yarn.lock", "yarn install --frozen-lockfile"),
+)
+
+
+def install_hint(root: Path, src: str, shown: str) -> str | None:
+    """A plugin that ships ``package.json`` plus a lockfile may need ``node_modules``.
+
+    agentry never runs installers (ADR-002 §5e); this names the command for the user to run
+    in ``shown`` (the plugin's store directory, as displayed). ``None`` when there's nothing.
+    """
+    if not (root / "package.json").is_file():
+        return None
+    for lockfile, cmd in LOCKFILES:
+        if (root / lockfile).is_file():
+            return (
+                f"{src}: this plugin ships {lockfile}; its hooks or MCP servers may need "
+                f"node_modules. agentry doesn't run installers — run `{cmd}` in {shown} "
+                "yourself."
+            )
+    return None

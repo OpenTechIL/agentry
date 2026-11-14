@@ -11,11 +11,13 @@ local-file form and a future server are interchangeable.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
 
+from . import marketplace
 from .config import STORE_DIR
 from .drivers import BUILTIN_DRIVERS, Driver
 from .models import (
@@ -92,14 +94,88 @@ def _normalize_url(location: str) -> str:
     return location
 
 
+MARKETPLACE_JSON = ".claude-plugin/marketplace.json"
+_REPO_HOSTS = ("https://github.com/", "https://gitlab.com/", "https://bitbucket.org/")
+
+
+def _repo_location(location: str) -> tuple[str, str | None, str] | None:
+    """``(repo url, ref, subdir)`` when ``location`` is a browser repo or tree URL on a known
+    host — a marketplace *root*. ``None`` for anything else (a file URL included), which is
+    fetched as-is, exactly as before."""
+    if not location.startswith(_REPO_HOSTS) or location.rstrip("/").endswith(".json"):
+        return None
+    if any(seg in location for seg in ("/blob/", "/raw/")):
+        return None
+    clean, ref, subdir, _ = parse_repo_url(location)
+    host_path = clean.split("://", 1)[1].split("/", 1)
+    if len(host_path) < 2 or "/" not in host_path[1].strip("/"):
+        return None  # needs at least <owner>/<repo>
+    return clean, ref, subdir or ""
+
+
+def _raw_marketplace_url(repo: str, ref: str | None, subdir: str) -> str:
+    """The raw-bytes URL of a repo's marketplace.json (``HEAD`` = its default branch)."""
+    path = "/".join(p for p in (subdir.strip("/"), MARKETPLACE_JSON) if p)
+    at = ref or "HEAD"
+    if repo.startswith("https://github.com/"):
+        owner_repo = repo[len("https://github.com/") :]
+        return f"https://raw.githubusercontent.com/{owner_repo}/{at}/{path}"
+    if repo.startswith("https://gitlab.com/"):
+        return f"{repo}/-/raw/{at}/{path}"
+    return f"{repo}/raw/{at}/{path}"
+
+
+def _marketplace_base(root: Path, registry: Registry) -> marketplace.MarketBase:
+    """Where a marketplace catalog came from, so relative plugin paths can be resolved."""
+    location = registry.location
+    repo = _repo_location(location)
+    if repo is not None:
+        url, ref, subdir = repo
+        return marketplace.MarketBase("git", root=subdir, url=url, ref=ref)
+    if _is_url(location):
+        raw = _normalize_url(location)
+        gh = "https://raw.githubusercontent.com/"
+        if raw.startswith(gh) and raw.endswith(MARKETPLACE_JSON):
+            parts = raw[len(gh) : -len(MARKETPLACE_JSON)].strip("/").split("/")
+            if len(parts) >= 3:  # owner / repo / ref / subdir...
+                owner, name, ref, *sub = parts
+                return marketplace.MarketBase(
+                    "git", root="/".join(sub), url=f"https://github.com/{owner}/{name}", ref=ref
+                )
+        return marketplace.MarketBase("url")
+    path = Path(location)
+    if not path.is_absolute():
+        path = root / path
+    if path.is_dir():
+        return marketplace.MarketBase("local", root=str(path))
+    mroot = path.parent.parent if path.parent.name == ".claude-plugin" else path.parent
+    return marketplace.MarketBase("local", root=str(mroot))
+
+
+def default_branch(url: str) -> str | None:
+    """The default branch of the git repo at ``url`` (``git ls-remote --symref``), or
+    ``None`` when it can't be read (offline, no access, not a git URL)."""
+    from .resolver import ResolveError, _git
+
+    try:
+        out = _git(["ls-remote", "--symref", url, "HEAD"])
+    except ResolveError:
+        return None
+    for line in out.splitlines():
+        if line.startswith("ref: refs/heads/") and line.endswith("\tHEAD"):
+            return line[len("ref: refs/heads/") : -len("\tHEAD")]
+    return None
+
+
 def _cache_path(root: Path, registry: Registry) -> Path:
     return root / STORE_DIR / "repositories" / f"{registry.name}.json"
 
 
 def _load_raw(root: Path, registry: Registry) -> str:
     """Fetch a catalog's raw JSON (caching URL fetches under ``.agentry/repositories/``)."""
-    if _is_url(registry.location):
-        url = _normalize_url(registry.location)
+    repo = _repo_location(registry.location)
+    if repo is not None or _is_url(registry.location):
+        url = _raw_marketplace_url(*repo) if repo is not None else _normalize_url(registry.location)
         # S310: the scheme is gated by _is_url() above and re-checked after redirects below.
         req = urllib.request.Request(  # noqa: S310
             url, headers={"User-Agent": "agentry", "Accept": "application/json"}
@@ -130,6 +206,8 @@ def _load_raw(root: Path, registry: Registry) -> str:
     path = Path(registry.location)
     if not path.is_absolute():
         path = root / path
+    if path.is_dir():  # a marketplace root
+        path = path / MARKETPLACE_JSON
     if not path.is_file():
         raise RegistryError(f"catalog '{registry.name}': index not found at {path}")
     return path.read_text(encoding="utf-8")
@@ -142,11 +220,38 @@ def _load_raw(root: Path, registry: Registry) -> str:
 #: deterministic within a command: a catalog that resolved once won't intermittently fail
 #: later in the same run.
 _CATALOG_CACHE: dict[tuple[str, str, str], RepositoryIndex] = {}
+#: Translator warnings for marketplace catalogs, same key, by plugin name (``""`` = catalog).
+_CATALOG_WARNINGS: dict[tuple[str, str, str], dict[str, list[str]]] = {}
+
+
+def _memo_key(root: Path, registry: Registry) -> tuple[str, str, str]:
+    """Memo key; a local catalog file's mtime is part of it, so an edited file reloads."""
+    location = registry.location
+    if not _is_url(location) and _repo_location(location) is None:
+        path = Path(location) if Path(location).is_absolute() else root / location
+        if path.is_dir():
+            path = path / MARKETPLACE_JSON
+        with contextlib.suppress(OSError):
+            location = f"{location}@{path.stat().st_mtime_ns}"
+    return (str(root), registry.name, location)
 
 
 def clear_catalog_cache() -> None:
     """Drop the in-process catalog memo. For tests, and after mutating ``repositories``."""
     _CATALOG_CACHE.clear()
+    _CATALOG_WARNINGS.clear()
+
+
+def catalog_warnings(root: Path, registry: Registry, plugin: str | None = None) -> list[str]:
+    """What translating a marketplace catalog skipped or ignored (empty for a plain index).
+
+    Loads the catalog if needed. ``plugin`` narrows to one plugin's warnings.
+    """
+    load_catalog(root, registry)
+    by_plugin = _CATALOG_WARNINGS.get(_memo_key(root, registry), {})
+    if plugin is not None:
+        return list(by_plugin.get(plugin, []))
+    return [w for ws in by_plugin.values() for w in ws]
 
 
 def load_catalog(root: Path, registry: Registry) -> RepositoryIndex:
@@ -155,13 +260,20 @@ def load_catalog(root: Path, registry: Registry) -> RepositoryIndex:
     Memoized for the lifetime of the process — see :data:`_CATALOG_CACHE`. Errors are not
     cached, so a transient failure can be retried within the same run.
     """
-    key = (str(root), registry.name, registry.location)
+    key = _memo_key(root, registry)
     cached = _CATALOG_CACHE.get(key)
     if cached is not None:
         return cached
     raw = _load_raw(root, registry)
     try:
-        index = RepositoryIndex.model_validate(json.loads(raw))
+        doc = json.loads(raw)
+        if marketplace.is_marketplace(doc):  # a Claude plugin marketplace (ADR-002)
+            index, warnings = marketplace.to_index(
+                doc, _marketplace_base(root, registry), registry.name
+            )
+            _CATALOG_WARNINGS[key] = warnings
+        else:
+            index = RepositoryIndex.model_validate(doc)
     except (ValueError, json.JSONDecodeError) as exc:
         raise RegistryError(f"catalog '{registry.name}': invalid index: {exc}") from exc
     _CATALOG_CACHE[key] = index
@@ -256,6 +368,10 @@ def add_entry(
         body.pop("copy", None)
     if body.get("namespaced") is True:
         body.pop("namespaced", None)
+    src = body.get("source", {})
+    for key, default in (("pinned", False), ("default_branch", False), ("profiles", {})):
+        if src.get(key) == default:
+            src.pop(key, None)
     try:
         RepositoryIndex.model_validate(doc)
     except ValueError as exc:
@@ -336,10 +452,15 @@ def build_install_profiles(
 
 
 def find_repo(
-    root: Path, config: Config, name: str
+    root: Path, config: Config, name: str, *, catalog_name: str | None = None
 ) -> tuple[Registry, str, RepositoryEntry] | None:
-    """First catalog (in config order) that lists ``name``, with its entry."""
+    """First catalog (in config order) that lists ``name``, with its entry.
+
+    ``catalog_name`` restricts the search to that catalog (``add <catalog>/<plugin>``).
+    """
     for registry in config.repositories:
+        if catalog_name is not None and registry.name != catalog_name:
+            continue
         catalog = load_catalog(root, registry)
         entry = catalog.repositories.get(name)
         if entry is not None:

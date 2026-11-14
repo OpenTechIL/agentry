@@ -7,6 +7,7 @@ See :mod:`agentry.progname` for why user-facing hints interpolate the invoked na
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import sys
 from collections import Counter
@@ -32,12 +33,13 @@ from .models import (
     Config,
     GeneratorSpec,
     ProfileRule,
+    RepositoryEntry,
     Source,
     SourceType,
     Target,
     parse_keep,
 )
-from .naming import closest
+from .naming import closest, repo_basename
 from .progname import CANONICAL, prog
 from .reconcile import SyncResult, status, sync
 from .resolver import ResolveError, effective_root, resolve
@@ -317,6 +319,9 @@ def _print_result(res: SyncResult, *, verbose: bool = False) -> None:
     hidden: Counter[str] = Counter()
     summaries: list[str] = []
     if not verbose:
+        for line, msgs in res.grouped:  # one line per plugin pair's collisions
+            hidden.update({m: res.warnings.count(m) for m in msgs})
+            summaries.append(line)
         for kind, msgs in res.summarized.items():
             n = _summary_count(kind, msgs)
             # plugin lines collapse per source: one source's keys still print in full
@@ -343,11 +348,15 @@ def _add_from_catalog(
     types: list[ComponentType],
     allow_run: bool,
     verbose: bool = False,
+    catalog: str | None = None,
+    source_name: str | None = None,
 ) -> None:
     """Resolve a repo name via the configured catalogs and install all/selected components.
 
     ``names`` (from a ``<repo>@a,b`` ref) and ``types`` (from ``--type``) narrow what is
     installed; with neither, a TTY gets an interactive picker and a non-TTY installs everything.
+    ``catalog`` restricts the lookup (``<catalog>/<repo>``); ``source_name`` (``--name``)
+    names the source instead of the repo name.
     """
     from . import discovery
     from . import registry as reg
@@ -356,33 +365,43 @@ def _add_from_catalog(
     store = _load()
     config = store.parsed()
     try:
-        match = reg.find_repo(_root(), config, repo) if config.repositories else None
+        match = (
+            reg.find_repo(_root(), config, repo, catalog_name=catalog)
+            if config.repositories
+            else None
+        )
     except reg.RegistryError as exc:
         err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
     if match is None:
-        err.print(
-            f"[red]No catalog lists '{_e(repo)}'.[/red]\n"
-            f"Add one with `{prog()} catalog add <name> <file-or-url>`, or use the full "
-            "<source>/<type>/<name> form."
-        )
+        if catalog:
+            err.print(f"[red]Catalog '{_e(catalog)}' doesn't list '{_e(repo)}'.[/red]")
+        else:
+            err.print(
+                f"[red]No catalog lists '{_e(repo)}'.[/red]\n"
+                f"Add one with `{prog()} catalog add <name> <file-or-url>`, or use the full "
+                "<source>/<type>/<name> form."
+            )
         raise typer.Exit(1)
 
-    _, _, entry = match
-    rs = entry.source
-    src = (
-        Source(name=repo, type=SourceType.GIT, url=rs.url, ref=rs.ref, subdir=rs.subdir)
-        if rs.type is SourceType.GIT
-        else Source(name=repo, type=SourceType.LOCAL, path=rs.path, subdir=rs.subdir)
-    )
-    existing = config.source(repo)
+    registry, _, entry = match
+    name = source_name or _source_name_for(repo, entry)
+    for w in reg.catalog_warnings(_root(), registry, repo):
+        err.print(f"  [yellow]! {_e(w)}[/yellow]", soft_wrap=True)
+    src = _catalog_source(name, entry, registry.name)
+    existing = config.source(name)
     if existing is None:
         store.add_source(src)
-    elif (existing.url or existing.path) != (src.url or src.path):
-        err.print(
-            f"[red]A different source named '{_e(repo)}' already exists; rename or remove it first.[/red]"
-        )
-        raise typer.Exit(1)
+    elif not _same_source(existing, src):
+        if _moves_marketplace_pin(existing, src):
+            store.set_source_ref(name, src.ref, pinned_by=src.pinned_by)
+            console.print(f"  {_e(name)}: {_e(existing.ref[:7])} → {_e(src.ref[:7])}")
+        else:
+            err.print(
+                f"[red]A different source named '{_e(name)}' already exists; rename or remove "
+                f"it first, or add this one under another name with `--name`.[/red]"
+            )
+            raise typer.Exit(1)
 
     # Resolve into the store so we can discover what the repo provides.
     try:
@@ -395,7 +414,7 @@ def _add_from_catalog(
     # path/generate for artifacts discovery can't infer), else everything discovery finds.
     if entry.expose:
         available = [
-            Component(source=repo, type=e.type, name=e.name, path=e.path, generate=e.generate)
+            Component(source=name, type=e.type, name=e.name, path=e.path, generate=e.generate)
             for e in entry.expose
         ]
     else:
@@ -404,16 +423,14 @@ def _add_from_catalog(
         # fragments it would never use. reconcile skips them regardless; this is hygiene.
         active = set(config.active_targets())
         available = [
-            Component(source=repo, type=d.type, name=d.name)
+            Component(source=name, type=d.type, name=d.name)
             for d in discovery.discover(effective_root(_root(), src))
             if d.harness is None or d.harness in active
         ]
-    if not available:
-        err.print(f"[yellow]Repository '{_e(repo)}' provided no installable components.[/yellow]")
-        raise typer.Exit(1)
+    available = _installable(store, src, available, name)
 
     if names or types:
-        comps = _select_components(repo, available, names, types)
+        comps = _select_components(name, available, names, types)
     elif sys.stdin.isatty():
         comps = _interactive_pick(available)
     else:
@@ -423,17 +440,177 @@ def _add_from_catalog(
         raise typer.Exit(0)
 
     for comp in comps:
-        store.add_component(comp)
-    profiles = reg.build_install_profiles(entry, repo, comps, config.targets)  # config order
+        if store.parsed().find_component(comp.ref) is None:
+            store.add_component(comp)
+    profiles = reg.build_install_profiles(entry, name, comps, config.targets)  # config order
     if profiles and store.merge_target_profiles(profiles):
         console.print(
             "  [dim]added target_profiles from catalog (install overrides for this repo)[/dim]"
         )
     _save_validated(store)
-    console.print(
-        f"[green]Added[/green] {_e(repo)} [dim]({_e(len(comps))} component(s) from catalog)[/dim]"
-    )
     _do_sync(allow_run=allow_run, verbose=verbose)
+    _report_added(name, comps)
+
+
+def _report_added(name: str, comps: list[Component]) -> None:
+    """The closing line of a catalog add (after its sync)."""
+    blocked = _all_blocked(comps)
+    if blocked:
+        # PM: every component refused by an existing entry (W1/W1-name/W5/W5-name/W5-path).
+        # Still added (the user may free the entry later) — but never a plain "Added".
+        console.print(
+            f"[yellow]Added {_e(name)}, but nothing from it is installed yet — {_e(blocked)} "
+            f"component(s) blocked by existing entries (see warnings above, or "
+            f"`{prog()} status`).[/yellow]",
+            soft_wrap=True,
+        )
+        return
+    console.print(
+        f"[green]Added[/green] {_e(name)} [dim]({_e(len(comps))} component(s) from catalog)[/dim]"
+    )
+
+
+def _all_blocked(comps: list[Component]) -> int:
+    """How many of ``comps`` are blocked by existing entries, when *none* of them installed
+    anywhere (0 otherwise): every status row of theirs is ``missing``."""
+    try:
+        rows, _ = status(_root())
+    except (ResolveError, DependencyError):
+        return 0
+    refs = {c.ref for c in comps}
+    mine = [r for r in rows if r.ref in refs]
+    if not mine or any(r.state.startswith("ok") for r in mine):
+        return 0
+    return len({r.ref for r in mine})
+
+
+def _source_name_for(repo: str, entry: RepositoryEntry) -> str:
+    """The source name for a catalog entry: its name, made path-safe for a marketplace
+    plugin whose name isn't (it names a store dir and the claude command dir)."""
+    from .marketplace import is_safe_segment
+
+    if entry.source.plugin is None or is_safe_segment(repo):
+        return repo
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "-", repo).strip("-.")
+    locator = entry.source.url or entry.source.path or ""
+    return slug if is_safe_segment(slug) else repo_basename(locator, fallback="plugin")
+
+
+def _catalog_source(name: str, entry: RepositoryEntry, catalog: str) -> Source:
+    """The Source a catalog entry installs as (a marketplace ``sha`` pin records its catalog)."""
+    from . import registry as reg
+    from .marketplace import is_safe_segment, plugin_profiles
+
+    rs = entry.source
+    profiles = rs.profiles
+    if rs.plugin is not None and not is_safe_segment(rs.plugin):
+        # The plugin name can't be a folder: nest its claude commands under the source name.
+        safe = is_safe_segment(name)
+        profiles = plugin_profiles(name if safe else None)
+        where = f".claude/commands/{name}/" if safe else "flat in .claude/commands/"
+        err.print(
+            f"  [yellow]! {_e(name)}: plugin name '{_e(rs.plugin)}' isn't a safe folder name — "
+            f"its commands install {_e(where)} instead. Use `--name` to choose the folder."
+            "[/yellow]",
+            soft_wrap=True,
+        )
+    if rs.type is not SourceType.GIT:
+        return Source(
+            name=name, type=SourceType.LOCAL, path=rs.path, subdir=rs.subdir, profiles=profiles
+        )
+    ref = rs.ref
+    if rs.default_branch and rs.url:
+        found = reg.default_branch(rs.url)
+        if found is None:
+            err.print(
+                f"  [yellow]! {_e(name)}: couldn't read the default branch of {_e(rs.url)} — "
+                f"used '{_e(ref)}'. Add the marketplace by a tree URL (…/tree/<branch>) to "
+                "choose the branch.[/yellow]",
+                soft_wrap=True,
+            )
+        else:
+            ref = found
+    return Source(
+        name=name,
+        type=SourceType.GIT,
+        url=rs.url,
+        ref=ref,
+        subdir=rs.subdir,
+        pinned_by=catalog if rs.pinned else None,
+        profiles=profiles,
+    )
+
+
+def _same_source(a: Source, b: Source) -> bool:
+    """Catalog-add identity (ADR-002 B): type, url or path, subdir and ref."""
+    return (
+        a.type,
+        a.url or a.path,
+        a.subdir or None,
+        a.ref if a.type is SourceType.GIT else None,
+    ) == (
+        b.type,
+        b.url or b.path,
+        b.subdir or None,
+        b.ref if b.type is SourceType.GIT else None,
+    )
+
+
+def _moves_marketplace_pin(existing: Source, new: Source) -> bool:
+    """Re-adding a marketplace plugin whose ``sha`` moved: same repo, new pin (M1)."""
+    return (
+        new.pinned_by is not None
+        and (existing.type, existing.url, existing.subdir or None)
+        == (new.type, new.url, new.subdir or None)
+        and existing.ref != new.ref
+    )
+
+
+def _installable(
+    store: ConfigStore, src: Source, available: list[Component], name: str
+) -> list[Component]:
+    """The components that install on at least one active target (ADR-002 M2).
+
+    A dry-run plan of the project with ``src`` and ``available`` added. None installable →
+    print why and exit 1 before anything is written (the store is only saved on success).
+    """
+    from .reconcile import compute_desired
+
+    config = store.parsed()
+    ordered = list(dict.fromkeys(config.targets))  # .agentry.yml order, deterministic
+    targets = ", ".join(ordered) or "none"
+    if not available:
+        err.print(
+            f"[yellow]{_e(name)}: it ships no components agentry can install — nothing was "
+            "added.[/yellow]"
+        )
+        raise typer.Exit(1)
+    sources = [s for s in config.sources if s.name != src.name] + [src]
+    known = {c.ref for c in config.components}
+    comps = [*config.components, *(c for c in available if c.ref not in known)]
+    trial = config.model_copy(update={"sources": sources, "components": comps})
+    warnings: list[str] = []
+    plan = compute_desired(_root(), trial, warnings)
+    installs: set[str] = {loser for loser, *_ in plan.path_losers}
+    for group in (plan.links, plan.copies, plan.transforms):
+        installs.update(d.component for d in group)
+    installs.update(d.component for d in plan.merges)
+    installs.update(d.component for d in plan.link_merges)
+    installs.update(d.component for d in plan.generates)
+    keep = [c for c in available if c.ref in installs]
+    if keep:
+        return keep
+    for w in warnings:
+        if w.startswith((f"{name}/", f"source '{name}'")):
+            err.print(f"  [yellow]! {_e(w)}[/yellow]", soft_wrap=True)
+    ships = ", ".join(sorted({c.type.value for c in available}))
+    verb = "doesn't" if len(ordered) == 1 else "don't"
+    err.print(
+        f"[yellow]{_e(name)}: none of its components install into your targets ({_e(targets)}) "
+        f"— it ships {_e(ships)}, which {_e(targets)} {verb} support. Nothing was added.[/yellow]",
+        soft_wrap=True,
+    )
+    raise typer.Exit(1)
 
 
 def _select_components(
@@ -760,25 +937,54 @@ def add(
         "--produces",
         help="Path(s) the generate command creates; agentry tracks + cleans exactly these. Repeatable.",
     ),
+    source_name: str = typer.Option(
+        None,
+        "--name",
+        help="Catalog refs only: name the new source this instead of the repo/plugin name.",
+    ),
     allow_run: bool = _ALLOW_RUN,
     verbose: bool = _VERBOSE,
 ) -> None:
     """Enable a component and install it.
 
-    REF is one of: a catalog repo name (``agentry add arckit`` — whole repo), a catalog repo with
-    selected components (``agentry add arckit@code-review,lint``), or a full component ref
+    REF is one of: a catalog repo name (``agentry add arckit`` — whole repo, or
+    ``<catalog>/<repo>`` for one catalog's), a catalog repo with selected components
+    (``agentry add arckit@code-review,lint``), or a full component ref
     ``<source>/<type>/<name>``. ``--type`` filters a catalog install by component type.
     """
     import shlex
 
-    # A catalog ref never contains '/'; a manual <source>/<type>/<name> ref never contains '@'.
-    if "/" not in ref:
-        repo, _, names_raw = ref.partition("@")
+    # A catalog ref is <repo>[@names] or <catalog>/<repo>[@names]; a manual
+    # <source>/<type>/<name> ref has three parts and never contains '@'.
+    head, _, names_raw = ref.partition("@")
+    first, _, rest = head.partition("/")
+    if "/" in head:
+        cfg = _load().parsed()
+        middle = rest.split("/", 1)[0]
+        manual = (
+            head.count("/") == 2
+            and cfg.source(first) is not None
+            and middle in {t.value for t in ComponentType}
+        )
+        catalogs = set() if manual else {r.name for r in cfg.repositories}
+    else:
+        catalogs = set()
+    if "/" not in head or first in catalogs:
+        catalog, repo = (first, rest) if first in catalogs else ("", head)
         names = [n.strip() for n in names_raw.split(",") if n.strip()] if names_raw else []
         _add_from_catalog(
-            repo, names, types=_parse_types(type_), allow_run=allow_run, verbose=verbose
+            repo,
+            names,
+            types=_parse_types(type_),
+            allow_run=allow_run,
+            verbose=verbose,
+            catalog=catalog or None,
+            source_name=source_name,
         )
         return
+    if source_name:
+        err.print("[red]--name applies only to catalog refs.[/red]")
+        raise typer.Exit(1)
 
     if type_:
         err.print(
@@ -881,6 +1087,7 @@ def update(
     With SOURCES, only those sources move; every other source keeps its pinned revision.
     """
     if not sources:
+        _report_marketplace_pins(_load().parsed(), None)
         _do_sync(update=True, verbose=verbose)
         return
     config = _load().parsed()
@@ -898,7 +1105,26 @@ def update(
             style="red",
         )
         raise typer.Exit(1)
+    _report_marketplace_pins(config, set(sources))
     _do_sync(update=True, verbose=verbose, update_only=frozenset(sources))
+
+
+def _report_marketplace_pins(config: Config, names: set[str] | None) -> None:
+    """M1: a marketplace ``sha`` pin is never a silent no-op on ``update``."""
+    for src in config.sources:
+        if names is not None and src.name not in names:
+            continue
+        if src.pinned_by and _is_sha(src.ref):
+            console.print(
+                f"  {_e(src.name)}: pinned to {_e(src.ref[:7])} by marketplace "
+                f"'{_e(src.pinned_by)}' — not moved. Re-run `{prog()} add {_e(src.name)}` to take "
+                "the marketplace's current pin.",
+                soft_wrap=True,
+            )
+
+
+def _is_sha(ref: str) -> bool:
+    return len(ref) == 40 and all(c in "0123456789abcdef" for c in ref.lower())
 
 
 @app.command(name="deps")
@@ -1081,6 +1307,10 @@ def why_cmd(ref: str = typer.Argument(..., help="Component ref: <source>/<type>/
     defined_in = _plugin_origin(store, component)
     if defined_in is not None:
         tree.add(f"defined in: {_e(defined_in)}")
+    own = store.parsed().source(component.source)
+    for tname, rules in (own.profiles if own is not None else {}).items():
+        if component.type in rules:  # the source's own profile decided where this installs
+            tree.add(f"placement: source profile ({_e(tname)}.{_e(component.type.value)})")
     targets = tree.add("installs to")
     style = {"ok": "green", "ok (kept)": "green", "missing": "red", "drift": "yellow"}
     mine = [r for r in rows if r.ref == ref]
@@ -1293,6 +1523,22 @@ def catalog_add(
         raise typer.Exit(1)
     store.save()  # no sync: catalogs are how a missing target gets fixed
     console.print(f"[green]Added catalog[/green] {_e(name)} → [dim]{_e(location)}[/dim]")
+    # A marketplace reports what it skipped (unsupported sources, bad entries, ignored fields).
+    from . import registry as reg
+
+    registry = Registry(name=name, location=location)
+    try:
+        index = reg.load_catalog(_root(), registry)
+        notes = reg.catalog_warnings(_root(), registry)
+    except reg.RegistryError as exc:
+        err.print(f"  [yellow]! {_e(exc)}[/yellow]", soft_wrap=True)
+        return
+    for w in notes:
+        err.print(f"  [yellow]! {_e(w)}[/yellow]", soft_wrap=True)
+    if notes or index.repositories:
+        console.print(
+            f"  [dim]{_e(len(index.repositories))} repo(s) listed — see `{prog()} search`[/dim]"
+        )
 
 
 @catalog_app.command("remove")
