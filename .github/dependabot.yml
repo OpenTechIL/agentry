@@ -1,11 +1,16 @@
 version: 2
 updates:
-  # `uv` (not `pip`): updates pyproject.toml *and* uv.lock together, so dependency PRs
-  # pass CI's `uv lock --check` / `--locked` instead of leaving the lock stale.
+  # `uv` (not `pip`): updates uv.lock itself, so dependency PRs pass CI's
+  # `uv lock --check` / `--locked` instead of leaving the lock stale.
   - package-ecosystem: uv
     directory: "/"
-    # Keep pyproject floors put (only uv.lock moves) unless a new version falls outside the range.
-    versioning-strategy: increase-if-necessary
+    # Lock-only updates: pyproject floors never move, only uv.lock does. Not
+    # `increase-if-necessary`: GitHub drops every versioning-strategy value except
+    # lockfile-only before a uv job runs (dependabot-core #16112, #14908), so floors kept
+    # being raised. lockfile-only does reach uv jobs (#16449; transitive deps fixed in #16686).
+    # Trade-off: a release that needs a range change, or a security fix that needs a
+    # floor raise, gets no automatic PR. Handle those by hand from the Dependabot alert.
+    versioning-strategy: lockfile-only
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
