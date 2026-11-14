@@ -657,6 +657,26 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
   - **Removal** deletes only owned, non-preexisting keys whose fingerprint still matches. An
     edited entry is left in place, with a warning. A key whose ownership was never proven (no
     fingerprint) is never removed.
+  - **Config files agentry created** (#45). When a merge writes a config file that didn't exist,
+    the manifest records it in `created_files`, and every folder created for it in
+    `created_dirs`. When a sync leaves such a file as **exactly agentry's empty skeleton**, the
+    file is deleted (`- remove {file} (created by agentry, now empty)`). The skeleton is either
+    no keys at all, or only the pointer keys agentry merges into, each an empty mapping, and it
+    must serialise identically to a freshly built skeleton. Its recorded folders are then removed
+    deepest-first, but only while they are completely empty. The file **stays** in every other
+    case:
+    - a key the user added, even one with an empty or falsy value;
+    - a comment (TOML keeps them; JSON with a comment doesn't parse);
+    - a parse failure;
+    - a file that existed before agentry first wrote to it;
+    - a file in a manifest without these records, i.e. an older install, whose provenance is
+      unknown.
+
+    A folder that agentry didn't record is never removed. `status` and `doctor` only read. A
+    second sync finds nothing to do, and a later install that recreates the file records it
+    again. One residual is accepted: if the user deletes an agentry-created file and puts back a
+    content-free `{}` of their own under the same name, it is indistinguishable from the skeleton
+    and is removed with the last agentry entry.
   - **Old manifests.** A v1 manifest (keys only) loads unchanged and is migrated on the next
     sync. A recorded key becomes owned only if its on-disk value equals what the component
     ships now. For link+merge, the comparison uses the rewritten fragment. Otherwise the key is

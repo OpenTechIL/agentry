@@ -895,6 +895,22 @@ The trust prompt declines, and `target add` refuses without `--yes`. On an older
 the prompts: name what to install (`agentry add <repo>@name[,name]` or `--type <type>`), and pass
 `--yes` to `target add`.
 
+## A config file disappeared (or stayed) after removing a component
+
+When you remove the last component that merges into a config file, agentry deletes the file
+only if **agentry created it** and it's now back to empty. It prints:
+
+```text
+- remove .mcp.json (created by agentry, now empty)
+```
+
+For `.codex/config.toml`, the `.codex/` folder goes too if agentry created it and it's now empty.
+The file is kept if:
+- it existed before agentry first wrote to it, even as `{}`;
+- anything else is left in it: one of your own entries, or any other key;
+- it came from an install made by an older agentry, which didn't record creating it. That file
+  stays, as `{}` or similar. Delete it by hand if you don't need it.
+
 ## A summary line instead of individual warnings
 
 To keep output readable, `sync`, `install`, `update` and `add` collapse a warning that occurs two

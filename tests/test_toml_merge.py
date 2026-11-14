@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 import tomlkit
 
 from agentry.config import ConfigStore
@@ -93,9 +94,13 @@ def test_sync_codex_mcp_into_config_toml(tmp_path: Path, local_source: Path):
     assert all(r.state == "ok" for r in rows)
 
 
-def test_sync_codex_mcp_removed_on_disable(tmp_path: Path, local_source: Path):
+@pytest.mark.parametrize("preexisting", [True, False], ids=["user_file", "agentry_file"])
+def test_sync_codex_mcp_removed_on_disable(tmp_path: Path, local_source: Path, preexisting):
     proj = tmp_path / "proj"
     proj.mkdir()
+    if preexisting:  # the user's own config.toml, so it outlives agentry's entry
+        (proj / ".codex").mkdir()
+        (proj / ".codex/config.toml").write_bytes(b'model = "mine"\n')
     ConfigStore.create(proj, ["codex"]).save()
     store = ConfigStore.load(proj)
     store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(local_source)))
@@ -107,13 +112,18 @@ def test_sync_codex_mcp_removed_on_disable(tmp_path: Path, local_source: Path):
         in tomlkit.parse((proj / ".codex/config.toml").read_text(encoding="utf-8"))["mcp_servers"]
     )
 
-    # Disable and re-sync: agentry's entry is stripped, file remains valid TOML.
+    # Disable and re-sync: agentry's entry is stripped.
     store2 = ConfigStore.load(proj)
     store2.set_enabled("s/mcp/github", False)
     store2.save()
     sync(proj)
-    doc = tomlkit.parse((proj / ".codex/config.toml").read_text(encoding="utf-8"))
-    assert "mcp_servers" not in doc or "github" not in doc.get("mcp_servers", {})
+    if preexisting:  # original guarantee: the file remains valid TOML, the user's key kept
+        doc = tomlkit.parse((proj / ".codex/config.toml").read_text(encoding="utf-8"))
+        assert "mcp_servers" not in doc or "github" not in doc.get("mcp_servers", {})
+        assert doc["model"] == "mine"
+    else:  # #45: agentry created config.toml and .codex/, so both are deleted once empty
+        assert not (proj / ".codex/config.toml").exists()
+        assert not (proj / ".codex").exists()
 
 
 def test_json_merge_unaffected_by_toml_path(tmp_path: Path):
