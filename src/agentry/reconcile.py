@@ -1866,8 +1866,14 @@ def _reconcile_merge_targets(
     kept), and each changed file is written once at the end. Runs after generators, so
     conflicts are judged against whatever a generator wrote.
     """
-    docs = merge_inst.Documents(root)
+    docs = merge_inst.Documents(root, manifest.created_files, manifest.created_dirs)
     records: list[InstalledMerge | InstalledLinkMerge] = [*manifest.merges, *manifest.link_merges]
+    # Every pointer agentry merges into, per file: the only keys an empty skeleton may hold.
+    pointers: dict[str, set[str]] = {}
+    for rec in records:
+        pointers.setdefault(rec.file, set()).add(rec.pointer)
+    for dest in [*(dm.dest for dm in merges), *(dlm.dest for dlm in link_merges)]:
+        pointers.setdefault(dest.file, set()).add(dest.pointer)
     if update and any(r.keys and not r.entries for r in records):
         # Migration verifies v1 entries against the fragment being installed; after a
         # re-resolve that is the *new* revision, so unchanged entries can't be proven.
@@ -1890,7 +1896,10 @@ def _reconcile_merge_targets(
     _reconcile_link_merges(
         root, docs, link_merges, manifest, result, claims, kept_for, path_owned or set()
     )
-    docs.flush()
+    for file in docs.flush(pointers):
+        result.removed.append(f"remove {file} (created by agentry, now empty)")
+    manifest.created_files = sorted(docs.created_files)
+    manifest.created_dirs = sorted(docs.created_dirs)
     owned_now: set[tuple[Who, str, str, str]] = set()
     for mrec in manifest.merges:
         owned_now.update(

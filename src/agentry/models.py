@@ -758,6 +758,11 @@ class Manifest(BaseModel):
     generated: list[InstalledGenerated] = Field(default_factory=list)
     link_merges: list[InstalledLinkMerge] = Field(default_factory=list)
     transforms: list[InstalledTransform] = Field(default_factory=list)
+    # Config files agentry's own merge created, and the folders it created for them
+    # (project-relative). Only these are ever deleted, once back to agentry's empty skeleton
+    # (#45). Absent in older manifests ⇒ nothing is deleted. Additive: still version 2.
+    created_files: list[str] = Field(default_factory=list)
+    created_dirs: list[str] = Field(default_factory=list)
 
 
 Source.model_rebuild()  # ``profiles`` refers to ProfileRule, defined after Source

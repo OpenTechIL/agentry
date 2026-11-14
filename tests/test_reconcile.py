@@ -161,7 +161,8 @@ def test_merge_install_and_reversible(project: Path, local_source: Path):
     assert "hand-added" in after["mcpServers"]
 
 
-def test_root_mcp_json_merges_without_path(project: Path, tmp_path: Path):
+@pytest.mark.parametrize("preexisting", [True, False], ids=["user_file", "agentry_file"])
+def test_root_mcp_json_merges_without_path(project: Path, tmp_path: Path, preexisting: bool):
     # A plugin-style source whose MCP is a single root `.mcp.json` (not mcp/<name>.json).
     # Discovery surfaces it as `s/mcp/mcp`, no --path needed.
     src = tmp_path / "plugin"
@@ -177,6 +178,8 @@ def test_root_mcp_json_merges_without_path(project: Path, tmp_path: Path):
         ),
         encoding="utf-8",
     )
+    if preexisting:  # the user's own .mcp.json (empty), so it outlives agentry's servers
+        (project / ".mcp.json").write_bytes(b"{}\n")
     _wire(project, src, (ComponentType.MCP, "mcp"))
     res = sync(project)
     assert not res.warnings
@@ -191,8 +194,11 @@ def test_root_mcp_json_merges_without_path(project: Path, tmp_path: Path):
     store.set_enabled("s/mcp/mcp", False)
     store.save()
     sync(project)
-    after = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
-    assert "mcpServers" not in after or not after["mcpServers"]
+    if preexisting:  # original guarantee: exactly those servers go, the file stays
+        after = json.loads((project / ".mcp.json").read_text(encoding="utf-8"))
+        assert "mcpServers" not in after or not after["mcpServers"]
+    else:  # #45: agentry created .mcp.json, so once empty it's deleted
+        assert not (project / ".mcp.json").exists()
 
 
 def test_sync_warns_on_unset_env_var_in_mcp(project: Path, tmp_path: Path):
@@ -415,7 +421,8 @@ def test_select_entries_unwraps_and_passes_through():
     assert merge.select_entries({"mcpServers": {"gh": {"x": 1}}}, oc_dest) == {"gh": {"x": 1}}
 
 
-def test_wrapped_hooks_fragment_installs_flat(project: Path, tmp_path: Path):
+@pytest.mark.parametrize("preexisting", [True, False], ids=["user_file", "agentry_file"])
+def test_wrapped_hooks_fragment_installs_flat(project: Path, tmp_path: Path, preexisting: bool):
     # A source shipping a Claude-Code-plugin-shaped hooks.json (wrapped under "hooks"
     # with a sibling "description") must merge as flat event entries — not double-nested.
     src = tmp_path / "wrapsrc"
@@ -431,6 +438,9 @@ def test_wrapped_hooks_fragment_installs_flat(project: Path, tmp_path: Path):
         ),
         encoding="utf-8",
     )
+    if preexisting:  # the user's own settings.json, so it outlives agentry's hooks
+        (project / ".claude").mkdir(exist_ok=True)
+        (project / ".claude/settings.json").write_bytes(b'{"theme": "mine"}\n')
     _wire(project, src, (ComponentType.HOOK, "hooks"))
     sync(project)
 
@@ -447,8 +457,12 @@ def test_wrapped_hooks_fragment_installs_flat(project: Path, tmp_path: Path):
     store.set_enabled("s/hook/hooks", False)
     store.save()
     sync(project)
-    after = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
-    assert "hooks" not in after or "Stop" not in after.get("hooks", {})
+    if preexisting:  # original guarantee: the event key goes cleanly; the user's key stays
+        after = json.loads((project / ".claude/settings.json").read_text(encoding="utf-8"))
+        assert "hooks" not in after or "Stop" not in after.get("hooks", {})
+        assert after["theme"] == "mine"
+    else:  # #45: agentry created settings.json, so once empty it's deleted
+        assert not (project / ".claude/settings.json").exists()
 
 
 def _multi_harness_hooks_source(tmp_path: Path) -> Path:

@@ -498,11 +498,15 @@ def test_user_slot_upstream_change_does_not_duplicate(tmp_path: Path):
     assert _cmds(proj, "PreToolUse") == ["ours-v2"]
 
 
+@pytest.mark.parametrize("preexisting", [True, False], ids=["user_file", "agentry_file"])
 @pytest.mark.parametrize("config_order", ["creator_first", "other_first"])
-def test_created_key_handover_persists_both_orders(tmp_path: Path, config_order):
+def test_created_key_handover_persists_both_orders(tmp_path: Path, config_order, preexisting):
     """A creates the event key, B appends. Disable A, then B: the key is gone either way
     (no leftover `[]`), and between the two the hand-over of `created_key` is persisted."""
     proj, _ = _project(tmp_path, {"creator": {"Stop": [_g("c")]}})
+    if preexisting:  # the user's own settings.json, so it outlives agentry's entries
+        (proj / SETTINGS).parent.mkdir(parents=True, exist_ok=True)
+        (proj / SETTINGS).write_bytes(b'{"theme": "mine"}\n')
     sync(proj)  # `creator` creates the Stop key
     _write_hook(tmp_path / "src", "other", {"Stop": [_g("o")]})
     store = ConfigStore.load(proj)
@@ -524,7 +528,12 @@ def test_created_key_handover_persists_both_orders(tmp_path: Path, config_order)
     _set(proj, "s/hook/other", False)
     sync(proj)
     assert "Stop" not in _hooks(proj)
-    assert "[]" not in (proj / SETTINGS).read_text(encoding="utf-8")
+    if preexisting:  # original guarantee: the key is gone, no leftover `[]`, user key kept
+        text = (proj / SETTINGS).read_text(encoding="utf-8")
+        assert "[]" not in text
+        assert json.loads(text)["theme"] == "mine"
+    else:  # #45: agentry created settings.json, so once empty it's deleted outright
+        assert not (proj / SETTINGS).exists()
 
 
 def test_created_key_deleted_when_both_claimants_go_in_one_sync(tmp_path: Path):

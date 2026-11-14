@@ -360,11 +360,11 @@ def test_remove_plugin_fully_reversible(tmp_path: Path, monkeypatch):
     for comp in [c for c in ConfigStore.load(proj).parsed().components if c.source == "tools"]:
         assert _cli(proj, monkeypatch, "remove", comp.ref).exit_code == 0
     after = _snapshot(proj)
-    # Merge removal is key-scoped, not byte-scoped (as for every merge since ADR-001): config
-    # files are compared parsed; a config file agentry itself created may remain as `{}`.
-    for rel in set(after) - set(before):
-        assert rel.endswith(".json") and json.loads(after[rel]) == {}, rel
-    assert set(before) <= set(after)
+    # Merge removal is key-scoped, not byte-scoped (as for every merge since ADR-001): the
+    # user's config files are compared parsed. A config file agentry itself created (here
+    # opencode.json) and the folders it created are deleted once emptied (#45): nothing new
+    # is left behind.
+    assert set(after) == set(before), sorted(set(after) ^ set(before))
     user_mcp = json.loads(after[".mcp.json"])["mcpServers"]
     assert user_mcp == {"mine": {"command": "USER"}}  # the user's entry survives, ours is gone
     for rel, data in before.items():

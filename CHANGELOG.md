@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Removing the last component no longer leaves an empty config file behind** when agentry
+  created that file. For example, after the last MCP server is removed, `.mcp.json` (or
+  `.codex/config.toml`, along with the `.codex/` folder agentry created) is deleted, and the
+  removal prints `- remove .mcp.json (created by agentry, now empty)`. A file is kept if it
+  existed before agentry wrote to it, or if anything else is left in it, such as your own entry
+  or another key. Files from installs made by an earlier version are left alone, because agentry
+  didn't record creating them.
+
 ## [0.3.1] — 2026-11-15
 
 ### Fixed

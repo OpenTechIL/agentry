@@ -226,12 +226,23 @@ class Documents:
 
     A parse failure is cached too, so every component targeting the same broken file gets
     the same :class:`MergeTargetError` without re-reading it.
+
+    ``created_files`` / ``created_dirs`` (#45) are the manifest's records of config files
+    and folders agentry created; :meth:`flush` adds what it creates and deletes a recorded
+    file once it is back to agentry's empty skeleton (with its recorded, now-empty folders).
     """
 
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        created_files: list[str] | None = None,
+        created_dirs: list[str] | None = None,
+    ) -> None:
         self.root = root
         self._docs: dict[str, tuple[Path, MutableMapping, str | None]] = {}
         self._errors: dict[str, MergeTargetError] = {}
+        self.created_files: set[str] = set(created_files or [])
+        self.created_dirs: set[str] = set(created_dirs or [])
 
     def get(self, file: str) -> MutableMapping:
         if file in self._errors:
@@ -247,10 +258,72 @@ class Documents:
             self._docs[file] = (path, doc, before)
         return self._docs[file][1]
 
-    def flush(self) -> None:
-        """Write every document that changed (unchanged files are left byte-identical)."""
-        for path, doc, before in self._docs.values():
+    def flush(self, pointers: dict[str, set[str]] | None = None) -> list[str]:
+        """Write every document that changed (unchanged files are left byte-identical).
+
+        A file agentry created that is now its empty skeleton (only ``pointers[file]`` keys,
+        each an empty mapping, nothing else — not even a comment) is deleted instead, with
+        the folders agentry created for it once they're empty. Returns the deleted files.
+        """
+        deleted: list[str] = []
+        for file, (path, doc, before) in self._docs.items():
+            if file in self.created_files and _is_skeleton(path, doc, (pointers or {}).get(file)):
+                if path.is_file():
+                    path.unlink()
+                    deleted.append(file)
+                self.created_files.discard(file)
+                self._prune_created_dirs(path.parent)
+                continue
+            if before is None:
+                if not doc:
+                    continue  # nothing to write: never create an empty file
+                new_dirs = self._missing_dirs(path.parent)
+                _write_doc(path, doc, before=before)
+                self.created_files.add(file)
+                self.created_dirs.update(new_dirs)
+                continue
             _write_doc(path, doc, before=before)
+        return deleted
+
+    def _rel(self, path: Path) -> str:
+        return path.relative_to(self.root).as_posix()
+
+    def _missing_dirs(self, directory: Path) -> list[str]:
+        """The folders between the project root and ``directory`` that don't exist yet."""
+        out: list[str] = []
+        d = directory
+        while d != self.root and self.root in d.parents and not d.exists():
+            out.append(self._rel(d))
+            d = d.parent
+        return out
+
+    def _prune_created_dirs(self, directory: Path) -> None:
+        """Remove recorded, completely empty folders deepest-first; stop at the first one
+        that isn't recorded, isn't empty (hidden files count), or is the project root."""
+        d = directory
+        while d != self.root and self.root in d.parents:
+            rel = self._rel(d)
+            if rel not in self.created_dirs or d.is_symlink() or not d.is_dir():
+                return
+            if any(d.iterdir()):
+                return
+            d.rmdir()
+            self.created_dirs.discard(rel)
+            d = d.parent
+
+
+def _is_skeleton(path: Path, doc: MutableMapping, pointers: set[str] | None) -> bool:
+    """Whether ``doc`` is exactly the empty skeleton agentry writes: no keys, or only
+    agentry's ``pointers`` each holding an empty mapping — and it serializes identically to
+    a freshly built skeleton, so a TOML comment or any other content keeps the file."""
+    allowed = pointers or set()
+    for key, value in doc.items():
+        if key not in allowed or not isinstance(value, MutableMapping) or len(value) != 0:
+            return False
+    skeleton: MutableMapping = tomlkit.document() if _is_toml(path) else {}
+    for key in doc:
+        skeleton[key] = tomlkit.table() if _is_toml(path) else {}
+    return _serialize(path, doc) == _serialize(path, skeleton)
 
 
 _ABSENT = object()
