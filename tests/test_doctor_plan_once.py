@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -22,7 +23,7 @@ from agentry.config import ConfigStore
 from agentry.doctor import run_checks
 from agentry.models import Component, Source, SourceType
 from agentry.models import ComponentType as C
-from agentry.reconcile import sync
+from agentry.reconcile import plan_for_status, status, sync
 
 _ENV = {"COLUMNS": "200", "PATH": "/usr/bin:/bin"}
 
@@ -30,6 +31,16 @@ DOCTOR_STDOUT = "  ! format  s/mcp/gh: may not work in opencode (expects `type: 
 DOCTOR_STDERR = ""
 STATUS_STDOUT = "                      Install status                      \n┏━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓\n┃ ref        ┃ target   ┃ where                ┃ state   ┃\n┡━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩\n│ s/mcp/gh   │ claude   │ .mcp.json:mcpServers │ drift   │\n│ s/mcp/gh   │ opencode │ opencode.json:mcp    │ ok      │\n│ s/mcp/mine │ claude   │ .mcp.json:mcpServers │ missing │\n└────────────┴──────────┴──────────────────────┴─────────┘\n  s/mcp/gh → claude: edited by hand — delete the entry and run `agentry sync` to restore it, or run `agentry keep s/mcp/gh claude:gh` to keep yours\n  s/mcp/mine → claude: .mcp.json already has 'mcpServers.mine' (not added by agentry) — rename or remove your entry, or disable s/mcp/mine\n"
 STATUS_STDERR = "! s/mcp/gh: target 'copilot' is not in the project's targets — skipped. Add it with `agentry target use copilot`, or remove it from this component.\n! s/mcp/gh: may not work in opencode (expects `type: \"local\"` with `command` as one array and `environment`): 'gh' has no 'type'; 'gh'.command is a string, not an array; 'gh' uses 'args', which is not\naccepted — installed as-is. Ship an opencode-specific mcp, or override mcp for opencode under target_profiles\n"
+
+
+_BOX = re.compile("[\u2500-\u257f]")
+
+
+def _portable(text: str) -> str:
+    """Normalize what legitimately varies by platform: Rich's table box style (heavy vs light
+    box-drawing glyphs on Windows) and where long lines wrap. Every word, every cell and every
+    border position still has to match."""
+    return " ".join(_BOX.sub("#", text).split())
 
 
 def _golden_project(tmp: Path) -> Path:
@@ -65,7 +76,25 @@ def test_golden_doctor_and_status_output_unchanged(tmp_path: Path, monkeypatch, 
     res = CliRunner(env=_ENV).invoke(app, [cmd])
     assert res.exit_code == 0, res.output
     expected = {"doctor": (DOCTOR_STDOUT, DOCTOR_STDERR), "status": (STATUS_STDOUT, STATUS_STDERR)}
-    assert (res.stdout, res.stderr) == expected[cmd]
+    want_out, want_err = expected[cmd]
+    assert _portable(res.stdout) == _portable(want_out)
+    assert _portable(res.stderr) == _portable(want_err)
+
+
+def test_status_reusing_a_plan_matches_status_planning_itself(tmp_path: Path):
+    """Same-run, byte-exact: status(planned=...) (doctor's path) equals status() planning on its
+    own, rows and warnings both."""
+    proj = _golden_project(tmp_path)
+    config = ConfigStore.load(proj).parsed()
+    assert status(proj, planned=plan_for_status(proj, config)) == status(proj)
+
+
+def test_portable_normalization_still_discriminates():
+    """Guard the guard: normalization absorbs box style and wrapping, nothing else."""
+    assert _portable("┏━┳┓\n┃ a ┃") == _portable("┌─┬┐\n│ a │")
+    assert _portable("which is not\naccepted") == _portable("which is \nnot accepted")
+    assert _portable(STATUS_STDOUT) != _portable(STATUS_STDOUT.replace("drift", "ok", 1))
+    assert _portable(STATUS_STDOUT) != _portable(STATUS_STDOUT.replace("│ ok", "  ok", 1))
 
 
 def test_doctor_with_undefined_target_shows_target_error_and_no_drift(tmp_path: Path):

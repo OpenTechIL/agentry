@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-11-14
+
 ### Upgrading from 0.1.x
 
 Read these before you upgrade. Each one changes what `sync` does to an existing project.
