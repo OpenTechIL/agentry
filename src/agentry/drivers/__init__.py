@@ -65,8 +65,21 @@ def source_drivers(drivers: dict[str, Driver], source: Source) -> dict[str, Driv
     for tname, rules in source.profiles.items():
         base = drivers.get(tname)
         if base is not None:
-            out[tname] = replace(base, spec=_apply_profile(base.spec, tname, rules))
+            spec = _apply_profile(base.spec, tname, rules)
+            # Identity describes the target tool, not a source: a source profile never
+            # changes it (else its agents could shadow others again — ADR-003).
+            out[tname] = replace(base, spec=replace(spec, identity=dict(base.spec.identity)))
     return out
+
+
+def source_identity_overrides(source: Source) -> list[tuple[str, str]]:
+    """``(target, type)`` pairs where ``source.profiles`` tries to set ``identity`` (ignored)."""
+    return [
+        (tname, ctype.value)
+        for tname, rules in source.profiles.items()
+        for ctype, rule in rules.items()
+        if "identity" in rule.model_fields_set
+    ]
 
 
 __all__ = [
@@ -77,4 +90,5 @@ __all__ = [
     "TransformFn",
     "resolve_drivers",
     "source_drivers",
+    "source_identity_overrides",
 ]

@@ -449,6 +449,11 @@ def _add_from_catalog(
         )
     _save_validated(store)
     _do_sync(allow_run=allow_run, verbose=verbose)
+    _report_added(name, comps)
+
+
+def _report_added(name: str, comps: list[Component]) -> None:
+    """The closing line of a catalog add (after its sync)."""
     blocked = _all_blocked(comps)
     if blocked:
         # PM: every component refused by an existing entry (W1/W1-name/W5/W5-name/W5-path).
@@ -459,11 +464,10 @@ def _add_from_catalog(
             f"`{prog()} status`).[/yellow]",
             soft_wrap=True,
         )
-    else:
-        console.print(
-            f"[green]Added[/green] {_e(name)} [dim]({_e(len(comps))} component(s) from "
-            "catalog)[/dim]"
-        )
+        return
+    console.print(
+        f"[green]Added[/green] {_e(name)} [dim]({_e(len(comps))} component(s) from catalog)[/dim]"
+    )
 
 
 def _all_blocked(comps: list[Component]) -> int:

@@ -793,6 +793,34 @@ plugin with the default rules, which flattens the command names and drops the pl
 **Fix.** Everyone on the project upgrades to agentry 0.3.0 or later, then runs `agentry sync`.
 One sync on the current version restores the plugin layout and hooks.
 
+### `profiles: sets identity … — ignored`
+
+```text
+source 's': profiles: sets `identity` for claude.agent — ignored; identity describes how the target tool names components and can only be set in target_profiles.
+```
+
+A source's `profiles:` sets [`identity`](config-reference.md#identity), which describes how
+the target tool names components, so it can't vary per source. agentry ignores that key, but
+the rest of the rule still applies (here, the agent installed normally). `agentry doctor`
+lists the warning under `target`, so `doctor --strict` fails until you remove it:
+
+```text
+! target  source 's': profiles: sets `identity` for claude.agent — ignored; identity describes how the target tool names components and can only be set in target_profiles.
+```
+ Move the
+setting to `target_profiles` if you meant to change it for the whole target, or delete it.
+
+### `profiles: sets target '<name>', which this project doesn't define`
+
+```text
+source 's': profiles: sets target 'cursr', which this project doesn't define — ignored. Define the target first (`agentry target add cursr`), or remove it from the source's profiles.
+```
+
+A source's `profiles:` has rules for a target the project has no driver, `target_profiles`
+entry or overlay for, often a typo. agentry ignores those rules, and the source's other rules
+still apply. `agentry doctor` lists it under `target` as a warning. Fix the name, define the
+target, or remove it from the source's `profiles:`.
+
 ### `pinned to … by marketplace … — not moved`
 
 ```text
@@ -914,7 +942,7 @@ on warnings too — which makes it a good CI gate. Errors are listed first below
 | `target` | error | A target in `targets:` has no built-in driver, no `target_profiles` entry, and no installed overlay. See [not defined](#target-name-is-not-defined-nothing-was-changed). |
 | `resolve` | error | A source or dependency couldn't be resolved: git failed or timed out, a ref doesn't exist, a local source path is missing, or a dependency conflicts. The remaining checks are skipped until this is fixed. |
 | `component` | error | A component references a source that isn't declared (`unknown source`), or the source doesn't actually provide it (`not provided by source`). Run `agentry list` for the real names. |
-| `target` | warn | A component's `targets:` names a target the project doesn't list, so it's skipped there. See [not in the project's targets](#target-name-is-not-in-the-projects-targets-skipped). |
+| `target` | warn | A component's `targets:` names a target the project doesn't list, so it's skipped there. See [not in the project's targets](#target-name-is-not-in-the-projects-targets-skipped). Also: a source's `profiles:` sets `identity` (ignored) or names a target the project doesn't define. |
 | `support` | warn | No active target installs this component type, so it goes nowhere. |
 | `component` | warn | An agent has no `name` in its frontmatter, or its name contains `:`. It's installed, but see [no name](#agent-has-no-name-in-its-frontmatter) and [contains ':'](#agent-name-name-contains). |
 | `format` | warn | A component's content visibly won't work in that target. It's installed as-is. See [format warnings](#a-component-may-not-work-on-its-target-format-warnings). |

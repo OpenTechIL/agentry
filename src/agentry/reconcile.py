@@ -20,7 +20,13 @@ from pathlib import Path
 
 from . import deps, discovery, envscan, identity, plugin_manifest
 from .config import ConfigStore
-from .drivers import BUILTIN_DRIVERS, Driver, resolve_drivers, source_drivers
+from .drivers import (
+    BUILTIN_DRIVERS,
+    Driver,
+    resolve_drivers,
+    source_drivers,
+    source_identity_overrides,
+)
 from .gitignore import ensure_gitignore
 from .installers import copy as copy_inst
 from .installers import generate as gen_inst
@@ -178,6 +184,9 @@ class DesiredPlan:
     plugin_notes: list[str] = field(default_factory=list)
     #: The unsupported-key subset of ``plugin_notes``, kept apart so the CLI can summarize.
     plugin_unsupported: list[str] = field(default_factory=list)
+    #: Ignored parts of a source's ``profiles:`` (an ``identity`` override, an undefined
+    #: target), also in the caller's warnings — doctor reports them as target problems.
+    profile_notes: list[str] = field(default_factory=list)
     #: Name units lost in claim order (ADR-003): ``(loser, loser path, winner, unit, mode)``
     #: — the transfer line when the loser was the one installed.
     name_transfers: list[tuple[str, str, str, str, str]] = field(default_factory=list)
@@ -208,6 +217,7 @@ def compute_desired(
     # Build a (type, name) -> path index per source.
     plan = DesiredPlan()
     indexes = _index_sources(root, config, plan)
+    warnings.extend(plan.profile_notes)
     warnings.extend(plan.plugin_notes)
 
     variants = _enabled_variants(config)
@@ -1513,9 +1523,15 @@ def _index_sources(
         if not sp.exists():
             continue
         indexes[src.name] = discovery.index(sp)
+        for tname, ctype in source_identity_overrides(src):
+            plan.profile_notes.append(
+                f"source '{src.name}': profiles: sets `identity` for {tname}.{ctype} — "
+                "ignored; identity describes how the target tool names components and can "
+                "only be set in target_profiles."
+            )
         for tname in src.profiles:
             if tname not in resolve_targets(config):
-                plan.plugin_notes.append(
+                plan.profile_notes.append(
                     f"source '{src.name}': profiles: sets target '{tname}', which this project "
                     "doesn't define — ignored. Define the target first (`"
                     f"{prog()} target add {tname}`), or remove it from the source's profiles."

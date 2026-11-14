@@ -171,6 +171,8 @@ def run_checks(root: Path) -> list[Check]:
             *(Check("warn", "format", issue) for issue in plan.format_issues),
             # component targets the project hasn't activated
             *(Check("warn", "target", issue) for issue in plan.inactive),
+            # ignored source `profiles:` parts: an identity override, an undefined target
+            *(Check("warn", "target", note) for note in plan.profile_notes),
             # plugin.json paths, name clashes, unsupported keys, ${CLAUDE_PLUGIN_DATA}
             *(Check("warn", "plugin", note) for note in plan.plugin_notes),
             # install paths lost to an earlier claimant (W5-path, W5-name), one line per unit

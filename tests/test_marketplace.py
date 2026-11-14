@@ -830,8 +830,11 @@ def test_source_profile_on_undefined_target_warns_and_is_ignored(tmp_path: Path,
     assert "target 'opencode'" not in out  # built-in, merely inactive: no warning
     assert (proj / ".claude/commands/c.md").is_symlink()  # the claude default still applies
     assert not (proj / ".x").exists()
-    doctor = [c.message for c in run_checks(proj) if c.category == "plugin"]
-    assert any(m.startswith(head) for m in doctor)
+    checks = run_checks(proj)
+    assert [c.level for c in checks if c.category == "target" and c.message.startswith(head)] == [
+        "warn"
+    ]
+    assert not [c for c in checks if c.category == "plugin" and c.message.startswith(head)]
 
 
 # --- ADR-003 name units for plugin agents ---------------------------------------------------
@@ -864,6 +867,18 @@ def test_two_plugins_same_agent_names_w5_name_grouped(tmp_path: Path, monkeypatc
         "bbb: 2 entries are already installed by aaa, listed earlier in .agentry.yml — skipped ("
     )
     assert out.count(grouped) == 1
+    units, rest = out.split(grouped, 1)[1].split(")", 1)
+    assert sorted(u.strip() for u in units.split(",")) == [
+        "agent name 'linter' on claude",
+        "agent name 'reviewer' on claude",
+    ]
+    assert rest.startswith(". Disable one of them, or reorder components to choose which wins.")
+    assert "loads only one agent per name" not in out  # grouped, not individual, without -v
+
+    from agentry.doctor import run_checks
+
+    collisions = [c.message for c in run_checks(proj) if c.category == "collision"]
+    assert len([m for m in collisions if m.startswith("bbb/agent/")]) == 2  # one per unit
 
     verbose = _text(_cli(proj, monkeypatch, "sync", "-v"))
     for name in ("reviewer", "linter"):
@@ -875,7 +890,6 @@ def test_two_plugins_same_agent_names_w5_name_grouped(tmp_path: Path, monkeypatc
         assert verbose.count(line) == 1, name
 
 
-@pytest.mark.xfail(strict=True, reason="PM (b): blocked-plugin add line, backend in progress")
 def test_plugin_agent_matching_user_agent_refused_w1_name(tmp_path: Path, monkeypatch):
     proj, *_ = _install_fixture(tmp_path, monkeypatch, _agents("reviewer", who="tools"))
     mine = proj / ".claude" / "agents" / "mine.md"
@@ -915,3 +929,84 @@ def test_plugin_agent_matching_user_agent_refused_w1_name(tmp_path: Path, monkey
     assert _cli(proj, monkeypatch, "sync").exit_code == 0
     assert list((proj / ".claude" / "agents").rglob("tools-reviewer.md"))
     assert _cli(proj, monkeypatch, "doctor", "--strict").exit_code == 0
+
+
+def test_source_profile_identity_ignored_with_warning(tmp_path: Path, monkeypatch):
+    """`identity` describes the target tool, so it can only be set in target_profiles: a
+    source's `profiles:` that sets it is ignored with a warning, and that source's agent
+    still collides by name."""
+    from agentry.models import Component, ComponentType, Source, SourceType
+
+    def local(label: str, stem: str) -> Path:
+        root = tmp_path / label
+        _write(root, f"agents/{stem}.md", "---\nname: reviewer\ndescription: d\n---\n")
+        return root
+
+    proj = _project(tmp_path)
+    store = ConfigStore.load(proj)
+    for label, stem in (("one", "a"), ("free", "f")):
+        store.add_source(Source(name=label, type=SourceType.LOCAL, path=str(local(label, stem))))
+        store.add_component(Component(source=label, type=ComponentType.AGENT, name=stem))
+    rule = {"strategy": "link", "dest": ".claude/agents/{name}.md", "identity": None}
+    for entry in store.doc["sources"]:
+        if entry["name"] == "free":
+            entry["profiles"] = {"claude": {"agent": rule}}
+    store.save()
+
+    out = _text(_cli(proj, monkeypatch, "sync", "-v"))
+    assert (
+        out.count(
+            "source 'free': profiles: sets `identity` for claude.agent — ignored; identity describes "
+            "how the target tool names components and can only be set in target_profiles."
+        )
+        == 1
+    )
+    agents = proj / ".claude" / "agents"
+    assert (agents / "a.md").is_symlink() and not (agents / "f.md").exists()
+    assert "free/agent/f: agent name 'reviewer' on claude is already used by one/agent/a" in out
+
+    from agentry.doctor import run_checks
+
+    warn = (
+        "source 'free': profiles: sets `identity` for claude.agent — ignored; identity describes "
+        "how the target tool names components and can only be set in target_profiles."
+    )
+    assert [(c.level, c.category) for c in run_checks(proj) if c.message == warn] == [
+        ("warn", "target")
+    ]
+
+
+def test_source_profile_identity_set_on_target_without_rule_has_no_effect(
+    tmp_path: Path, monkeypatch
+):
+    """A source can't switch the name rule ON either: opencode has no identity rule, so two
+    same-name agents both install there despite the source's `identity: frontmatter:name`."""
+    from agentry.models import Component, ComponentType, Source, SourceType
+
+    proj = _project(tmp_path, ("opencode",))
+    store = ConfigStore.load(proj)
+    for label, stem in (("one", "a"), ("two", "b")):
+        root = tmp_path / label
+        _write(root, f"agents/{stem}.md", "---\nname: reviewer\ndescription: d\n---\n")
+        store.add_source(Source(name=label, type=SourceType.LOCAL, path=str(root)))
+        store.add_component(Component(source=label, type=ComponentType.AGENT, name=stem))
+    rule = {
+        "strategy": "link",
+        "dest": ".opencode/agents/{name}.md",
+        "identity": "frontmatter:name",
+    }
+    for entry in store.doc["sources"]:
+        if entry["name"] == "two":
+            entry["profiles"] = {"opencode": {"agent": rule}}
+    store.save()
+
+    out = _text(_cli(proj, monkeypatch, "sync", "-v"))
+    assert (
+        out.count(
+            "source 'two': profiles: sets `identity` for opencode.agent — ignored; identity describes "
+            "how the target tool names components and can only be set in target_profiles."
+        )
+        == 1
+    )
+    assert (proj / ".opencode/agents/a.md").exists() and (proj / ".opencode/agents/b.md").exists()
+    assert "agent name 'reviewer'" not in out

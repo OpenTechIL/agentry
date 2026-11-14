@@ -46,7 +46,7 @@ A source is a git repo or a directory on this machine.
 | `ref` | str | `"main"` | Branch, tag or commit for `git` sources. Resolved to a concrete SHA in the lock. |
 | `subdir` | str | `null` | Components live under this subdirectory (monorepo support). Must be relative and inside the repo. |
 | `pinned_by` | str | `null` | Written by `agentry add` when a [marketplace catalog](authoring.md#claude-code-plugin-marketplaces) pins the plugin to a commit (`sha`). Names that catalog. `agentry update` won't move the pin; re-run `agentry add <plugin>` to take the marketplace's current one. |
-| `profiles` | map | `{}` | Install rules for **this source's components only**, in the same shape as [`target_profiles`](#target_profiles)`[<tool>]`. They take precedence over `target_profiles` and the built-in driver, and they go away when the source is removed. Written by `agentry add` for marketplace plugins (see below). Requires agentry 0.3.0 or later: an older agentry ignores this key. |
+| `profiles` | map | `{}` | Install rules for **this source's components only**, in the same shape as [`target_profiles`](#target_profiles)`[<tool>]`. They take precedence over `target_profiles` and the built-in driver, and they go away when the source is removed. Written by `agentry add` for marketplace plugins (see below). `identity` isn't allowed here: it describes how the target tool names components, so set it in `target_profiles`. In `profiles:` it's ignored with a warning. Requires agentry 0.3.0 or later: an older agentry ignores this key. |
 
 ## `components`
 
@@ -212,6 +212,10 @@ skipped with a warning.
 | omitted | Inherit the built-in setting. An override that only changes `strategy` keeps the name check. |
 | `"frontmatter:name"` | Identify this type by the `name` in its frontmatter. Use this for a tool you define yourself that works the same way. |
 | `null` | Turn the name check off for this rule. Only paths are compared. |
+
+`identity` can only be set in `target_profiles`, because it describes the target tool, not a
+source. A source's [`profiles:`](#sources) can't change it: agentry ignores an `identity` there
+and warns.
 
 ```yaml
 target_profiles:
