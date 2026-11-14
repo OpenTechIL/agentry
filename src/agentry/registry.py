@@ -14,6 +14,7 @@ from __future__ import annotations
 import contextlib
 import json
 import urllib.request
+from collections.abc import Iterable
 from pathlib import Path
 
 from . import marketplace
@@ -394,7 +395,7 @@ def build_install_profiles(
     entry: RepositoryEntry,
     repo: str,
     comps: list[Component],
-    active_targets: set[str],
+    active_targets: Iterable[str],
     drivers: dict[str, Driver] | None = None,
 ) -> dict[str, dict[ComponentType, ProfileRule]]:
     """Resolve a repo entry's ``copy``/``namespaced`` flags into concrete profile rules.
@@ -409,6 +410,10 @@ def build_install_profiles(
     A rule is synthesized only when the flags change something versus the built-in default,
     so a plain ``copy=false, namespaced=false`` repo adds nothing (the engine's link
     default applies). The result is ready to hand to ``ConfigStore.merge_target_profiles``.
+
+    Order is deterministic, since it becomes the key order in ``.agentry.yml``: targets in
+    the order given (pass ``config.targets``; an unordered set is sorted), types in
+    :class:`ComponentType` order.
     """
     drivers = BUILTIN_DRIVERS if drivers is None else drivers
     profiles: dict[str, dict[ComponentType, ProfileRule]] = {
@@ -417,8 +422,14 @@ def build_install_profiles(
     if not (entry.copy_install or entry.namespaced):
         return profiles
 
-    present = {c.type for c in comps if c.type in LINK_TYPES}
-    for target in active_targets:
+    shipped = {c.type for c in comps}
+    present = [t for t in ComponentType if t in shipped and t in LINK_TYPES]
+    targets = (
+        sorted(active_targets)
+        if isinstance(active_targets, (set, frozenset))
+        else list(dict.fromkeys(active_targets))
+    )
+    for target in targets:
         driver = drivers.get(target)
         for ctype in present:
             existing = profiles.get(target, {}).get(ctype)

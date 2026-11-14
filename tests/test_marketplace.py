@@ -832,3 +832,86 @@ def test_source_profile_on_undefined_target_warns_and_is_ignored(tmp_path: Path,
     assert not (proj / ".x").exists()
     doctor = [c.message for c in run_checks(proj) if c.category == "plugin"]
     assert any(m.startswith(head) for m in doctor)
+
+
+# --- ADR-003 name units for plugin agents ---------------------------------------------------
+
+
+def _agents(*names: str, who: str) -> dict[str, str]:
+    """Each agent's file stem differs per plugin; only the frontmatter `name` is shared."""
+    return {f"agents/{who}-{n}.md": f"---\nname: {n}\ndescription: {who}\n---\n" for n in names}
+
+
+def test_two_plugins_same_agent_names_w5_name_grouped(tmp_path: Path, monkeypatch):
+    """Two plugins ship agents named `reviewer` and `linter` (at different paths): the later
+    plugin loses both name units — ONE grouped line on sync, the W5-name lines under -v."""
+    _, url_a, sha_a = _plugin_repo(tmp_path, "aaa", _agents("reviewer", "linter", who="aaa"))
+    _, url_b, sha_b = _plugin_repo(tmp_path, "bbb", _agents("reviewer", "linter", who="bbb"))
+    path = _marketplace(
+        tmp_path / "mk", [_url_entry("aaa", url_a, sha_a), _url_entry("bbb", url_b, sha_b)]
+    )
+    proj = _project(tmp_path)
+    _cli(proj, monkeypatch, "catalog", "add", "mk", str(path))
+    _cli(proj, monkeypatch, "add", "aaa")
+    _cli(proj, monkeypatch, "add", "bbb")
+
+    out = _text(_cli(proj, monkeypatch, "sync"))
+    agents = proj / ".claude" / "agents"
+    installed = sorted(p.relative_to(agents).as_posix() for p in agents.rglob("*.md"))
+    assert [i for i in installed if "bbb-" in i] == []  # every bbb agent skipped
+    assert sorted(i.rsplit("/", 1)[-1] for i in installed) == ["aaa-linter.md", "aaa-reviewer.md"]
+    grouped = (
+        "bbb: 2 entries are already installed by aaa, listed earlier in .agentry.yml — skipped ("
+    )
+    assert out.count(grouped) == 1
+
+    verbose = _text(_cli(proj, monkeypatch, "sync", "-v"))
+    for name in ("reviewer", "linter"):
+        line = (
+            f"bbb/agent/bbb-{name}: agent name '{name}' on claude is already used by "
+            f"aaa/agent/aaa-{name}, listed earlier in .agentry.yml — skipped (claude loads only "
+            "one agent per name). Disable one of them, or reorder components to choose which wins."
+        )
+        assert verbose.count(line) == 1, name
+
+
+@pytest.mark.xfail(strict=True, reason="PM (b): blocked-plugin add line, backend in progress")
+def test_plugin_agent_matching_user_agent_refused_w1_name(tmp_path: Path, monkeypatch):
+    proj, *_ = _install_fixture(tmp_path, monkeypatch, _agents("reviewer", who="tools"))
+    mine = proj / ".claude" / "agents" / "mine.md"
+    mine.parent.mkdir(parents=True)
+    mine.write_text("---\nname: reviewer\ndescription: mine\n---\nmine\n", encoding="utf-8")
+    before = mine.read_bytes()
+
+    snap = _snapshot(proj)
+    res = _cli(proj, monkeypatch, "add", "tools")
+    assert res.exit_code == 0, res.output  # PM (b): added, not an M2 refusal
+    out = _text(res)
+    w1 = (
+        "tools/agent/tools-reviewer: agent name 'reviewer' on claude is already used by your "
+        "agent .claude/agents/mine.md — skipped (claude loads only one agent per name). Rename "
+        "one of them, or remove yours to install tools/agent/tools-reviewer's."
+    )
+    assert w1 in out
+    assert (
+        "Added tools, but nothing from it is installed yet — 1 component(s) blocked by existing "
+        "entries (see warnings above, or `agentry status`)."
+    ) in out
+    refs = [c.ref for c in ConfigStore.load(proj).parsed().components if c.source == "tools"]
+    assert refs == ["tools/agent/tools-reviewer"]  # config added
+    assert _snapshot(proj) == snap  # no target writes; the user's agent byte-identical
+    assert mine.read_bytes() == before
+
+    from agentry.reconcile import status
+
+    (row,) = [r for r in status(proj)[0] if r.ref == "tools/agent/tools-reviewer"]
+    assert row.state == "missing"
+    assert row.note == "agent name 'reviewer' is used by your agent .claude/agents/mine.md"
+
+    assert w1 in _text(_cli(proj, monkeypatch, "sync"))
+    assert _snapshot(proj) == snap
+    assert _cli(proj, monkeypatch, "doctor", "--strict").exit_code == 1
+    mine.unlink()  # control: with the blocker gone, the plugin installs and --strict passes
+    assert _cli(proj, monkeypatch, "sync").exit_code == 0
+    assert list((proj / ".claude" / "agents").rglob("tools-reviewer.md"))
+    assert _cli(proj, monkeypatch, "doctor", "--strict").exit_code == 0

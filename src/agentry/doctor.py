@@ -21,10 +21,9 @@ from . import deps, discovery, plugin_manifest
 from .config import ConfigStore
 from .drivers import Driver, resolve_drivers
 from .envscan import unset_env_refs
-from .lockfile import load_lock
 from .models import MERGE_TYPES, Component, ComponentType, Config, Source
 from .progname import CANONICAL, prog
-from .reconcile import compute_desired, status
+from .reconcile import plan_for_status, status
 from .resolver import ResolveError, effective_root
 from .targets import describe_unresolved, unresolved_targets
 
@@ -145,13 +144,14 @@ def run_checks(root: Path) -> list[Check]:
             )
         )
 
+    # One resolve + plan, shared with status() below (it would otherwise redo both).
     try:
-        graph, _ = deps.resolve_graph(root, config, load_lock(root))
+        planned = plan_for_status(root, config)
     except (ResolveError, deps.DependencyError) as exc:
         checks.append(Check("error", "resolve", str(exc)))
         return checks
 
-    augmented = config.model_copy(update={"sources": graph.sources, "components": graph.components})
+    augmented, plan = planned.augmented, planned.plan
     drivers = resolve_drivers(config)
     sources_by_name = {s.name: s for s in augmented.sources}
     indexes: dict[str, dict[tuple[ComponentType, str], Path]] = {}
@@ -166,7 +166,6 @@ def run_checks(root: Path) -> list[Check]:
 
     # Cross-target content mismatches (phase A): the same findings sync warns about, from
     # the same read-only plan computation, reported as warnings so --strict fails on them.
-    plan = compute_desired(root, augmented, [], graph.transitive)
     checks.extend(
         [
             *(Check("warn", "format", issue) for issue in plan.format_issues),
@@ -174,13 +173,15 @@ def run_checks(root: Path) -> list[Check]:
             *(Check("warn", "target", issue) for issue in plan.inactive),
             # plugin.json paths, name clashes, unsupported keys, ${CLAUDE_PLUGIN_DATA}
             *(Check("warn", "plugin", note) for note in plan.plugin_notes),
-            # install paths lost to an earlier claimant (W5-path), one line per unit
+            # install paths lost to an earlier claimant (W5-path, W5-name), one line per unit
             *(Check("warn", "collision", c.message) for c in plan.collisions),
+            # agent frontmatter `name` missing or containing ':' (ADR-003)
+            *(Check("warn", "component", note) for note in plan.identity_notes),
         ]
     )
 
     try:
-        rows, _ = status(root)
+        rows, _ = status(root, planned=planned)  # single use, after the plan checks above
         for r in rows:
             if r.drifted:
                 # One line per entry agentry can't vouch for (ADR-001 Rev 3, PM R5): the

@@ -442,16 +442,42 @@ def _add_from_catalog(
     for comp in comps:
         if store.parsed().find_component(comp.ref) is None:
             store.add_component(comp)
-    profiles = reg.build_install_profiles(entry, name, comps, config.active_targets())
+    profiles = reg.build_install_profiles(entry, name, comps, config.targets)  # config order
     if profiles and store.merge_target_profiles(profiles):
         console.print(
             "  [dim]added target_profiles from catalog (install overrides for this repo)[/dim]"
         )
     _save_validated(store)
-    console.print(
-        f"[green]Added[/green] {_e(name)} [dim]({_e(len(comps))} component(s) from catalog)[/dim]"
-    )
     _do_sync(allow_run=allow_run, verbose=verbose)
+    blocked = _all_blocked(comps)
+    if blocked:
+        # PM: every component refused by an existing entry (W1/W1-name/W5/W5-name/W5-path).
+        # Still added (the user may free the entry later) — but never a plain "Added".
+        console.print(
+            f"[yellow]Added {_e(name)}, but nothing from it is installed yet — {_e(blocked)} "
+            f"component(s) blocked by existing entries (see warnings above, or "
+            f"`{prog()} status`).[/yellow]",
+            soft_wrap=True,
+        )
+    else:
+        console.print(
+            f"[green]Added[/green] {_e(name)} [dim]({_e(len(comps))} component(s) from "
+            "catalog)[/dim]"
+        )
+
+
+def _all_blocked(comps: list[Component]) -> int:
+    """How many of ``comps`` are blocked by existing entries, when *none* of them installed
+    anywhere (0 otherwise): every status row of theirs is ``missing``."""
+    try:
+        rows, _ = status(_root())
+    except (ResolveError, DependencyError):
+        return 0
+    refs = {c.ref for c in comps}
+    mine = [r for r in rows if r.ref in refs]
+    if not mine or any(r.state.startswith("ok") for r in mine):
+        return 0
+    return len({r.ref for r in mine})
 
 
 def _source_name_for(repo: str, entry: RepositoryEntry) -> str:

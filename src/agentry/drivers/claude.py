@@ -65,9 +65,13 @@ DRIVER = Driver(
             _C.MCP: MergeDest(".mcp.json", "mcpServers"),
         },
         memory_file=".claude/CLAUDE.md",
+        # Claude identifies an agent by its frontmatter `name`, not its path: two agents
+        # declaring one name collide wherever they live (ADR-003).
+        identity={_C.AGENT: "frontmatter:name"},
     ),
-    # Commands at .claude/commands/<repo>/adr.md are invoked as /<repo>:adr; agents
-    # discover recursively so a subfolder just tidies them. Skills/tools stay flat.
+    # Commands at .claude/commands/<repo>/adr.md are invoked as /<repo>:adr. Agents are only
+    # organised under a <repo>/ folder (Claude scans .claude/agents/ recursively and
+    # identifies an agent by its `name`). Skills/tools stay flat.
     namespacing=NamespacePolicy(frozenset({_C.COMMAND, _C.AGENT})),
     hook_events=HookEventPolicy(CLAUDE_HOOK_EVENTS, enabled=True),
 )

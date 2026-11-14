@@ -27,7 +27,7 @@ name: Release Binaries
 # secrets or certificates required. See packaging/README.md for how users verify.
 #
 # workflow_dispatch builds + uploads artifacts for inspection but does NOT
-# create a Release or sign (dry run).
+# create a Release or sign (dry run), even when dispatched on a tag ref.
 on:
   push:
     tags: ["v*"]
@@ -45,11 +45,12 @@ jobs:
       matrix:
         include:
           - { runner: ubuntu-latest,  target: linux-x86_64,   ext: "",     pyarch: "" }
-          # GitHub retired the macos-13 (Intel) image in Dec 2025, so macOS
-          # x86_64 is cross-built on the arm64 runner via an x86_64 CPython
-          # under Rosetta 2 (see the "Build binary" step).
-          - { runner: macos-14,       target: macos-x86_64,    ext: "",     pyarch: x86_64 }
-          - { runner: macos-14,       target: macos-arm64,     ext: "",     pyarch: "" }
+          # Pinned (not macos-latest) so the image only changes when we choose to:
+          # macos-14 was retired on 2026-11-02 and silently cancelled both macOS legs.
+          # macOS x86_64 is cross-built on this arm64 runner via an x86_64 CPython
+          # under Rosetta 2 (see the "Ensure Rosetta 2" and "Build binary" steps).
+          - { runner: macos-15,       target: macos-x86_64,    ext: "",     pyarch: x86_64 }
+          - { runner: macos-15,       target: macos-arm64,     ext: "",     pyarch: "" }
           - { runner: windows-latest, target: windows-x86_64,  ext: ".exe", pyarch: "" }
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -161,7 +162,9 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
-    if: github.ref_type == 'tag'
+    # Both checks, not just ref_type: a workflow_dispatch started on a tag also has
+    # ref_type == 'tag', and a dispatch must never sign, publish a Release or push the tap.
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create the release + upload assets
@@ -197,7 +200,8 @@ jobs:
   homebrew:
     name: Publish Homebrew formula
     needs: release
-    if: github.ref_type == 'tag'
+    # Same guard as `release` (dispatch on a tag must never publish the tap).
+    if: github.event_name == 'push' && github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: read   # read SHA256SUMS.txt off this repo's release

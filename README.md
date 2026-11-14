@@ -454,7 +454,7 @@ Grouped by what you're trying to do. Full reference with every flag:
 |---|---|
 | `agentry status` | What's installed, where, and whether it drifted from your config. |
 | `agentry why <ref>` | Where a component came from (source + pinned commit) and every place it installs. |
-| `agentry doctor [--strict]` | Preflight check for undefined targets, missing components, unset `${VARs}` and drift. Exits non-zero on problems. |
+| `agentry doctor [--strict]` | Preflight check for undefined targets, missing components, unset `${VARs}`, format mismatches, plugin.json problems and drift, with the fix for each. Exits non-zero on errors (and on warnings with `--strict`). |
 | `agentry deps` | The resolved dependency map: every enabled component plus everything it pulls in. |
 | `agentry --version` | The installed version. |
 

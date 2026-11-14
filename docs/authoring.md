@@ -212,9 +212,12 @@ in `.agentry.lock` like any git source. A fresh checkout needs only the config a
 marketplace. Inside the plugin, discovery follows its
 [`plugin.json`](#claude-code-plugins-claude-pluginpluginjson).
 
-- **Commands and other files are organised per plugin**, for example
-  `.claude/commands/alpha/review.md`, which Claude Code shows as `/alpha:review`, the name
-  plugin users already type.
+- **Commands are organised per plugin**, for example `.claude/commands/alpha/review.md`, which
+  Claude Code shows as `/alpha:review`, the name plugin users already type. The plugin's agents
+  and skills install flat, as `.claude/agents/<file>.md` and `.claude/skills/<name>/`. Claude
+  identifies agents by the `name` in their frontmatter, so two plugins that ship an agent with
+  the same name collide, and only the one listed first installs (see
+  [agent name already used](troubleshooting.md#agent-name-name-is-already-used)).
 - **Plugin hooks that call `${CLAUDE_PLUGIN_ROOT}/…`** work: agentry links the plugin folder
   into `.claude/plugins/agentry/<plugin>/` and rewrites the path. This is recorded as a
   per-source [`profiles:`](config-reference.md#sources) override, so it never changes how your
@@ -266,7 +269,7 @@ per-source `profiles:` and `pinned_by` keys. See
 | `source` | object | — | `{type, url, path, ref, subdir}` — same shape as a `sources` entry, minus `name`. Defaults to `type: git`, `ref: main`. |
 | `expose` | list | `null` | Curated components. Omit for a conventional-layout repo and let discovery do it. |
 | `copy` | bool | `false` | Install this repo's components as real copies rather than symlinks. |
-| `namespaced` | bool | `true` | Namespace destinations per repo, so two catalogs offering a same-named skill don't collide. |
+| `namespaced` | bool | `true` | Install this repo's components under a `<repo>/` folder, so two catalogs that ship a file with the same name don't overwrite each other. This organises files only. Claude identifies agents by the `name` in their frontmatter, so two agents with the same name still collide whatever folder they're in, and only one is installed (see [agent name already used](troubleshooting.md#agent-name-name-is-already-used)). |
 | `target_profiles` | map | `{}` | Per-repo install-rule overrides, merged into the consumer's config at `agentry add` time. Use sparingly — it changes where files land in someone else's project. |
 
 **`expose` entry:** `{type, name}`, plus `path` for an artifact discovery can't infer, or

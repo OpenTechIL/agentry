@@ -283,6 +283,8 @@ def _profile_rule_map(rule: ProfileRule) -> CommentedMap:
             item[field] = value
     if rule.link_from != "artifact":
         item["link_from"] = rule.link_from
+    if "identity" in rule.model_fields_set:
+        item["identity"] = rule.identity
     return item
 
 
