@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Claude Code plugin marketplaces work as catalogs.** `agentry catalog add <name> <location>`
+  accepts a marketplace folder, repo or tree URL, or a `marketplace.json` path or URL. Then
+  `agentry search` lists its plugins and `agentry add <plugin>` installs one as an ordinary,
+  lock-pinned source. Plugin files are organised per plugin (`/alpha:review` on Claude), and hooks
+  that call `${CLAUDE_PLUGIN_ROOT}/…` scripts work through a per-source `profiles:` override.
+  A marketplace `sha` pin is recorded as `pinned_by`. `agentry update` won't move it and says
+  so, and re-running `add` takes the new pin. A plugin with nothing installable into your targets
+  makes `add` exit 1 without changing anything. `npm`, `archive` and `command` plugin sources are
+  skipped with a warning, and agentry tells you, but never runs, the `npm ci` a plugin may need.
+  **Projects that use marketplace plugins need agentry 0.3.0 or later for everyone who syncs
+  them.** An older agentry ignores `profiles:`, flattens the plugin's command names and drops
+  its plugin-root hooks.
 - **Format warnings for known cross-target mismatches.** agentry still installs components
   as-is. It now warns when the content visibly won't work in a target, and `agentry doctor`
   reports each case under a new `format` category, so `doctor --strict` fails on it. Built-in

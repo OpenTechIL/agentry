@@ -119,7 +119,26 @@ class ConfigStore:
             item["path"] = source.path
         if source.subdir:
             item["subdir"] = source.subdir
+        if source.pinned_by:
+            item["pinned_by"] = source.pinned_by
+        if source.profiles:
+            item["profiles"] = CommentedMap(
+                (t, CommentedMap((c.value, _profile_rule_map(r)) for c, r in rules.items()))
+                for t, rules in source.profiles.items()
+            )
         sources.append(item)
+
+    def set_source_ref(self, name: str, ref: str, *, pinned_by: str | None = None) -> bool:
+        """Point source ``name`` at ``ref`` (and record or clear ``pinned_by``). True if found."""
+        for s in self._seq("sources"):
+            if s.get("name") == name:
+                s["ref"] = ref
+                if pinned_by:
+                    s["pinned_by"] = pinned_by
+                elif "pinned_by" in s:
+                    del s["pinned_by"]
+                return True
+        return False
 
     def remove_source(self, name: str) -> bool:
         sources = self._seq("sources")
@@ -262,6 +281,8 @@ def _profile_rule_map(rule: ProfileRule) -> CommentedMap:
         value = getattr(rule, field)
         if value is not None:
             item[field] = value
+    if rule.link_from != "artifact":
+        item["link_from"] = rule.link_from
     return item
 
 

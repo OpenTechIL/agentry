@@ -711,6 +711,78 @@ plug/hook/hooks: references ${CLAUDE_PLUGIN_DATA}, which only exists inside an i
 Claude Code sets `CLAUDE_PLUGIN_DATA` only for plugins it installed itself. Installed through
 agentry, the entry still lands, but the variable is empty unless you set it.
 
+## Plugins from a Claude Code marketplace catalog
+
+### Plugin hooks don't run after a teammate syncs
+
+**Symptom.** Plugin commands lose their prefix (`/alpha:review` becomes `/review`), plugin hooks
+stop running, and the teammate's sync printed something like:
+
+```text
++ link .claude/commands/review.md
+- link .claude/commands/alpha/review.md
+- link+merge .claude/plugins/agentry/alpha/hooks + .claude/settings.json:hooks
+! alpha/hook/hooks: hook command references a plugin-root variable ('${CLAUDE_PLUGIN_ROOT}/hooks/run.sh'), which only resolves inside an installed plugin — merged into .claude/settings.json it will fail at startup. Configure a 'link+merge' hook profile under target_profiles for this repo (see the superpowers/arckit catalog entries).
+```
+
+**Cause.** Someone synced with an agentry older than 0.3.0. Marketplace plugins rely on the
+per-source `profiles:` key in `.agentry.yml`, and an older agentry ignores it. It installs the
+plugin with the default rules, which flattens the command names and drops the plugin-root hook.
+
+**Fix.** Everyone on the project upgrades to agentry 0.3.0 or later, then runs `agentry sync`.
+One sync on the current version restores the plugin layout and hooks.
+
+### `pinned to … by marketplace … — not moved`
+
+```text
+pinned: pinned to aa3eed9 by marketplace 'mkt' — not moved. Re-run `agentry add pinned` to take the marketplace's current pin.
+```
+
+**Cause.** The marketplace pins this plugin to an exact commit (`sha`), and agentry recorded that
+in the source's `pinned_by`. `agentry update` deliberately doesn't move a pin the marketplace
+chose.
+
+**Fix.** To take the marketplace's current pin, re-run `agentry add <plugin>`. agentry prints the
+move:
+
+```text
+pinned: aa3eed9 → 6fdc3c9
+```
+
+### `none of its components install into your targets`
+
+```text
+hookonly: none of its components install into your targets (codex) — it ships hook, which codex doesn't support. Nothing was added.
+```
+
+**Cause.** Every component the plugin ships is a type your targets can't install, such as a
+hooks-only plugin on a Codex-only project. Rather than add a source that installs nothing,
+`add` exits 1 and leaves `.agentry.yml` and `.agentry.lock` unchanged.
+
+**Fix.** Add a target that supports those types (`agentry target use claude`, say), or skip the
+plugin.
+
+### `this plugin ships <lockfile>; … may need node_modules`
+
+```text
+nodey: this plugin ships package-lock.json; its hooks or MCP servers may need node_modules. agentry doesn't run installers — run `npm ci` in .agentry/nodey yourself.
+```
+
+**Cause.** The plugin has a `package.json` and a lockfile, so its hooks or MCP servers probably
+need its Node dependencies. agentry never runs package installers for you.
+
+**Fix.** Run the command it names in that folder (`cd .agentry/nodey && npm ci`). Re-run it after
+the plugin updates.
+
+### `uses a … source, which agentry can't install`
+
+```text
+catalog 'mkt': plugin 'fromnpm' uses an npm source, which agentry can't install — skipped. Install it in Claude Code directly.
+```
+
+Plugins distributed as `npm`, `archive` or `command` sources aren't supported. The rest of the
+marketplace still works. Install that plugin in Claude Code itself.
+
 ## A summary line instead of individual warnings
 
 To keep output readable, `sync`, `install`, `update` and `add` collapse a warning that occurs two

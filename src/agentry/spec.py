@@ -51,6 +51,9 @@ class LinkMergeDest:
     merge: MergeDest
     rewrite_from: str = ""
     rewrite_to: str = ""
+    #: What to link: ``"artifact"`` (the script dir) or ``"source_root"`` (the whole source,
+    #: e.g. a Claude plugin root for inline plugin.json hooks).
+    link_from: str = "artifact"
 
 
 @dataclass(frozen=True)

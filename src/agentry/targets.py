@@ -97,6 +97,7 @@ def _apply_profile(
                 MergeDest(rule.file, rule.pointer),  # type: ignore[arg-type]
                 rule.rewrite_from or "",
                 rule.rewrite_to or "",
+                rule.link_from,
             )
             _clear(ctype, keep=link_merge)
         else:

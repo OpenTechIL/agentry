@@ -174,6 +174,8 @@ def run_checks(root: Path) -> list[Check]:
             *(Check("warn", "target", issue) for issue in plan.inactive),
             # plugin.json paths, name clashes, unsupported keys, ${CLAUDE_PLUGIN_DATA}
             *(Check("warn", "plugin", note) for note in plan.plugin_notes),
+            # install paths lost to an earlier claimant (W5-path), one line per unit
+            *(Check("warn", "collision", c.message) for c in plan.collisions),
         ]
     )
 

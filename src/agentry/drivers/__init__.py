@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
-from ..models import Config
+from ..models import Config, Source
 from . import agents, claude, codex, copilot, cursor, gemini, kimi, kiro, opencode, windsurf
 from .base import Driver, HookEventPolicy, NamespacePolicy, TransformFn
 
@@ -50,6 +50,25 @@ def resolve_drivers(config: Config) -> dict[str, Driver]:
     return out
 
 
+def source_drivers(drivers: dict[str, Driver], source: Source) -> dict[str, Driver]:
+    """``drivers`` with ``source.profiles`` applied over them, for that source's components.
+
+    Precedence for a (target, type): the source's profile, then ``target_profiles`` (already
+    in ``drivers``), then the built-in. A source profile only overrides a target the project
+    already defines; it never creates one. Returns ``drivers`` itself when there's none.
+    """
+    if not source.profiles:
+        return drivers
+    from ..targets import _apply_profile
+
+    out = dict(drivers)
+    for tname, rules in source.profiles.items():
+        base = drivers.get(tname)
+        if base is not None:
+            out[tname] = replace(base, spec=_apply_profile(base.spec, tname, rules))
+    return out
+
+
 __all__ = [
     "BUILTIN_DRIVERS",
     "Driver",
@@ -57,4 +76,5 @@ __all__ = [
     "NamespacePolicy",
     "TransformFn",
     "resolve_drivers",
+    "source_drivers",
 ]

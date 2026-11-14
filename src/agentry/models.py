@@ -136,6 +136,15 @@ class Source(BaseModel):
     # Subdirectory within the source repo where components live (monorepo support).
     # Discovery and artifact resolution happen relative to <source-root>/<subdir>.
     subdir: str | None = None
+    # The catalog (a Claude plugin marketplace) whose ``sha`` this source's ``ref`` came
+    # from. ``agentry update`` leaves such a pin in place and says so; re-running
+    # ``agentry add <plugin>`` takes the marketplace's current pin (ADR-002 M1).
+    pinned_by: str | None = None
+    # Per-source install overrides, same shape and validation as ``target_profiles``:
+    # ``{target: {type: rule}}``. They apply only to this source's components, over the
+    # project's ``target_profiles`` and the built-in (ADR-002 A) — e.g. a Claude plugin's
+    # hooks link the plugin root. Removed with the source.
+    profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check_locator(self) -> Source:
@@ -362,6 +371,11 @@ class ProfileRule(BaseModel):
     # "${CLAUDE_PROJECT_DIR}/.claude/hooks/{name}"). Both optional; {name} expands.
     rewrite_from: str | None = None
     rewrite_to: str | None = None
+    # link+merge only: what to link. "artifact" (default) links the component's script dir
+    # (the artifact, or its parent for a file); "source_root" links the whole source — a
+    # Claude plugin's root, so ${CLAUDE_PLUGIN_ROOT} paths in inline plugin.json hooks
+    # resolve under the link (ADR-002 §3).
+    link_from: Literal["artifact", "source_root"] = "artifact"
     # Optional content expectations for this type on this tool (see ExpectRule).
     expect: ExpectRule | None = None
 
@@ -534,6 +548,15 @@ class RegistrySource(BaseModel):
     path: str | None = None
     ref: str = "main"
     subdir: str | None = None
+    #: The ref is a marketplace ``sha`` pin (recorded as the source's ``pinned_by``).
+    pinned: bool = False
+    #: No ref was given (a marketplace entry without ``ref``/``sha``): ``agentry add`` looks
+    #: up the repo's default branch, falling back to ``ref``.
+    default_branch: bool = False
+    #: Install overrides the added source carries as its ``profiles`` (see ``Source``).
+    profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
+    #: The Claude marketplace plugin this source is (its ``name``), for add-time naming.
+    plugin: str | None = None
 
     @model_validator(mode="after")
     def _check(self) -> RegistrySource:
@@ -732,3 +755,6 @@ class Manifest(BaseModel):
     generated: list[InstalledGenerated] = Field(default_factory=list)
     link_merges: list[InstalledLinkMerge] = Field(default_factory=list)
     transforms: list[InstalledTransform] = Field(default_factory=list)
+
+
+Source.model_rebuild()  # ``profiles`` refers to ProfileRule, defined after Source
