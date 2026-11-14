@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   existed before agentry wrote to it, or if anything else is left in it, such as your own entry
   or another key. Files from installs made by an earlier version are left alone, because agentry
   didn't record creating them.
+- agentry no longer deletes empty folders it didn't create; folders left by installs from older
+  versions stay after uninstall (safe to delete by hand).
 
 ## [0.3.1] — 2026-11-15
 

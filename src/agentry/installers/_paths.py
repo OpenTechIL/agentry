@@ -5,13 +5,56 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def prune_empty_parents(root: Path, directory: Path) -> None:
-    """Remove now-empty managed parent dirs (e.g. .claude/skills) up to ``root``."""
-    root = root.resolve()
-    cur = directory.resolve()
-    while cur != root and cur.is_dir() and not any(cur.iterdir()):
-        cur.rmdir()
-        cur = cur.parent
+def _rel(root: Path, path: Path) -> str | None:
+    """``path`` relative to ``root`` (posix), or ``None`` if it is root or outside it."""
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return None
+    return rel.as_posix() if rel.parts else None
+
+
+def missing_dirs(root: Path, directory: Path) -> list[str]:
+    """The folders between ``root`` and ``directory`` that don't exist yet (project-relative,
+    deepest first) — what a ``mkdir(parents=True)`` there is about to create."""
+    out: list[str] = []
+    d = directory
+    while not d.exists():
+        rel = _rel(root, d)
+        if rel is None:
+            break
+        out.append(rel)
+        d = d.parent
+    return out
+
+
+def record_created(root: Path, directory: Path, created: set[str] | None) -> None:
+    """``mkdir -p directory``, adding the folders it creates to ``created`` (if given)."""
+    if created is not None:
+        created.update(missing_dirs(root, directory))
+    directory.mkdir(parents=True, exist_ok=True)
+
+
+def prune_created_dirs(root: Path, directory: Path, created: set[str] | None) -> None:
+    """Remove folders agentry recorded creating, now completely empty, deepest first.
+
+    Stops at the first folder that isn't recorded, isn't empty (hidden files count), is a
+    symlink, is agentry's ``.agentry/`` store, or is the project root / outside it. A folder
+    the user made — or one an older agentry made without recording it — is never removed.
+    ``created`` is ``None`` ⇒ nothing is pruned.
+    """
+    if created is None:
+        return
+    d = directory
+    while True:
+        rel = _rel(root, d)
+        if rel is None or rel not in created or rel.split("/", 1)[0] == ".agentry":
+            return
+        if d.is_symlink() or not d.is_dir() or any(d.iterdir()):
+            return
+        d.rmdir()
+        created.discard(rel)
+        d = d.parent
 
 
 def confined(root: Path, rel: str) -> Path | None:

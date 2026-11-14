@@ -672,11 +672,31 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
     - a file in a manifest without these records, i.e. an older install, whose provenance is
       unknown.
 
-    A folder that agentry didn't record is never removed. `status` and `doctor` only read. A
+    A folder that agentry didn't record is never removed (see *Folders agentry created* below).
+    `status` and `doctor` only read. A
     second sync finds nothing to do, and a later install that recreates the file records it
     again. One residual is accepted: if the user deletes an agentry-created file and puts back a
     content-free `{}` of their own under the same name, it is indistinguishable from the skeleton
     and is removed with the last agentry entry.
+  - **Folders agentry created** (#48, every install strategy). A link, copy, transform,
+    link+merge script link, or merge file that has to create parent folders records exactly the
+    ones it created (`_paths.record_created`, computed before `mkdir`) in the manifest's
+    `created_dirs`. The record is one list across all strategies: each sync pass (link prune,
+    link install, copy prune and install, the merge pass, which shares one set between merge
+    files and link+merge links, then transforms) reads it, updates it and writes it back before
+    the next pass runs, so every pass sees every earlier pass's additions and removals. On removal,
+    `_paths.prune_created_dirs` walks up from the removed item and deletes a folder only while it
+    is **recorded, completely empty (hidden files count), a real directory (not a symlink),
+    inside the project, and neither the root nor `.agentry/`**; it stops at the first folder that
+    fails any of these. A folder shared by several installs (`.claude/` for a skill and for
+    `settings.json`) therefore goes only when the last one is gone. Records of folders that are no
+    longer real directories (deleted, or replaced by a symlink), and of created files that are
+    gone, are dropped once per sync, before any install records anything new
+    (`_drop_stale_created`). `status` and `doctor` never touch the records. This **closes a golden-rule-2 gap**: before, link and
+    copy removal pruned *any* empty parent up to the root (`prune_empty_parents`, now deleted),
+    including folders the user had made. Folders created by older agentry versions are
+    unrecorded and stay — the safe direction (delete them by hand if you like). `generate` is
+    unchanged (its tool creates its own folders; removal deletes only the declared `produces`).
   - **Old manifests.** A v1 manifest (keys only) loads unchanged and is migrated on the next
     sync. A recorded key becomes owned only if its on-disk value equals what the component
     ships now. For link+merge, the comparison uses the rewritten fragment. Otherwise the key is
@@ -786,7 +806,7 @@ emit.py         compose AGENTS.md; splice the skill-trigger block into each memo
 envscan.py      scan merge fragments for dead ${VAR} placeholders
 doctor.py       aggregate preflight checks (targets, components, env vars, drift, command name)
 installers/
-  _paths.py     shared helpers: parent pruning + the confined() / require_confined() guard
+  _paths.py     shared helpers: recorded-folder creation and pruning (record_created / prune_created_dirs) + the confined() / require_confined() guard
   link.py       symlink create/remove/state (lexical, store-scoped)
   copy.py       copy a file/dir as a committable real artifact (manifest-tracked ownership)
   merge.py      JSON/TOML inject/remove/state (key-scoped, reversible; codec by file ext)

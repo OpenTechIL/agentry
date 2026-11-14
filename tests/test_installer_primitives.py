@@ -15,7 +15,7 @@ import pytest
 from agentry.installers import copy as copy_inst
 from agentry.installers import link as link_inst
 from agentry.installers import link_merge as link_merge_inst
-from agentry.installers._paths import prune_empty_parents
+from agentry.installers._paths import prune_created_dirs, record_created
 from agentry.installers.generate import confined
 from agentry.resolver import STORE_DIR
 
@@ -162,21 +162,43 @@ def test_remove_copy_and_state(store):
 # -- _paths ---------------------------------------------------------------
 
 
-def test_prune_empty_parents_stops_at_the_root(tmp_path):
+def test_prune_created_dirs_stops_at_the_root(tmp_path):
     deep = tmp_path / ".claude" / "skills" / "nested"
-    deep.mkdir(parents=True)
-    prune_empty_parents(tmp_path, deep)
+    created: set[str] = set()
+    record_created(tmp_path, deep, created)
+    assert created == {".claude", ".claude/skills", ".claude/skills/nested"}
+    prune_created_dirs(tmp_path, deep, created)
     assert not (tmp_path / ".claude").exists()
     assert tmp_path.is_dir(), "must never remove the project root itself"
+    assert created == set()
 
 
-def test_prune_empty_parents_keeps_non_empty_dirs(tmp_path):
+def test_prune_created_dirs_keeps_non_empty_dirs(tmp_path):
     deep = tmp_path / ".claude" / "skills" / "nested"
-    deep.mkdir(parents=True)
-    (tmp_path / ".claude" / "settings.json").write_text("{}", encoding="utf-8")
-    prune_empty_parents(tmp_path, deep)
+    created: set[str] = set()
+    record_created(tmp_path, deep, created)
+    (tmp_path / ".claude" / "settings.json").write_bytes(b"{}")
+    prune_created_dirs(tmp_path, deep, created)
     assert not (tmp_path / ".claude" / "skills").exists()
     assert (tmp_path / ".claude" / "settings.json").is_file()
+    assert created == {".claude"}  # kept, so still recorded
+
+
+def test_prune_created_dirs_never_removes_unrecorded_dirs(tmp_path):
+    (tmp_path / ".claude").mkdir()  # the user's
+    deep = tmp_path / ".claude" / "skills"
+    created: set[str] = set()
+    record_created(tmp_path, deep, created)
+    assert created == {".claude/skills"}
+    prune_created_dirs(tmp_path, deep, created)
+    assert not deep.exists() and (tmp_path / ".claude").is_dir()
+
+
+def test_prune_created_dirs_without_records_prunes_nothing(tmp_path):
+    deep = tmp_path / ".claude" / "skills"
+    deep.mkdir(parents=True)
+    prune_created_dirs(tmp_path, deep, None)  # an old manifest: nothing is inferred
+    assert deep.is_dir()
 
 
 # -- confinement ----------------------------------------------------------

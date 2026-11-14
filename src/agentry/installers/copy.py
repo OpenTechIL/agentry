@@ -13,7 +13,7 @@ import filecmp
 import shutil
 from pathlib import Path
 
-from ._paths import prune_empty_parents, require_confined
+from ._paths import prune_created_dirs, record_created, require_confined
 
 
 def _files_equal(a: Path, b: Path) -> bool:
@@ -52,14 +52,21 @@ def _replace(artifact: Path, dest: Path) -> None:
         shutil.copy2(artifact, dest)
 
 
-def install_copy(root: Path, artifact: Path, dest_rel: str, *, managed: bool) -> str:
+def install_copy(
+    root: Path,
+    artifact: Path,
+    dest_rel: str,
+    *,
+    managed: bool,
+    created_dirs: set[str] | None = None,
+) -> str:
     """Copy ``artifact`` to ``dest_rel``. Returns ``"created"``/``"updated"``/``"exists"``.
 
     ``managed`` says whether agentry already owns the path (per the manifest). An existing
     path that agentry does not own is never overwritten — it raises ``FileExistsError``.
     """
     dest = require_confined(root, dest_rel)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    record_created(root, dest.parent, created_dirs)
 
     if dest.exists() or dest.is_symlink():
         if not managed:
@@ -76,8 +83,10 @@ def install_copy(root: Path, artifact: Path, dest_rel: str, *, managed: bool) ->
     return "created"
 
 
-def remove_copy(root: Path, dest_rel: str) -> bool:
-    """Remove a managed copy (file or dir). Called only for manifest-tracked paths."""
+def remove_copy(root: Path, dest_rel: str, *, created_dirs: set[str] | None = None) -> bool:
+    """Remove a managed copy (file or dir). Called only for manifest-tracked paths.
+
+    Then removes the now-empty folders agentry recorded creating (``created_dirs``)."""
     dest = require_confined(root, dest_rel)
     if dest.is_symlink() or dest.is_file():
         dest.unlink()
@@ -85,7 +94,7 @@ def remove_copy(root: Path, dest_rel: str) -> bool:
         shutil.rmtree(dest)
     else:
         return False
-    prune_empty_parents(root, dest.parent)
+    prune_created_dirs(root, dest.parent, created_dirs)
     return True
 
 

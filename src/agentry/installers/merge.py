@@ -39,7 +39,7 @@ import tomlkit.exceptions
 from ..models import OwnedEntry
 from ..progname import prog
 from ..spec import MergeDest
-from ._paths import require_confined
+from ._paths import missing_dirs, prune_created_dirs, require_confined
 
 
 def load_fragment(artifact: Path) -> dict:
@@ -236,13 +236,16 @@ class Documents:
         self,
         root: Path,
         created_files: list[str] | None = None,
-        created_dirs: list[str] | None = None,
+        created_dirs: set[str] | list[str] | None = None,
     ) -> None:
         self.root = root
         self._docs: dict[str, tuple[Path, MutableMapping, str | None]] = {}
         self._errors: dict[str, MergeTargetError] = {}
         self.created_files: set[str] = set(created_files or [])
-        self.created_dirs: set[str] = set(created_dirs or [])
+        # A set is shared, not copied: link/copy installs in the same sync use it too (#48).
+        self.created_dirs: set[str] = (
+            created_dirs if isinstance(created_dirs, set) else set(created_dirs or [])
+        )
 
     def get(self, file: str) -> MutableMapping:
         if file in self._errors:
@@ -272,44 +275,18 @@ class Documents:
                     path.unlink()
                     deleted.append(file)
                 self.created_files.discard(file)
-                self._prune_created_dirs(path.parent)
+                prune_created_dirs(self.root, path.parent, self.created_dirs)
                 continue
             if before is None:
                 if not doc:
                     continue  # nothing to write: never create an empty file
-                new_dirs = self._missing_dirs(path.parent)
+                new_dirs = missing_dirs(self.root, path.parent)
                 _write_doc(path, doc, before=before)
                 self.created_files.add(file)
                 self.created_dirs.update(new_dirs)
                 continue
             _write_doc(path, doc, before=before)
         return deleted
-
-    def _rel(self, path: Path) -> str:
-        return path.relative_to(self.root).as_posix()
-
-    def _missing_dirs(self, directory: Path) -> list[str]:
-        """The folders between the project root and ``directory`` that don't exist yet."""
-        out: list[str] = []
-        d = directory
-        while d != self.root and self.root in d.parents and not d.exists():
-            out.append(self._rel(d))
-            d = d.parent
-        return out
-
-    def _prune_created_dirs(self, directory: Path) -> None:
-        """Remove recorded, completely empty folders deepest-first; stop at the first one
-        that isn't recorded, isn't empty (hidden files count), or is the project root."""
-        d = directory
-        while d != self.root and self.root in d.parents:
-            rel = self._rel(d)
-            if rel not in self.created_dirs or d.is_symlink() or not d.is_dir():
-                return
-            if any(d.iterdir()):
-                return
-            d.rmdir()
-            self.created_dirs.discard(rel)
-            d = d.parent
 
 
 def _is_skeleton(path: Path, doc: MutableMapping, pointers: set[str] | None) -> bool:
