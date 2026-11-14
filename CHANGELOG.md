@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrading from 0.2.x
+
+Read these before you upgrade. Each one changes what an existing project gets on `sync`.
+
+1. **Two agents with the same `name` no longer both install.** Claude Code only ever loaded one
+   of them. Now the one listed first in `.agentry.yml` is kept, and on the first sync after
+   upgrading the other is uninstalled once, with a `now comes from` line and a warning. An
+   agent you wrote yourself always wins: a component agent with the same name is skipped and
+   your file is never touched. Check `agentry doctor` after upgrading.
+2. **Projects using marketplace plugins need agentry 0.3.0+ on every machine that syncs.** Older
+   versions ignore the per-source `profiles:` key, flatten plugin command names
+   (`/alpha:review` becomes `/review`), and leave plugin hooks that call `${CLAUDE_PLUGIN_ROOT}`
+   broken or missing, even where `agentry status` reports them as ok.
+
 ### Added
 - **Claude Code plugin marketplaces work as catalogs.** `agentry catalog add <name> <location>`
   accepts a marketplace folder, repo or tree URL, or a `marketplace.json` path or URL. Then
@@ -21,8 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   makes `add` exit 1 without changing anything. `npm`, `archive` and `command` plugin sources are
   skipped with a warning, and agentry tells you, but never runs, the `npm ci` a plugin may need.
   **Projects that use marketplace plugins need agentry 0.3.0 or later for everyone who syncs
-  them.** An older agentry ignores `profiles:`, flattens the plugin's command names and drops
-  its plugin-root hooks.
+  them.** An older agentry ignores `profiles:`, flattens the plugin's command names, and its
+  plugin-root hooks don't run.
 
 ### Changed
 - **Behavior change: two agents with the same name are now detected.** Claude Code identifies
@@ -32,8 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with a warning (Claude only ever loaded one of them). An agent that shares a name with an
   agent you wrote yourself is skipped, and your file is never touched. `agentry status` shows
   the skipped one as `missing` with the reason. agentry also warns about an agent with no
-  `name` in its frontmatter, and about a name containing `:`. A new `identity` setting on
+  `name` in its frontmatter, and about a name containing `:`. `agentry doctor` lists both as
+  warnings. A new `identity` setting on
   `target_profiles` rules controls the name check (see the configuration reference).
+- `agentry add` now prints its "Added …" summary after the sync output, so the last line you
+  see confirms what was added. If a script parses `add`'s output, update it for the new order.
+- Synthesized `target_profiles` keys are written to `.agentry.yml` in a fixed order. Expect a
+  one-time reordering diff in `target_profiles` the next time agentry writes the file. Only key
+  order changes: the order of `components:` and `sources:` is untouched.
 
 ## [0.2.0] — 2026-11-14
 

@@ -789,6 +789,14 @@ stop running, and the teammate's sync printed something like:
 **Cause.** Someone synced with an agentry older than 0.3.0. Marketplace plugins rely on the
 per-source `profiles:` key in `.agentry.yml`, and an older agentry ignores it. It installs the
 plugin with the default rules, which flattens the command names and drops the plugin-root hook.
+The output above is from 0.1.5. agentry 0.2.0 also flattens the commands, but merges a plugin's
+`hooks/hooks.json` hook with `${CLAUDE_PLUGIN_ROOT}` left in, so it fails when Claude runs it, and
+it skips inline plugin.json hooks with a warning:
+
+```text
+! alpha/hook/hooks: hook command references a plugin-root variable ('${CLAUDE_PLUGIN_ROOT}/hooks/run.sh'), which only resolves inside an installed plugin — merged into .claude/settings.json it will fail at startup. Configure a 'link+merge' hook profile under target_profiles for this repo (see the superpowers/arckit catalog entries).
+! beta/hook/plugin-hooks: hook event 'PreToolUse' in .claude-plugin/plugin.json runs '${CLAUDE_PLUGIN_ROOT}/go.sh', and agentry doesn't support ${CLAUDE_PLUGIN_ROOT} paths in inline plugin hooks yet — skipped it on claude. Install the plugin in Claude Code itself to use this hook.
+```
 
 **Fix.** Everyone on the project upgrades to agentry 0.3.0 or later, then runs `agentry sync`.
 One sync on the current version restores the plugin layout and hooks.
