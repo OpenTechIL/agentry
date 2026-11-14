@@ -880,6 +880,21 @@ catalog 'mkt': plugin 'fromnpm' uses an npm source, which agentry can't install 
 Plugins distributed as `npm`, `archive` or `command` sources aren't supported. The rest of the
 marketplace still works. Install that plugin in Claude Code itself.
 
+## `agentry add` exits 1 in a Windows script or CI job
+
+On agentry 0.3.0 and earlier, a Windows job whose input comes from `NUL` (or ends immediately)
+showed the component picker or a confirmation prompt, then exited 1 when no answer came. Newer
+versions fall back to the non-interactive behaviour instead. `add` installs every component and
+prints:
+
+```text
+no input — installing all 2 component(s). To choose, use `agentry add two@name[,name]` or `--type <type>`.
+```
+
+The trust prompt declines, and `target add` refuses without `--yes`. On an older version, avoid
+the prompts: name what to install (`agentry add <repo>@name[,name]` or `--type <type>`), and pass
+`--yes` to `target add`.
+
 ## A summary line instead of individual warnings
 
 To keep output readable, `sync`, `install`, `update` and `add` collapse a warning that occurs two
