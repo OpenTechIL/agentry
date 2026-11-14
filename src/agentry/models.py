@@ -364,6 +364,9 @@ class ProfileRule(BaseModel):
     rewrite_to: str | None = None
     # Optional content expectations for this type on this tool (see ExpectRule).
     expect: ExpectRule | None = None
+    # How the tool identifies this type when it isn't by path (ADR-003):
+    # "frontmatter:name" sets it; an explicit null clears it; leaving the key out inherits.
+    identity: Literal["frontmatter:name"] | None = None
 
     @model_validator(mode="after")
     def _check(self) -> ProfileRule:

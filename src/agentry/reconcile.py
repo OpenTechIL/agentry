@@ -18,9 +18,9 @@ from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import deps, discovery, envscan, plugin_manifest
+from . import deps, discovery, envscan, identity, plugin_manifest
 from .config import ConfigStore
-from .drivers import Driver, resolve_drivers
+from .drivers import BUILTIN_DRIVERS, Driver, resolve_drivers
 from .gitignore import ensure_gitignore
 from .installers import copy as copy_inst
 from .installers import generate as gen_inst
@@ -171,6 +171,12 @@ class DesiredPlan:
     plugin_notes: list[str] = field(default_factory=list)
     #: The unsupported-key subset of ``plugin_notes``, kept apart so the CLI can summarize.
     plugin_unsupported: list[str] = field(default_factory=list)
+    #: Name units lost in claim order (ADR-003): ``(loser, loser path, winner, unit, mode)``
+    #: — the transfer line when the loser was the one installed.
+    name_transfers: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    #: Agent identity findings (also in the caller's warnings): a missing frontmatter
+    #: ``name``, or a ``:`` in it (ADR-003) — doctor reports them too.
+    identity_notes: list[str] = field(default_factory=list)
 
 
 def compute_desired(
@@ -249,12 +255,18 @@ def compute_desired(
             _desired_for_target(comp, src, tname, driver, artifact, plan, warnings, variants)
 
     _warn_unmatched_keep(config, plan, warnings)
-    _resolve_claims(config, plan, warnings, frozenset(transitive))
+    _resolve_claims(config, plan, warnings, frozenset(transitive), root=root, drivers=drivers)
     return plan
 
 
 def _resolve_claims(
-    config: Config, plan: DesiredPlan, warnings: list[str], transitive: frozenset[str]
+    config: Config,
+    plan: DesiredPlan,
+    warnings: list[str],
+    transitive: frozenset[str],
+    *,
+    root: Path | None = None,
+    drivers: dict[str, Driver] | None = None,
 ) -> None:
     """Settle duplicate claims in config order (ADR-001 Rev 6) — a pure function of config.
 
@@ -271,7 +283,182 @@ def _resolve_claims(
         return order.get(ref, len(order))
 
     _resolve_path_claims(plan, warnings, transitive, rank)
+    if root is not None and drivers is not None:
+        _resolve_name_claims(root, plan, drivers, warnings, transitive, rank)
     _resolve_key_claims(plan, transitive, rank)
+
+
+@dataclass(frozen=True)
+class _Named:
+    """A path install whose target identifies its type by name (ADR-003)."""
+
+    rank: int
+    ref: str
+    target: str
+    path: str
+    name: str
+
+
+def _identity_name(
+    ref: str, target: str, artifact: Path, warnings: list[str], notes: list[str]
+) -> str:
+    """An agent's identity on ``target``: its frontmatter ``name``, else its file stem."""
+    name = identity.frontmatter_name(artifact)
+    if name is None:
+        name = artifact.stem
+        msg = (
+            f"{ref}: agent has no 'name' in its frontmatter, which {target} uses to identify "
+            f"agents — treated it as '{name}' (its file name). Add 'name: {name}' to the agent."
+        )
+        if msg not in warnings:
+            warnings.append(msg)
+        if msg not in notes:
+            notes.append(msg)
+    elif ":" in name:
+        msg = (
+            f"{ref}: agent name '{name}' contains ':', which {target} reserves for plugin "
+            "agents — installed as-is. Rename it in the agent's frontmatter."
+        )
+        if msg not in warnings:
+            warnings.append(msg)
+        if msg not in notes:
+            notes.append(msg)
+    return name
+
+
+def _named_installs(
+    plan: DesiredPlan,
+    drivers: dict[str, Driver],
+    warnings: list[str],
+    rank: Callable[[str], int],
+) -> list[_Named]:
+    out: list[_Named] = []
+    items: list[DesiredLink | DesiredCopy | DesiredTransform] = [
+        *plan.links,
+        *plan.copies,
+        *plan.transforms,
+    ]
+    for d in items:
+        driver = drivers.get(d.target)
+        ctype = ComponentType(d.component.split("/")[1])
+        if driver is None or driver.spec.identity.get(ctype) != identity.FRONTMATTER_NAME:
+            continue
+        if not d.artifact.is_file():
+            continue
+        name = _identity_name(d.component, d.target, d.artifact, warnings, plan.identity_notes)
+        out.append(_Named(rank(d.component), d.component, d.target, d.path, name))
+    return out
+
+
+def _user_names(
+    root: Path, drivers: dict[str, Driver], named: list[_Named]
+) -> dict[str, dict[str, str]]:
+    """Per target: ``casefold(name) -> path`` of agents agentry doesn't manage (W1-name).
+
+    Only the project's own agent dirs are read (never ``~/.claude``), frontmatter only.
+    """
+    manifest = load_manifest(root)
+    skip = {
+        p.casefold()
+        for p in [
+            *(r.path for r in manifest.links),
+            *(r.path for r in manifest.copies),
+            *(r.path for r in manifest.transforms),
+            *(n.path for n in named),
+        ]
+    }
+    out: dict[str, dict[str, str]] = {}
+    for target in sorted({n.target for n in named}):
+        driver = drivers[target]
+        dirs: list[str] = []
+        builtin = BUILTIN_DRIVERS.get(target)
+        for spec in (builtin.spec if builtin else None, driver.spec):
+            if spec is None:
+                continue
+            for table in (spec.link, spec.copy):
+                template = table.get(ComponentType.AGENT)
+                found = identity.scan_dir(template) if template else None
+                if found is not None:
+                    dirs.append(found)
+        out[target] = identity.scan_names(root, dirs, skip)
+    return out
+
+
+def _resolve_name_claims(
+    root: Path,
+    plan: DesiredPlan,
+    drivers: dict[str, Driver],
+    warnings: list[str],
+    transitive: frozenset[str],
+    rank: Callable[[str], int],
+) -> None:
+    """Name units (ADR-003): a target that identifies a type by frontmatter ``name`` sees
+    two installs with one name as one claim, wherever their paths are. The user's own agent
+    with that name wins (W1-name); otherwise the earliest in claim order (W5-name)."""
+    named = _named_installs(plan, drivers, warnings, rank)
+    if not named:
+        return
+    users = _user_names(root, drivers, named)
+    losers: set[tuple[str, str]] = set()  # (component, casefolded path)
+    by_unit: dict[tuple[str, str], list[_Named]] = {}
+    for n in named:
+        mine = users.get(n.target, {}).get(n.name.casefold())
+        if mine is not None:
+            msg = (
+                f"{n.ref}: agent name '{n.name}' on {n.target} is already used by your agent "
+                f"{mine} — skipped ({n.target} loads only one agent per name). Rename one of "
+                f"them, or remove yours to install {n.ref}'s."
+            )
+            if msg not in warnings:
+                warnings.append(msg)
+            losers.add((n.ref, n.path.casefold()))
+            note = f"agent name '{n.name}' is used by your agent {mine}"
+            plan.path_losers.append((n.ref, n.target, n.path, "", note))
+            continue
+        by_unit.setdefault((n.target, n.name.casefold()), []).append(n)
+    for (target, _), claims in by_unit.items():
+        winner = min(claims, key=lambda c: (c.rank, c.ref))
+        for n in claims:
+            if n.ref == winner.ref:
+                continue
+            mode = _transitive_mode(winner.ref, n.ref, transitive)
+            msg, note = _w5_name(n, winner.ref, mode)
+            if msg not in warnings:
+                warnings.append(msg)
+            losers.add((n.ref, n.path.casefold()))
+            plan.path_losers.append((n.ref, target, n.path, winner.ref, note))
+            unit = f"agent name '{n.name}' on {target}"
+            plan.name_transfers.append((n.ref, n.path, winner.ref, unit, mode))
+    if losers:
+        plan.links = [d for d in plan.links if (d.component, d.path.casefold()) not in losers]
+        plan.copies = [d for d in plan.copies if (d.component, d.path.casefold()) not in losers]
+        plan.transforms = [
+            d for d in plan.transforms if (d.component, d.path.casefold()) not in losers
+        ]
+
+
+def _w5_name(n: _Named, winner: str, mode: str) -> tuple[str, str]:
+    """(warning, status note) for an agent name an earlier claimant has (W5-name)."""
+    head = f"{n.ref}: agent name '{n.name}' on {n.target} is already used by {winner}"
+    why = f"({n.target} loads only one agent per name)"
+    note = f"agent name '{n.name}' is used by {winner}"
+    if mode == "loser":
+        return (
+            f"{head} — skipped {why}. Declare {n.ref} in .agentry.yml above {winner}, or "
+            f"disable {winner}.",
+            note,
+        )
+    if mode:
+        return (
+            f"{head} — skipped {why}. To change that, declare {n.ref} in .agentry.yml to give "
+            "it priority.",
+            note,
+        )
+    return (
+        f"{head}, listed earlier in .agentry.yml — skipped {why}. Disable one of them, or "
+        "reorder components to choose which wins.",
+        f"{note} (listed earlier in .agentry.yml)",
+    )
 
 
 def _resolve_path_claims(
@@ -976,6 +1163,16 @@ def _transfer_lines(
                 _transfer_line(path, winner, loser, _transitive_mode(winner, loser, transitive)),
             )
         )
+    # Name units (ADR-003): the loser was installed at its own path; the winner's path differs.
+    installed = {(path.casefold(), comp) for path, comp in records}
+    winner_paths: dict[str, str] = {}
+    for path, component in paths:
+        winner_paths.setdefault(component, path)
+    for loser, loser_path, winner, unit, mode in plan.name_transfers:
+        win_path = winner_paths.get(winner)
+        if win_path is None or (loser_path.casefold(), loser) not in installed:
+            continue
+        lines.append((win_path, winner, _transfer_line(unit, winner, loser, mode)))
     return lines
 
 

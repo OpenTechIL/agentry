@@ -70,6 +70,7 @@ def _apply_profile(
     merge = dict(base.merge) if base else {}
     link_merge = dict(base.link_merge) if base else {}
     expect = dict(base.expect) if base else {}
+    identity = dict(base.identity) if base else {}
 
     def _clear(ctype: ComponentType, *, keep: dict) -> None:
         for d in (link, copy, merge, link_merge):
@@ -77,6 +78,12 @@ def _apply_profile(
                 d.pop(ctype, None)
 
     for ctype, rule in rules.items():
+        # Identity: a key present sets it (null clears it); absent ⇒ inherit (ADR-003).
+        if "identity" in rule.model_fields_set:
+            if rule.identity is None:
+                identity.pop(ctype, None)
+            else:
+                identity[ctype] = rule.identity
         # Content expectations: omitted ⇒ inherit the built-in; `expect: {}` ⇒ drop it;
         # anything else ⇒ replace it.
         if rule.expect is not None:
@@ -110,6 +117,7 @@ def _apply_profile(
         link_merge=link_merge,
         memory_file=base.memory_file if base else None,
         expect=expect,
+        identity=identity,
     )
 
 

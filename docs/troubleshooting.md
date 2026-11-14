@@ -364,14 +364,75 @@ wins, and neither can be disabled directly:
 depb/skill/rev: .claude/skills/rev is already installed by depa/skill/rev — skipped on claude. To change that, declare depb/skill/rev in .agentry.yml to give it priority.
 ```
 
+### `agent name '<name>' … is already used`
+
+Claude Code identifies agents by the `name` in their frontmatter, not by file path, and loads
+only one agent per name. So agentry treats two agents with the same `name` as a collision even
+when their files are at different paths, such as `agents/reviewer.md` and
+`agents/code-reviewer.md` that both say `name: reviewer`.
+
+**Two components ship the same agent name.**
+
+```text
+two/agent/code-reviewer: agent name 'reviewer' on claude is already used by one/agent/reviewer, listed earlier in .agentry.yml — skipped (claude loads only one agent per name). Disable one of them, or reorder components to choose which wins.
+```
+
+The component listed first in `.agentry.yml` keeps the name and the other is skipped. Earlier
+versions installed both, and Claude silently loaded only one of them. Reorder components to
+choose which agent you get (agentry swaps it over with a one-time `now comes from` line), or
+disable the one you don't want.
+
+**A component's agent has the same name as your own agent.**
+
+```text
+two/agent/helper: agent name 'helper' on claude is already used by your agent .claude/agents/my-helper.md — skipped (claude loads only one agent per name). Rename one of them, or remove yours to install two/agent/helper's.
+```
+
+agentry never touches your file. The component is skipped. Rename one of the two agents, or
+remove yours to let the component install.
+
+Both show in `agentry status` as `missing`, with the reason, and `agentry doctor --strict`
+fails on them.
+
+### `agent has no 'name' in its frontmatter`
+
+```text
+two/agent/noname: agent has no 'name' in its frontmatter, which claude uses to identify agents — treated it as 'noname' (its file name). Add 'name: noname' to the agent.
+```
+
+The agent is installed, and agentry uses its file name as the name for collision checks. Add
+a `name:` to the agent's frontmatter (or ask its author to) so the name is explicit.
+`agentry doctor` lists it as a `component` warning with the same text, so `doctor --strict`
+fails until the name is added.
+
+### `agent name '<name>' contains ':'`
+
+```text
+two/agent/colon: agent name 'tools:lint' contains ':', which claude reserves for plugin agents — installed as-is. Rename it in the agent's frontmatter.
+```
+
+Claude Code uses `plugin:agent` names for agents that come from its own plugins, so a `:` in a
+project agent's name can clash with those. The agent is installed unchanged. Rename it to drop
+the `:`. `agentry doctor` lists it as a `component` warning:
+
+```text
+! component  two/agent/colon: agent name 'tools:lint' contains ':', which claude reserves for plugin agents — installed as-is. Rename it in the agent's frontmatter.
+```
+
 ### `now comes from … instead of …`
 
 ```text
 ~ .claude/commands/review.md now comes from two/command/review (listed earlier in .agentry.yml) instead of one/command/review — to keep one/command/review's version, list it before two/command/review in .agentry.yml, or disable two/command/review
 ```
 
+For an agent name, it reads:
+
+```text
+~ agent name 'reviewer' on claude now comes from two/agent/code-reviewer (listed earlier in .agentry.yml) instead of one/agent/reviewer — to keep one/agent/reviewer's version, list it before two/agent/code-reviewer in .agentry.yml, or disable two/agent/code-reviewer
+```
+
 **Cause.** This isn't an error. agentry printed it once, in the sync where the owner of a
-contested file or entry changed. Usually that's because you reordered `components:` or added a
+contested file, entry or agent name changed. Usually that's because you reordered `components:` or added a
 component above an existing one. After an upgrade, it can also be a file that an earlier version
 let the later-listed component overwrite. agentry moved the file or entry to the component
 listed first. It removes the old owner's entry only if you hadn't edited it.
@@ -783,6 +844,7 @@ on warnings too — which makes it a good CI gate. Errors are listed first below
 | `component` | error | A component references a source that isn't declared (`unknown source`), or the source doesn't actually provide it (`not provided by source`). Run `agentry list` for the real names. |
 | `target` | warn | A component's `targets:` names a target the project doesn't list, so it's skipped there. See [not in the project's targets](#target-name-is-not-in-the-projects-targets-skipped). |
 | `support` | warn | No active target installs this component type, so it goes nowhere. |
+| `component` | warn | An agent has no `name` in its frontmatter, or its name contains `:`. It's installed, but see [no name](#agent-has-no-name-in-its-frontmatter) and [contains ':'](#agent-name-name-contains). |
 | `format` | warn | A component's content visibly won't work in that target. It's installed as-is. See [format warnings](#a-component-may-not-work-on-its-target-format-warnings). |
 | `plugin` | warn | A Claude plugin source's `plugin.json` has something agentry couldn't install or follow, or a plugin entry references `${CLAUDE_PLUGIN_DATA}`. See [plugin.json warnings](#a-claude-plugin-source-reports-pluginjson-warnings). |
 | `env` | warn | A merge fragment references `${VAR}`, which is unset. agentry ships the placeholder; your agent resolves it at runtime. |

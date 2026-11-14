@@ -322,12 +322,23 @@ dataclass that *composes* two things:
    - `HookEventPolicy` — validate hook-event keys (Claude Code rejects a `settings.json`
      carrying unknown event keys, so the claude driver drops them with a warning). No-op
      for agents without one.
-   - `NamespacePolicy` — which component types nest under a `<repo>/` subfolder. The claude
-     driver namespaces commands/agents (`.claude/commands/<repo>/adr.md` → `/<repo>:adr`).
+   - `NamespacePolicy` — which component types nest under a `<repo>/` subfolder. For claude,
+     commands nest into a real namespace (`.claude/commands/<repo>/adr.md` → `/<repo>:adr`);
+     agents are only *organised* under a `<repo>/` folder — Claude identifies agents by name
+     (see *identity* below), so the folder is not a namespace.
    - `transform` — a **reserved seam** for future *semantic translation* (e.g. rewriting a
      fragment between JSON/TOML/YAML, or between agent formats). Default `None` everywhere
      today: agentry maps **placement**, it does not yet translate component formats.
-3. Optional **format expectations** (`TargetSpec.expect`: component type →
+3. Optional **identity rules** (`TargetSpec.identity`: component type → rule; ADR-003). Some
+   tools identify a component by its *content*, not its path: Claude Code scans `.claude/agents/`
+   recursively and identifies an agent only by its frontmatter `name`, loading just one of any
+   duplicates. The claude driver declares `{agent: "frontmatter:name"}`; no other driver declares
+   one. A `target_profiles` (or source `profiles:`) rule may set `identity`, clear it (`null`), or
+   omit it to inherit — the same semantics as `expect:`. `identity.frontmatter_name` reads the
+   leading YAML block (capped at 64 KiB, never raising); a missing `name` falls back to the file
+   stem with a warning, and a name containing `:` (reserved for plugins) warns. The rule feeds the
+   *name units* of the duplicate-claims pass (§7).
+4. Optional **format expectations** (`TargetSpec.expect`: component type →
    `spec.FormatExpectation`). They describe what an agent needs a component's *content* to
    look like, so agentry can **warn** when a correctly placed component won't actually work there.
    - **Fields:**
@@ -572,6 +583,16 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
     instead of {loser} — to keep {loser}'s version, list it before {winner} …`. A transitive
     claimant's hint says to **declare** it in `.agentry.yml` instead. Identical hook groups
     under array mode are shared, never W5; a list vs. an object on one key is W5.
+  - **Name units** (ADR-003). Where a target has an identity rule, two installs of that type with
+    the same identity — `(target, type, casefold(name))` — are one claim *wherever their paths
+    are*. A third pass after the path claims settles them: an unmanaged agent of the user's with
+    that name wins (**W1-name**: ours is skipped, theirs is never touched); otherwise the earliest
+    in claim order wins and later ones get **W5-name**, with the usual transfer line, transitive
+    hints, grouped summary and status/doctor notes. The user-agent scan reads **only** the
+    project's own agent directories (derived from the target's agent dest templates; never
+    `~/.claude`), recursively, frontmatter only, without following symlinks (a symlinked user
+    agent is not scanned — the price of staying hermetic), skipping every path agentry manages or
+    is about to install; malformed files are skipped silently.
   - **Keeping your own value** (`keep:`). A component's `keep:` list in `.agentry.yml` names
     merged keys the user takes over. A bare `key` applies to every target; `<target>:<key>` limits
     it to one. `agentry keep <ref> [<target>:]<key>` appends to the list.

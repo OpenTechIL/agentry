@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Behavior change: two agents with the same name are now detected.** Claude Code identifies
+  agents by the `name` in their frontmatter and loads only one per name, even when the files
+  are at different paths or in different `<repo>/` folders. When two components ship an agent
+  with the same name, the one listed first in `.agentry.yml` is kept and the other is skipped
+  with a warning (Claude only ever loaded one of them). An agent that shares a name with an
+  agent you wrote yourself is skipped, and your file is never touched. `agentry status` shows
+  the skipped one as `missing` with the reason. agentry also warns about an agent with no
+  `name` in its frontmatter, and about a name containing `:`. A new `identity` setting on
+  `target_profiles` rules controls the name check (see the configuration reference).
+
 ## [0.2.0] — 2026-11-14
 
 ### Upgrading from 0.1.x

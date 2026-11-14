@@ -228,7 +228,7 @@ agentry catalog add-repo https://github.com/you/my-kit my-kit \
 | `source` | object | — | `{type, url, path, ref, subdir}` — same shape as a `sources` entry, minus `name`. Defaults to `type: git`, `ref: main`. |
 | `expose` | list | `null` | Curated components. Omit for a conventional-layout repo and let discovery do it. |
 | `copy` | bool | `false` | Install this repo's components as real copies rather than symlinks. |
-| `namespaced` | bool | `true` | Namespace destinations per repo, so two catalogs offering a same-named skill don't collide. |
+| `namespaced` | bool | `true` | Install this repo's components under a `<repo>/` folder, so two catalogs that ship a file with the same name don't overwrite each other. This organises files only. Claude identifies agents by the `name` in their frontmatter, so two agents with the same name still collide whatever folder they're in, and only one is installed (see [agent name already used](troubleshooting.md#agent-name-name-is-already-used)). |
 | `target_profiles` | map | `{}` | Per-repo install-rule overrides, merged into the consumer's config at `agentry add` time. Use sparingly — it changes where files land in someone else's project. |
 
 **`expose` entry:** `{type, name}`, plus `path` for an artifact discovery can't infer, or
