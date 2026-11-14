@@ -44,6 +44,7 @@ def _run(monkeypatch, args: list[str], *, stdin_tty: bool, stdout_tty: bool, tex
         # A fake TTY stands for a real console on every OS (on Windows the fix also probes
         # the console handle, which a StringIO doesn't have).
         m.setattr(cli, "_windows_console", lambda fd: stdin_tty, raising=False)
+        m.setattr(_Stream, "fileno", lambda self: 0, raising=False)
         m.setattr(sys, "stdin", _Stream(text, tty=stdin_tty))
         m.setattr(sys, "stdout", out)
         m.setattr(sys, "stderr", errs)
@@ -113,7 +114,7 @@ def test_tty_stdin_at_eof_does_not_crash_the_picker(tmp_path: Path, monkeypatch)
     """(a) stdin claims a TTY but reads EOF at once (Windows NUL), stdout is a TTY too: no
     crash, the non-interactive outcome, and the run still says what it installed."""
     want = _baseline_add(tmp_path, monkeypatch)
-    proj = _catalog_project(tmp_path / "nul", monkeypatch)
+    proj = _catalog_project(tmp_path / "degraded", monkeypatch)
     code, out = _run(monkeypatch, ["add", "kit"], stdin_tty=True, stdout_tty=True, text="")
     assert (code, _added(proj)) == want, out
     assert "Traceback" not in out and "Aborted" not in out
@@ -196,7 +197,7 @@ def test_target_add_overlay_degraded_tty_refuses_like_non_tty(
     want = _overlay_outcome(base, code, out)
     assert want == (1, False, True)
 
-    proj = _overlay_project(tmp_path / "nul", monkeypatch)
+    proj = _overlay_project(tmp_path / "degraded", monkeypatch)
     code, out = _run(
         monkeypatch, ["target", "add", "myide"], stdin_tty=stdin_tty, stdout_tty=stdout_tty
     )
@@ -242,7 +243,7 @@ def test_sync_trust_prompt_at_eof_declines_like_non_tty(tmp_path: Path, monkeypa
     want = (code, (base / ".claude/skills/fake").exists(), "not trusted" in out)
     assert want == (0, False, True)
 
-    proj = _generator_project(tmp_path / "nul", monkeypatch)
+    proj = _generator_project(tmp_path / "degraded", monkeypatch)
     code, out = _run(monkeypatch, ["sync"], stdin_tty=True, stdout_tty=True, text="")
     assert (code, (proj / ".claude/skills/fake").exists(), "not trusted" in out) == want, out
 
@@ -310,7 +311,7 @@ _REFUSE = (
 def test_windows_nul_console_probe_false_add_installs_everything(tmp_path: Path, monkeypatch):
     """The NUL case end to end: both streams claim TTY, platform win32, no console handle."""
     want = _baseline_add(tmp_path, monkeypatch)
-    proj = _catalog_project(tmp_path / "nul", monkeypatch)
+    proj = _catalog_project(tmp_path / "degraded", monkeypatch)
     with monkeypatch.context() as m:
         m.setattr(cli.sys, "platform", "win32")
         m.setattr(_Stream, "fileno", lambda self: 0, raising=False)
@@ -401,7 +402,7 @@ def _agents_md_project(tmp_path: Path, monkeypatch, existing: str | None = None)
 
     sync(proj)  # agents-md composes from installed components
     if existing is not None:
-        (proj / "AGENTS.md").write_text(existing, encoding="utf-8")
+        (proj / "AGENTS.md").write_bytes(existing.encode("utf-8"))  # LF on every OS
     monkeypatch.chdir(proj)
     return proj
 
@@ -471,6 +472,7 @@ def _run_split(monkeypatch, args: list[str], *, tty: bool, text: str = ""):
     with monkeypatch.context() as m:
         m.setenv("COLUMNS", "200")
         m.setattr(cli, "_windows_console", lambda fd: tty, raising=False)
+        m.setattr(_Stream, "fileno", lambda self: 0, raising=False)
         m.setattr(sys, "stdin", _Stream(text, tty=tty))
         m.setattr(sys, "stdout", out)
         m.setattr(sys, "stderr", errs)
