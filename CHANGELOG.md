@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/usr/lib/agentry`. New release assets: `agentry-<version>-<os>-<arch>.tar.gz` for macOS
   and `agentry-<version>-windows-x86_64.zip`. The Linux `.tar.gz` now holds an `agentry/`
   folder instead of the bare binary. The bare single-file downloads are still published.
+- The `use-agentry` skill now offers, once, to suggest a repo for the public catalog after you
+  install a skill from a public repo the catalog doesn't list yet. When `gh` isn't installed or
+  logged in, it gives you a prefilled GitHub issue link to submit yourself, instead of stopping.
 
 ### Fixed
 - The fix-it hint for a tool skipped on OpenCode now suggests a `.ts` file next to the

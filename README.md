@@ -707,7 +707,9 @@ can install it by name? Two ways, both fine:
 [docs/authoring.md](docs/authoring.md) covers what makes a good entry and what reviewers
 look for. With the [`use-agentry`](skills/use-agentry/SKILL.md) skill installed, either
 route is one sentence to your agent: *"add `https://github.com/owner/repo` to the agentry
-registry"*.
+registry"*. It uses `gh` when it's installed and logged in, and otherwise gives you a prefilled
+issue link. After you install a skill from a public repo that isn't in the catalog yet, the
+skill also offers, once, to suggest it.
 
 ## FAQ
 
