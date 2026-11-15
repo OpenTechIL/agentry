@@ -721,7 +721,21 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
     `created_dirs`. When a sync leaves such a file as **exactly agentry's empty skeleton**, the
     file is deleted (`- remove {file} (created by agentry, now empty)`). The skeleton is either
     no keys at all, or only the pointer keys agentry merges into, each an empty mapping, and it
-    must serialise identically to a freshly built skeleton. Its recorded folders are then removed
+    must serialise identically to a freshly built skeleton. **Tool-written keys** are the one
+    allowance: a merge destination may declare top-level `(key, value)` pairs the *tool itself*
+    writes into the file (`MergeDest.tool_keys`; OpenCode adds `"$schema":
+    "https://opencode.ai/config.json"` to `opencode.json`). They are ignored on an **exact value
+    match** — same type and value, so `true` never matches `1` — at the top level only, and only
+    for a file agentry created — they never make a pre-existing file deletable; a tool key named
+    like one of agentry's pointers is ignored (the pointer rule wins). The set is the union over
+    the project's resolved drivers (built-ins and `target_profiles`), so it still applies after
+    the file's last component is removed. A `target_profiles` `merge` / `link+merge` rule may
+    set `tool_keys` (`{}` opts out, and survives a config round-trip), and a pointer-only
+    override inherits the built-in's for the same file; on any other strategy the key is a
+    validation error. A source's `profiles:` **can't** set them: it may come from a remote
+    catalog, and a tool key decides what agentry may delete, so a source must never be able to
+    mark a user's key as disposable — `tool_keys` there is ignored with a warning, like
+    `identity`. Its recorded folders are then removed
     deepest-first, but only while they are completely empty. The file **stays** in every other
     case:
     - a key the user added, even one with an empty or falsy value;

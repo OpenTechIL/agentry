@@ -380,6 +380,11 @@ class ProfileRule(BaseModel):
     # Claude plugin's root, so ${CLAUDE_PLUGIN_ROOT} paths in inline plugin.json hooks
     # resolve under the link (ADR-002 §3).
     link_from: Literal["artifact", "source_root"] = "artifact"
+    # merge / link+merge only: top-level key/value pairs the tool itself writes into `file`
+    # (e.g. {"$schema": "https://opencode.ai/config.json"}); the #45 empty-file check ignores
+    # them on an exact value match. Omitted ⇒ inherit the built-in's for the same file.
+    # Honored only in the project's target_profiles; a source's profiles can't set it.
+    tool_keys: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     # Optional content expectations for this type on this tool (see ExpectRule).
     expect: ExpectRule | None = None
     # How the tool identifies this type when it isn't by path (ADR-003):
@@ -394,6 +399,14 @@ class ProfileRule(BaseModel):
             raise ValueError("merge profile rule requires 'file' and 'pointer'")
         if self.strategy is Strategy.LINK_MERGE and not (self.dest and self.file and self.pointer):
             raise ValueError("link+merge profile rule requires 'dest', 'file' and 'pointer'")
+        if "tool_keys" in self.model_fields_set and self.strategy not in (
+            Strategy.MERGE,
+            Strategy.LINK_MERGE,
+        ):
+            raise ValueError(
+                f"'tool_keys' only applies to merge and link+merge profile rules, "
+                f"not {self.strategy.value}"
+            )
         if (self.rewrite_from is None) != (self.rewrite_to is None):
             raise ValueError("'rewrite_from' and 'rewrite_to' must be set together")
         # Only a plain merge can leave a component out whole; a link, copy or link+merge

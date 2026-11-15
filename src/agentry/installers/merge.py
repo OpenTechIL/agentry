@@ -289,7 +289,11 @@ class Documents:
         elif file in self._docs and pointer not in self._docs[file][1]:
             self.created_pointers.discard((file, pointer))
 
-    def flush(self, pointers: dict[str, set[str]] | None = None) -> list[str]:
+    def flush(
+        self,
+        pointers: dict[str, set[str]] | None = None,
+        tool_keys: dict[str, dict[str, list[object]]] | None = None,
+    ) -> list[str]:
         """Write every document that changed (unchanged files are left byte-identical).
 
         A file agentry created that is now its empty skeleton (only ``pointers[file]`` keys,
@@ -298,7 +302,10 @@ class Documents:
         """
         deleted: list[str] = []
         for file, (path, doc, before) in self._docs.items():
-            if file in self.created_files and _is_skeleton(path, doc, (pointers or {}).get(file)):
+            # Only a file agentry created is ever deleted; tool_keys never widen that.
+            if file in self.created_files and _is_skeleton(
+                path, doc, (pointers or {}).get(file), (tool_keys or {}).get(file)
+            ):
                 if path.is_file():
                     path.unlink()
                     deleted.append(file)
@@ -318,17 +325,33 @@ class Documents:
         return deleted
 
 
-def _is_skeleton(path: Path, doc: MutableMapping, pointers: set[str] | None) -> bool:
+def _is_skeleton(
+    path: Path,
+    doc: MutableMapping,
+    pointers: set[str] | None,
+    tool_keys: dict[str, list[object]] | None = None,
+) -> bool:
     """Whether ``doc`` is exactly the empty skeleton agentry writes: no keys, or only
-    agentry's ``pointers`` each holding an empty mapping — and it serializes identically to
-    a freshly built skeleton, so a TOML comment or any other content keeps the file."""
+    agentry's ``pointers`` each holding an empty mapping — plus, at the top level only, any
+    ``tool_keys`` the tool itself writes, on an *exact* value match — and it serializes
+    identically to a freshly built skeleton, so a TOML comment or other content keeps it.
+
+    A tool key named like one of agentry's pointers is ignored (the pointer rule wins).
+    """
     allowed = pointers or set()
+    written = tool_keys or {}
     for key, value in doc.items():
-        if key not in allowed or not isinstance(value, MutableMapping) or len(value) != 0:
+        if key in allowed:
+            if not isinstance(value, MutableMapping) or len(value) != 0:
+                return False
+        elif key not in written or not any(_same(_plain(value), w) for w in written[key]):
             return False
     skeleton: MutableMapping = tomlkit.document() if _is_toml(path) else {}
-    for key in doc:
-        skeleton[key] = tomlkit.table() if _is_toml(path) else {}
+    for key, value in doc.items():
+        if key in allowed:
+            skeleton[key] = tomlkit.table() if _is_toml(path) else {}
+        else:
+            skeleton[key] = _plain(value)
     return _serialize(path, doc) == _serialize(path, skeleton)
 
 
@@ -478,6 +501,11 @@ def _article(word: str) -> str:
     if word == "null":
         return "null"
     return f"{'an' if word[:1] in 'aeiou' else 'a'} {word}"
+
+
+def _same(a: object, b: object) -> bool:
+    """Equal in type *and* value (``True == 1 == 1.0`` in Python, but not here)."""
+    return type(a) is type(b) and a == b
 
 
 def _plain(value: object) -> object:

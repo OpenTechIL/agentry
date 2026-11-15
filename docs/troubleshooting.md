@@ -953,7 +953,10 @@ only if **agentry created it** and it's now back to empty. It prints:
 For `.codex/config.toml`, the `.codex/` folder goes too if agentry created it and it's now empty.
 The file is kept if:
 - it existed before agentry first wrote to it, even as `{}`;
-- anything else is left in it: one of your own entries, or any other key;
+- anything else is left in it: one of your own entries, or any other key. A key the tool writes
+  itself doesn't count when its value matches exactly, such as OpenCode's
+  `"$schema": "https://opencode.ai/config.json"` (see
+  [`tool_keys`](config-reference.md#target_profiles));
 - it came from an install made by an older agentry, which didn't record creating it. That file
   stays, as `{}` or similar. Delete it by hand if you don't need it.
 
