@@ -40,11 +40,21 @@ you're in:
 | Declared, nothing to change | `s/skill/s is already declared — no change.` Nothing is written, and there's no sync. |
 | Declared but disabled | `` s/skill/s is already declared but disabled — run `agentry enable s/skill/s`. `` It stays disabled; `add` never re-enables it. |
 
-A component can't have both `path` and `generate`. Asking for the other one fails, exits 1 and
-changes nothing:
+A changed generator prints one line per part that changed, for example
+`Updated s/skill/s: generate.produces out1 → out2`. The sync that follows re-runs the edited
+generator (if the source is trusted or you pass `--allow-run`). It tracks the new outputs and
+deletes old outputs that the new spec no longer produces. A generator is given whole:
+`--generate-setup` or `--produces` without `--generate-command` exits 1 and changes nothing.
+This applies to a new ref too. A generator written another way in `.agentry.yml` (`setup: []`,
+flow style) that matches the flags counts as no change.
+
+A component can't have both `path` and `generate`, or both `generate` and `transform`. Asking
+for a combination like that fails, exits 1 and changes nothing. The message names the field
+that's actually in the way:
 
 ```text
 s/skill/s already has `path:` in .agentry.yml; a component can't have both `path` and `generate`. Remove `path:` from it first, or drop --generate-command. Nothing was changed.
+s/agent/a has `transform:` in .agentry.yml; a component can't have both `generate` and `transform`. Remove `transform:` from it first, or drop --generate-command. Nothing was changed.
 ```
 
 ## Sources

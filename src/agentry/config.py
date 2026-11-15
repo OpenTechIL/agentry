@@ -245,10 +245,13 @@ class ConfigStore:
             for key, value in changes.items():
                 old = c.get(key)
                 if key == "generate" and isinstance(value, GeneratorSpec):
-                    if old is not None and _plain(old) == _generate_map(value):
+                    # Compare by value, not YAML shape: `setup: []`, flow vs block style and
+                    # key order are all the same spec and must not count as a change.
+                    old_spec = _as_generator(old)
+                    if old_spec == value:
                         continue
                     c[key] = _generate_cmap(value)
-                    done[key] = (_plain(old) if old is not None else None, value)
+                    done[key] = (old_spec, value)
                 elif old != value:
                     c[key] = value
                     done[key] = (old, value)
@@ -298,14 +301,14 @@ class ConfigStore:
         self.path_for(self.root).write_text(self.dumps(), encoding="utf-8")
 
 
-def _generate_map(spec: GeneratorSpec) -> dict:
-    """A generator spec as the plain mapping ``.agentry.yml`` stores."""
-    out: dict = {}
-    if spec.setup:
-        out["setup"] = [list(cmd) for cmd in spec.setup]
-    out["command"] = list(spec.command)
-    out["produces"] = list(spec.produces)
-    return out
+def _as_generator(raw: object) -> GeneratorSpec | None:
+    """A stored ``generate:`` value as a spec (None if unset or not a valid spec)."""
+    if raw is None:
+        return None
+    try:
+        return GeneratorSpec.model_validate(_plain(raw))
+    except ValueError:
+        return None
 
 
 def _generate_cmap(spec: GeneratorSpec) -> CommentedMap:

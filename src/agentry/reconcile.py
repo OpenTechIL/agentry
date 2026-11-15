@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, MutableMapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from . import deps, discovery, envscan, identity, plugin_manifest
 from .config import ConfigStore
@@ -2250,9 +2250,14 @@ def _reconcile_generated(
     manifest.generated = kept
 
     trust_changed = False
-    have = {g.component for g in manifest.generated}
+    records = {g.component: g for g in manifest.generated}
     for ref, d in desired_by_ref.items():
-        already = ref in have and gen_inst.produces_present(root, d.spec)
+        tracked = records.get(ref)
+        if tracked is not None and tracked.spec is None:
+            tracked.spec = d.spec  # older manifest: adopt the current spec, don't re-run for it
+        # An edited spec (command, setup or produces) re-runs even with outputs present.
+        edited = tracked is not None and tracked.spec != d.spec
+        already = tracked is not None and not edited and gen_inst.produces_present(root, d.spec)
         source = ref.split("/", 1)[0]
         updating = update and (update_only is None or source in update_only)
         if already and not updating:
@@ -2280,13 +2285,32 @@ def _reconcile_generated(
         except gen_inst.GenerateError as exc:
             result.warnings.append(f"{ref}: {exc}")
             continue
-        if ref not in have:
-            manifest.generated.append(
-                InstalledGenerated(component=ref, target=d.target, paths=list(d.spec.produces))
+        if tracked is None:
+            tracked = InstalledGenerated(
+                component=ref, target=d.target, paths=list(d.spec.produces), spec=d.spec
             )
-            have.add(ref)
+            manifest.generated.append(tracked)
+            records[ref] = tracked
+        else:
+            # Re-recorded only after a successful run: a path the old spec produced and the
+            # new one doesn't is still ours, so it's removed rather than left untracked —
+            # unless it overlaps a new output (one inside the other), which just ran.
+            dropped = [p for p in tracked.paths if not _overlaps_any(p, d.spec.produces)]
+            for p in gen_inst.remove_generated(root, dropped):
+                result.removed.append(f"generated {p}")
+            tracked.paths, tracked.spec = list(d.spec.produces), d.spec
         result.created.append(f"generated {ref} ({', '.join(d.spec.produces)})")
     return trust_changed
+
+
+def _overlaps_any(path: str, others: list[str]) -> bool:
+    """True if ``path`` equals, contains, or lies inside any of ``others`` (project-relative)."""
+    a = PurePosixPath(path.replace("\\", "/"))
+    for o in others:
+        b = PurePosixPath(o.replace("\\", "/"))
+        if a == b or a in b.parents or b in a.parents:
+            return True
+    return False
 
 
 def _reconcile_link_merges(

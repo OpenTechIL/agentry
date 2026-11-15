@@ -18,7 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mcp/github-opencode.json`) to install an MCP server on OpenCode.
 - `agentry add <ref>` on a component that's already declared now applies the options you pass
   (for example `--path`) and says `Updated …`; with nothing to change it says
-  `already declared — no change` instead of a misleading `Added`.
+  `already declared — no change` instead of a misleading `Added`. A generator change prints only
+  the parts that changed. `--generate-setup` or `--produces` without `--generate-command` now
+  exits 1 instead of being ignored.
+- `agentry sync` re-runs a generator whose `generate:` spec was edited, even when its old outputs
+  are present. It tracks the new `produces` paths and deletes old outputs the new spec no longer
+  produces.
 
 ## [0.3.3] — 2026-11-15
 

@@ -367,6 +367,47 @@ def test_generate_runs_and_tracks_and_removes(project: Path, local_source: Path)
     assert any("generated .claude/skills/fake" in r for r in res3.removed)
 
 
+def test_generate_legacy_record_adopts_spec_without_rerun(project: Path, local_source: Path):
+    """A manifest record from before specs were tracked is backfilled, not re-run."""
+    from agentry.manifest import save_manifest
+
+    _wire_generator(project, local_source, _generator_component())
+    sync(project, allow_run=True)
+    man = load_manifest(project)
+    man.generated[0].spec = None
+    save_manifest(project, man)
+
+    res = sync(project, allow_run=True)
+    assert res.created == [] and res.removed == []
+    assert load_manifest(project).generated[0].spec == _generator_component()
+    res = sync(project, allow_run=True)  # and stays idempotent
+    assert res.created == [] and res.updated == [] and res.removed == []
+
+
+def test_generate_edited_produces_never_deletes_an_overlapping_new_output(
+    project: Path, local_source: Path
+):
+    """Old produces `.claude/skills/fake` (a dir), new `.claude/skills/fake/SKILL.md` inside
+    it: the re-run's output must survive the drop of the old tracked path."""
+    _wire_generator(project, local_source, _generator_component())
+    sync(project, allow_run=True)
+    narrow = GeneratorSpec(
+        command=_generator_component().command, produces=[".claude/skills/fake/SKILL.md"]
+    )
+    store = ConfigStore.load(project)
+    assert store.update_component("g/skill/fake", {"generate": narrow})
+    store.save()
+
+    res = sync(project, allow_run=True)
+    assert any("generated g/skill/fake" in c for c in res.created)
+    assert res.removed == []
+    assert (project / ".claude/skills/fake/SKILL.md").read_text(encoding="utf-8") == (
+        "# fake skill\n"
+    )
+    (rec,) = load_manifest(project).generated
+    assert rec.paths == [".claude/skills/fake/SKILL.md"] and rec.spec == narrow
+
+
 def test_generate_status_reports_state(project: Path, local_source: Path):
     _wire_generator(project, local_source, _generator_component())
     sync(project, allow_run=True)

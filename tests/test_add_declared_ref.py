@@ -9,12 +9,14 @@ say what really happened — never a silent no-op reported as "Added".
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from agentry.cli import app
 from agentry.config import ConfigStore
+from agentry.manifest import load_manifest
 
 _YML = """\
 # team config — keep this comment
@@ -248,7 +250,7 @@ def test_generate_on_declared_ref_updates_and_reports_command(tmp_path: Path, mo
 
     res = _cli("add", "s/skill/rev", "--generate-command", "echo two", *gen)
     assert res.exit_code == 0, res.output
-    assert "Updated s/skill/rev: generate echo one → echo two" in _text(res)
+    assert "Updated s/skill/rev: generate.command echo one → echo two" in _text(res)
 
     cfg = (proj / ".agentry.yml").read_bytes()
     res = _cli("add", "s/skill/rev", "--generate-command", "echo two", *gen)
@@ -262,3 +264,138 @@ def test_update_component_on_undeclared_ref_changes_nothing(tmp_path: Path, monk
     before = store.dumps()
     assert store.update_component("s/command/nope", {"path": "alt/c.md"}) == {}
     assert store.dumps() == before
+
+
+# --- review fixes --------------------------------------------------------------------------
+
+
+def _append(proj: Path, yml: str) -> None:
+    cfg = proj / ".agentry.yml"
+    cfg.write_bytes(cfg.read_bytes() + yml.encode("utf-8"))
+
+
+def test_generate_vs_transform_conflict_names_the_transform(tmp_path: Path, monkeypatch):
+    """A clash with `transform:` (no path, no generate) is reported as that, not as a
+    `generate:` the user is told to remove but doesn't have."""
+    proj = _setup(tmp_path, monkeypatch)
+    (tmp_path / "src/agents").mkdir()
+    (tmp_path / "src/agents/a.md").write_bytes(b"---\nname: a\n---\nbody\n")
+    _append(
+        proj,
+        "  - source: s\n    type: agent\n    name: a\n"
+        "    transform:\n      provider: strip-frontmatter\n",
+    )
+    cfg = (proj / ".agentry.yml").read_bytes()
+    res = _cli("add", "s/agent/a", "--generate-command", "touch x", "--produces", "x")
+    assert res.exit_code == 1, res.output
+    err = " ".join(res.stderr.split())
+    assert "s/agent/a has `transform:` in .agentry.yml" in err
+    assert "Remove `transform:` from it first, or drop --generate-command." in err
+    assert "generate:`" not in err and "`path`" not in err
+    assert err.endswith("Nothing was changed.")
+    assert "Updated" not in res.output
+    assert (proj / ".agentry.yml").read_bytes() == cfg
+
+
+def test_equivalent_generator_forms_are_no_change(tmp_path: Path, monkeypatch):
+    """`setup: []`, flow style and a different key order are the same spec as the flags."""
+    proj = _setup(tmp_path, monkeypatch)
+    _append(
+        proj,
+        "  - source: s\n    type: skill\n    name: g\n"
+        "    generate: {produces: [out], setup: [], command: [echo, hi]}\n",
+    )
+    cfg = (proj / ".agentry.yml").read_bytes()
+    res = _cli("add", "s/skill/g", "--generate-command", "echo hi", "--produces", "out")
+    assert res.exit_code == 0, res.output
+    assert "s/skill/g is already declared — no change." in _text(res)
+    assert "Updated" not in res.output
+    assert (proj / ".agentry.yml").read_bytes() == cfg
+
+
+def test_generator_update_shows_only_the_parts_that_changed(tmp_path: Path, monkeypatch):
+    proj = _setup(tmp_path, monkeypatch)
+    base = ["add", "s/skill/rev", "--generate-command", "echo one"]
+    assert _cli(*base, "--produces", "a").exit_code == 0
+
+    res = _cli(*base, "--produces", "b")
+    assert res.exit_code == 0, res.output
+    out = _text(res)
+    assert "Updated s/skill/rev: generate.produces a → b" in out
+    assert "generate.command" not in out and "generate.setup" not in out
+    assert "echo one → echo one" not in out
+
+    res = _cli(*base, "--produces", "b", "--generate-setup", "echo prep")
+    assert res.exit_code == 0, res.output
+    out = _text(res)
+    assert "Updated s/skill/rev: generate.setup none → echo prep" in out
+    assert "generate.produces" not in out and "generate.command" not in out
+    assert _comp(proj, "rev").generate.setup == [["echo", "prep"]]
+
+
+def test_generator_qualifiers_without_command_exit_1(tmp_path: Path, monkeypatch):
+    """--generate-setup / --produces only qualify --generate-command (a generator is given
+    whole): alone they're refused — declared or new ref — instead of silently dropped."""
+    proj = _setup(tmp_path, monkeypatch)
+    assert (
+        _cli("add", "s/skill/rev", "--generate-command", "echo one", "--produces", "a").exit_code
+        == 0
+    )
+    for argv in (
+        ["add", "s/skill/rev", "--produces", "b"],
+        ["add", "s/skill/rev", "--generate-setup", "echo prep"],
+        ["add", "s/command/new", "--produces", "b"],
+    ):
+        cfg, lock = (proj / ".agentry.yml").read_bytes(), (proj / ".agentry.lock").read_bytes()
+        res = _cli(*argv)
+        assert res.exit_code == 1, (argv, res.output)
+        err = " ".join(res.stderr.split())
+        assert "needs --generate-command" in err and err.endswith("Nothing was changed.")
+        assert "no change" not in res.output and "Added" not in res.output
+        assert (proj / ".agentry.yml").read_bytes() == cfg
+        assert (proj / ".agentry.lock").read_bytes() == lock
+    assert _comp(proj, "rev").generate.produces == ["a"]
+
+
+def _py(code: str) -> str:
+    """A --generate-command running ``code`` with this interpreter (quoted for shlex)."""
+    return f"'{sys.executable}' -c '{code}'"
+
+
+def test_generator_edit_reruns_and_retracks_produces(tmp_path: Path, monkeypatch):
+    """After `Updated … generate`, the sync re-runs the edited generator (outputs of the old
+    spec being present doesn't skip it), tracks the new outputs and removes the old ones —
+    so a later `remove` leaves nothing behind. A repeat is a no-op."""
+    proj = _setup(tmp_path, monkeypatch)
+
+    def gen(out: str, text: str) -> list[str]:
+        code = (
+            f'import os; os.makedirs("{out}", exist_ok=True); '
+            f'open("{out}/f.txt", "a").write("{text}")'
+        )
+        return ["--generate-command", _py(code), "--produces", out, "--allow-run"]
+
+    assert _cli("add", "s/skill/rev", *gen("out1", "one")).exit_code == 0
+    assert (proj / "out1/f.txt").read_text() == "one"
+
+    # command only (same produces, outputs present): re-runs
+    res = _cli("add", "s/skill/rev", *gen("out1", "two"))
+    assert res.exit_code == 0, res.output
+    assert (proj / "out1/f.txt").read_text() == "onetwo"
+
+    # produces moves: re-runs, new output tracked, old one removed
+    res = _cli("add", "s/skill/rev", *gen("out2", "three"))
+    assert res.exit_code == 0, res.output
+    assert "Updated s/skill/rev: generate.produces out1 → out2" in _text(res)
+    assert (proj / "out2/f.txt").read_text() == "three"
+    assert not (proj / "out1").exists()
+    (rec,) = load_manifest(proj).generated
+    assert rec.paths == ["out2"] and rec.spec == _comp(proj, "rev").generate
+
+    # repeat: nothing re-runs
+    assert "no change" in _text(_cli("add", "s/skill/rev", *gen("out2", "three")))
+    assert _cli("sync", "--allow-run").exit_code == 0
+    assert (proj / "out2/f.txt").read_text() == "three"
+
+    assert _cli("remove", "s/skill/rev").exit_code == 0
+    assert not (proj / "out2").exists()
