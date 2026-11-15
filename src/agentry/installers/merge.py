@@ -145,7 +145,11 @@ def _write_doc(path: Path, doc: MutableMapping, *, before: str | None) -> None:
 
 
 def install_merge(root: Path, dest: MergeDest, fragment: dict) -> list[str]:
-    """Merge ``fragment`` into the target config; return the owned keys."""
+    """Merge ``fragment`` into the target config; return the owned keys.
+
+    Low-level primitive, not used by sync (which goes through :class:`Documents` and
+    :func:`commit_named`, recording ownership); kept for tests and direct use.
+    """
     path = require_confined(root, dest.file)
     doc = _read_doc(path, dest.file)
     before = _serialize(path, doc) if path.is_file() else None
@@ -162,7 +166,12 @@ def install_merge(root: Path, dest: MergeDest, fragment: dict) -> list[str]:
 
 
 def remove_merge(root: Path, dest: MergeDest, keys: list[str]) -> bool:
-    """Remove agentry-owned ``keys`` from the target config. Leaves the rest intact."""
+    """Remove agentry-owned ``keys`` from the target config. Leaves the rest intact.
+
+    Low-level primitive, not used by sync. It drops an emptied pointer key
+    *unconditionally*, so sync code must use :func:`remove_named` with the
+    ``created_pointers`` ownership record instead (#100).
+    """
     path = require_confined(root, dest.file)
     if not path.is_file():
         return False
@@ -237,6 +246,7 @@ class Documents:
         root: Path,
         created_files: list[str] | None = None,
         created_dirs: set[str] | list[str] | None = None,
+        created_pointers: set[tuple[str, str]] | None = None,
     ) -> None:
         self.root = root
         self._docs: dict[str, tuple[Path, MutableMapping, str | None]] = {}
@@ -246,6 +256,8 @@ class Documents:
         self.created_dirs: set[str] = (
             created_dirs if isinstance(created_dirs, set) else set(created_dirs or [])
         )
+        #: ``(file, pointer)`` keys agentry created (#100). ``None`` ⇒ no records (status).
+        self.created_pointers: set[tuple[str, str]] = set(created_pointers or set())
 
     def get(self, file: str) -> MutableMapping:
         if file in self._errors:
@@ -259,7 +271,23 @@ class Documents:
                 raise
             before = _serialize(path, doc) if path.is_file() else None
             self._docs[file] = (path, doc, before)
+            # First read this sync: a recorded pointer that's gone was removed by the user; if
+            # they recreate it by hand it's theirs, so forget the record now (#100).
+            self.created_pointers = {
+                (f, p) for f, p in self.created_pointers if f != file or p in doc
+            }
         return self._docs[file][1]
+
+    def owns_pointer(self, file: str, pointer: str) -> bool:
+        """Whether agentry created ``pointer`` in ``file`` (so it may drop it once empty)."""
+        return (file, pointer) in self.created_pointers
+
+    def note_pointer(self, file: str, pointer: str, created: bool) -> None:
+        """Track a pointer after a write (``created``) or a removal (gone ⇒ forget it)."""
+        if created:
+            self.created_pointers.add((file, pointer))
+        elif file in self._docs and pointer not in self._docs[file][1]:
+            self.created_pointers.discard((file, pointer))
 
     def flush(self, pointers: dict[str, set[str]] | None = None) -> list[str]:
         """Write every document that changed (unchanged files are left byte-identical).
@@ -275,6 +303,7 @@ class Documents:
                     path.unlink()
                     deleted.append(file)
                 self.created_files.discard(file)
+                self.created_pointers = {(f, p) for f, p in self.created_pointers if f != file}
                 prune_created_dirs(self.root, path.parent, self.created_dirs)
                 continue
             if before is None:
@@ -894,16 +923,19 @@ def plan_named(
     return plan
 
 
-def commit_named(doc: MutableMapping, pointer: str, plan: NamedPlan) -> None:
-    """Apply a non-refused plan's writes to ``doc``."""
+def commit_named(doc: MutableMapping, pointer: str, plan: NamedPlan) -> bool:
+    """Apply a non-refused plan's writes to ``doc``. True if it created the pointer key."""
     if plan.refused or not plan.writes:
-        return
+        return False
     section = doc.get(pointer)
+    created = False
     if not isinstance(section, MutableMapping):
         doc[pointer] = {}
         section = doc[pointer]  # tomlkit turns the dict into a live Table; re-fetch it
+        created = True
     for key, value in plan.writes.items():
         section[key] = value
+    return created
 
 
 def remove_named(
@@ -912,12 +944,16 @@ def remove_named(
     entries: dict[str, OwnedEntry],
     unverified: Callable[[str], str] | None = None,
     shared: Callable[[str, str], bool] | None = None,
+    *,
+    drop_pointer: bool = False,
 ) -> tuple[bool, list[str]]:
     """Remove the keys agentry owns (fingerprint still matches); return (removed, warnings).
 
     Pre-existing entries are never removed; an entry the user edited is left in place, and
     so is one whose ownership was never proven (``fingerprint=None``, from a v1 manifest).
     ``unverified(key)`` overrides the warning for the latter (e.g. W6 for link+merge).
+    The pointer key itself is dropped once empty only with ``drop_pointer`` — i.e. when
+    agentry created it (#100); a pointer the user made stays, even as ``{}``.
     """
     section = doc.get(ctx.pointer)
     if not isinstance(section, MutableMapping):
@@ -949,7 +985,7 @@ def remove_named(
             continue
         del section[key]
         removed = True
-    if removed and not section:
+    if removed and drop_pointer and not section:
         doc.pop(ctx.pointer, None)
     return removed, warnings
 

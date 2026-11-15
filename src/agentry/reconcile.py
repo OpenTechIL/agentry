@@ -43,6 +43,7 @@ from .models import (
     Component,
     ComponentType,
     Config,
+    CreatedPointer,
     GeneratorSpec,
     InstalledCopy,
     InstalledGenerated,
@@ -1123,6 +1124,7 @@ def _drop_stale_created(root: Path, manifest: Manifest) -> None:
         d for d in manifest.created_dirs if (root / d).is_dir() and not (root / d).is_symlink()
     ]
     manifest.created_files = [f for f in manifest.created_files if (root / f).is_file()]
+    manifest.created_pointers = [c for c in manifest.created_pointers if (root / c.file).is_file()]
 
 
 def _prune_links(
@@ -1798,7 +1800,9 @@ def _remove_record(
         {k: e for k, e in rec.entries.items() if k not in kept},
         unverified,
         claims.shared((rec.component, rec.target), rec.file, rec.pointer) if claims else None,
+        drop_pointer=docs.owns_pointer(rec.file, rec.pointer),
     )
+    docs.note_pointer(rec.file, rec.pointer, created=False)
     result.warnings.extend(warnings)
     return removed
 
@@ -1867,10 +1871,15 @@ def _commit_record(
     ctx = _ctx(who, dest.file, dest.pointer, bare)
     if stale:
         _, warnings = merge_inst.remove_named(
-            doc, ctx, stale, shared=claims.shared(who, dest.file, dest.pointer)
+            doc,
+            ctx,
+            stale,
+            shared=claims.shared(who, dest.file, dest.pointer),
+            drop_pointer=docs.owns_pointer(dest.file, dest.pointer),
         )
         result.warnings.extend(warnings)
-    merge_inst.commit_named(doc, dest.pointer, plan)
+    created = merge_inst.commit_named(doc, dest.pointer, plan)
+    docs.note_pointer(dest.file, dest.pointer, created)
     claims.release(who)
     claims.claim(who, dest.file, dest.pointer, plan.entries)
 
@@ -1897,7 +1906,12 @@ def _reconcile_merge_targets(
     conflicts are judged against whatever a generator wrote.
     """
     # One set shared by the merge files and the link half of link+merges (#48).
-    docs = merge_inst.Documents(root, manifest.created_files, set(manifest.created_dirs))
+    docs = merge_inst.Documents(
+        root,
+        manifest.created_files,
+        set(manifest.created_dirs),
+        {(c.file, c.pointer) for c in manifest.created_pointers},
+    )
     records: list[InstalledMerge | InstalledLinkMerge] = [*manifest.merges, *manifest.link_merges]
     # Every pointer agentry merges into, per file: the only keys an empty skeleton may hold.
     pointers: dict[str, set[str]] = {}
@@ -1930,6 +1944,9 @@ def _reconcile_merge_targets(
     for file in docs.flush(pointers):
         result.removed.append(f"remove {file} (created by agentry, now empty)")
     manifest.created_files = sorted(docs.created_files)
+    manifest.created_pointers = [
+        CreatedPointer(file=f, pointer=p) for f, p in sorted(docs.created_pointers)
+    ]
     manifest.created_dirs = sorted(docs.created_dirs)
     owned_now: set[tuple[Who, str, str, str]] = set()
     for mrec in manifest.merges:
@@ -1974,8 +1991,13 @@ def _release_lost_keys(
         for key, entry in lost.items():
             ctx = _ctx(who, r.file, r.pointer)
             removed, warnings = merge_inst.remove_named(
-                doc, ctx, {key: entry}, shared=claims.shared(who, r.file, r.pointer)
+                doc,
+                ctx,
+                {key: entry},
+                shared=claims.shared(who, r.file, r.pointer),
+                drop_pointer=docs.owns_pointer(r.file, r.pointer),
             )
+            docs.note_pointer(r.file, r.pointer, created=False)
             result.warnings.extend(warnings)
             winner, _ = claims.winners[(r.file, r.pointer, key)]
             if removed:
