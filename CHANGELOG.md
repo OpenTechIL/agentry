@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Release signatures now use the standard Sigstore bundle format. Verify them with a recent cosign
+  (2.6 or later, or 3.x), using the same `cosign verify-blob` command as before.
+
 ## [0.3.3] — 2026-11-15
 
 ### Fixed
