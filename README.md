@@ -442,7 +442,7 @@ Grouped by what you're trying to do. Full reference with every flag:
 |---|---|
 | `agentry init [-t TARGET]...` | Set up a project: create `.agentry.yml`, register the default catalog, git-ignore `.agentry/`. Re-running it with `-t` on an existing project adds targets instead of erroring. |
 | `agentry search [QUERY]` | Browse catalogs for installable repos. No query lists everything. |
-| `agentry add <ref>` | Install a component, or a whole catalog repo. Downloads and installs in one step. |
+| `agentry add <ref>` | Install a component, or a whole catalog repo. Downloads and installs in one step. On a component that's already declared, it updates the options you pass (`--path`, …) instead of adding it again. |
 | `agentry remove <ref>` | Uninstall and drop from config. Fully reverses the install. |
 | `agentry list` | Every component your configured sources provide, with its state. |
 | `agentry sync` | Make the filesystem match your config + lock. Safe to re-run; does nothing if already correct. |

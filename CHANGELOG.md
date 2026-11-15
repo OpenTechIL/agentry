@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the whole config file when it finds one. They're skipped with a warning, and any already
   installed are removed on the next sync. Ship an OpenCode-specific variant (for example
   `mcp/github-opencode.json`) to install an MCP server on OpenCode.
+- `agentry add <ref>` on a component that's already declared now applies the options you pass
+  (for example `--path`) and says `Updated …`; with nothing to change it says
+  `already declared — no change` instead of a misleading `Added`.
 
 ## [0.3.3] — 2026-11-15
 

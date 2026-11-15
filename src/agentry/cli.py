@@ -1083,10 +1083,74 @@ def add(
     except ValueError as exc:
         err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
+    existing = store.parsed().find_component(comp.ref)
+    if existing is not None:
+        # Already declared (PM ruling c): update only the options that differ; never re-add,
+        # never auto-enable. Nothing written ⇒ no sync.
+        if _update_declared(store, existing, path=path, generate=generate):
+            _do_sync(allow_run=allow_run, verbose=verbose)
+        return
     store.add_component(comp)
     _save_validated(store)
     console.print(f"[green]Added[/green] {_e(ref)}")
     _do_sync(allow_run=allow_run, verbose=verbose)
+
+
+def _update_declared(
+    store: ConfigStore,
+    existing: Component,
+    *,
+    path: str | None,
+    generate: GeneratorSpec | None,
+) -> bool:
+    """``add <ref>`` on a ref already in ``.agentry.yml``. Returns True if it wrote anything.
+
+    Only the options actually passed (and different) change; the merged component must stay
+    valid, else nothing is written and it exits 1 saying what to change.
+    """
+    ref = existing.ref
+    requested: dict[str, object] = {}
+    if path is not None:
+        requested["path"] = path
+    if generate is not None:
+        requested["generate"] = generate
+    try:
+        Component.model_validate({**existing.model_dump(), **requested})
+    except ValueError:
+        have = "path" if existing.path is not None else "generate"
+        want = "path" if path is not None else "generate"
+        err.print(
+            f"[red]{_e(ref)} already has `{_e(have)}:` in .agentry.yml; a component can't have "
+            f"both `path` and `generate`.[/red] Remove `{_e(have)}:` from it first, or drop "
+            f"--{'path' if want == 'path' else 'generate-command'}. Nothing was changed."
+        )
+        raise typer.Exit(1) from None
+    changed = store.update_component(ref, requested) if requested else {}
+    if changed:
+        _save_validated(store)
+        for fld, (old, new) in changed.items():
+            console.print(
+                f"[green]Updated[/green] {_e(ref)}: {_e(fld)} {_e(_shown_value(old))} → "
+                f"{_e(_shown_value(new))}"
+            )
+    if not existing.enabled:
+        console.print(
+            f"{_e(ref)} is already declared but disabled — run `{prog()} enable {_e(ref)}`."
+        )
+    elif not changed:
+        console.print(f"{_e(ref)} is already declared — no change.")
+    return bool(changed)
+
+
+def _shown_value(value: object) -> str:
+    """A config value for an ``Updated`` line: ``unset``, a path, or a generator's command."""
+    if value is None:
+        return "unset"
+    if isinstance(value, GeneratorSpec):
+        return " ".join(value.command)
+    if isinstance(value, dict):
+        return " ".join(str(a) for a in value.get("command", [])) or "set"
+    return str(value)
 
 
 @app.command()
