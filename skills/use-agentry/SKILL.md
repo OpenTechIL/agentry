@@ -1,6 +1,6 @@
 ---
 name: use-agentry
-description: Use when the user asks to add or install an AI skill — "add skill <github url or owner/repo>", "install skill …" — or when they paste a skill-manager command like `npx skills add …`. Also use when they want a repo listed in agentry's starter catalog/registry ("add <repo> to the agentry registry", "publish this skill so others can `agentry add` it by name") — it drives `gh` to file the issue or open the catalog PR. Routes skill installation through agentry so the skill is tracked in `.agentry.yml`/`.agentry.lock` instead of installed opaquely.
+description: Use when the user asks to add or install an AI skill — "add skill <github url or owner/repo>", "install skill …" — or when they paste a skill-manager command like `npx skills add …`. Also use when they want a repo listed in agentry's starter catalog/registry ("add <repo> to the agentry registry", "publish this skill so others can `agentry add` it by name") — it files the issue or opens the catalog PR with `gh` when `gh` is installed and logged in, and otherwise builds a prefilled GitHub issue link. After installing a skill from a public repo that isn't in the catalog yet, or when the user has written a new skill, it offers once to suggest that repo for the public agentry catalog. Routes skill installation through agentry so the skill is tracked in `.agentry.yml`/`.agentry.lock` instead of installed opaquely.
 ---
 
 # Use agentry to install skills
@@ -23,6 +23,9 @@ Trigger on any of:
   skill listed so `agentry add <name>` works", "open a PR/issue to register `<X>`". That path is
   [Contributing a repo to the starter catalog](#contributing-a-repo-to-the-starter-catalog),
   not an install.
+- **A good moment to suggest the catalog**: the user just installed a skill from a public repo
+  that the catalog doesn't list yet, or wrote a new skill of their own. Offer it once; see
+  [Suggesting the catalog](#suggesting-the-catalog).
 
 ## Behavior
 
@@ -99,33 +102,84 @@ Let `<X>` be a full GitHub URL or `owner/repo` shorthand.
 - Run `agentry sync` if you haven't already.
 - Confirm where it landed: `agentry why <name>/skill/<skill>` or `agentry status`.
 - Report the installed path(s) to the user.
+- If you registered the repo by URL (step 3 or 4 above, not by catalog name), see
+  [Suggesting the catalog](#suggesting-the-catalog).
+
+## Suggesting the catalog
+
+When a skill is useful but the public catalog doesn't list it, others can only install it by
+URL. Offer to fix that, but only when all of these are true:
+
+1. **The repo isn't listed yet.** Check the catalog on `main`, by URL as well as by name,
+   because the catalog name can differ from the repo name:
+
+   ```bash
+   agentry search <name>
+   curl -fsSL https://raw.githubusercontent.com/OpenTechIL/agentry/main/registry/repositories.json \
+     | grep -i "github.com/<owner>/<repo>"
+   ```
+
+   Either one finding it means it's listed. Say nothing more.
+
+2. **The repo is public.** It must be clonable without logging in:
+
+   ```bash
+   GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/<owner>/<repo> HEAD
+   ```
+
+   If that fails, the repo is private or gone. Don't suggest it.
+
+3. **You haven't already offered it in this conversation.** Ask once. If the user says no,
+   drop it.
+
+Then ask in one line, for example: *"`<owner>/<repo>` isn't in the agentry catalog yet. Want
+me to suggest it there, so others can install it with `agentry add <name>`?"* On yes, follow
+[Contributing a repo to the starter catalog](#contributing-a-repo-to-the-starter-catalog).
+
+**A skill the user wrote themselves.** The catalog lists GitHub repos, not local folders. If
+the skill only exists in their project, say that it first needs to be in a public GitHub repo
+(its own repo, or a `skills/<name>/` folder in one). Offer to suggest it once it's pushed. Don't
+create or publish a repo for them unless they ask.
 
 ## Contributing a repo to the starter catalog
 
 Installing is local; **contributing** gets a repo listed in agentry's starter catalog
 (`registry/repositories.json` in `OpenTechIL/agentry`) so anyone can `agentry add <name>` by name.
-Two routes — file an issue for a maintainer, or open the PR yourself.
+There are three routes: file an issue for a maintainer (A), open the PR yourself (B), or, when
+`gh` can't be used, give the user a prefilled issue link to submit themselves (C).
 
-### Preflight
+### Preflight: can `gh` do it?
 
 ```bash
-gh auth status                                   # must be authenticated
-gh repo view <owner>/<repo> --json visibility,isArchived,defaultBranchRef
+command -v gh && gh auth status
 ```
 
-The catalog only lists repos that are **public and anonymously clonable** — if the target is
-private or archived, say so and stop. If `gh` is missing or unauthenticated, tell the user to
-install it / run `gh auth login`; do not fall back to the web UI on their behalf.
+- **`gh` is installed and logged in** → Routes A and B are available. Check the repo:
+
+  ```bash
+  gh repo view <owner>/<repo> --json visibility,isArchived,defaultBranchRef
+  ```
+
+- **`gh` is missing or not logged in** → use Route C. Check the repo with
+  `GIT_TERMINAL_PROMPT=0 git ls-remote https://github.com/<owner>/<repo> HEAD`. Mention that
+  installing `gh` and running `gh auth login` would let you file it directly next time, but
+  don't wait on it.
+
+The catalog only lists repos that are **public and anonymously clonable**. If the target is
+private or archived, say so and stop.
 
 Check for a duplicate before writing anything:
 
 ```bash
+# with gh
 gh issue list --repo OpenTechIL/agentry --state all --search "<name> in:title"
 gh pr list   --repo OpenTechIL/agentry --state all --search "<name> in:title"
+# without gh (unauthenticated GitHub API; rate-limited, but fine for one check)
+curl -fsSL "https://api.github.com/search/issues?q=repo:OpenTechIL/agentry+<name>+in:title"
 ```
 
-Then ask the user which route they want (issue = fastest, a maintainer authors the entry;
-PR = you author it and they review).
+With `gh`, ask the user which route they want: an issue (A) is fastest and a maintainer writes
+the entry; a PR (B) means you write it and they review. Without `gh`, use Route C.
 
 ### Route A — request it via an issue
 
@@ -227,6 +281,43 @@ EOF
    push fails for lack of permission, the fork step was skipped — fork first rather than retrying
    against `OpenTechIL/agentry`.
 
+### Route C — prefilled issue link (no `gh`)
+
+Build a link that opens the repo's feature-request form with everything filled in. The user
+reviews it and clicks **Submit**, so they need to be logged in to GitHub in the browser.
+Blank issues are turned off in this repo, so the link must name the form
+(`template=feature_request.yml`) and fill its fields by id (`problem`, `proposal`, `context`).
+A plain `body=` would be dropped.
+
+```bash
+python3 - <<'EOF'
+from urllib.parse import urlencode
+
+name, repo = "<name>", "<owner>/<repo>"
+params = {
+    "template": "feature_request.yml",
+    "title": f"catalog: add {name} ({repo})",
+    "labels": "enhancement",
+    "problem": f"`{repo}` isn't in the starter catalog, so it can only be installed by URL.",
+    "proposal": (
+        f"Add it to `registry/repositories.json` as `{name}`, so `agentry add {name}` works.\n\n"
+        f"- Repo: https://github.com/{repo} (ref: `main`, subdir: none)\n"
+        "- Summary: <one line, 100 chars or fewer>\n"
+        "- Components: <real names from `agentry list`>"
+    ),
+    "context": "<generate-style installer? hooks needing target_profiles? namespacing? otherwise none>",
+}
+print("https://github.com/OpenTechIL/agentry/issues/new?" + urlencode(params))
+EOF
+```
+
+Fill every `<…>` with real values first, as in Route A. Keep the link under about 8,000
+characters: list component names, not the full `agentry list` output. Without `python3`,
+percent-encode each value yourself (in PowerShell: `[uri]::EscapeDataString($value)`).
+
+Show the user the filled-in text, then give them the link to open. Don't open it or submit it
+for them.
+
 ## Guardrails
 
 - Never guess a component name — use `agentry list` to read the real names a source provides.
@@ -234,7 +325,7 @@ EOF
   commit to `main` or push directly to `OpenTechIL/agentry`.
 - Don't edit `registry/repositories.json` inside the user's own project (their `.agentry/`
   store or a vendored copy); the catalog only counts in the `agentry` repo.
-- Show the user the issue/PR body before it goes out, and don't invent a summary for a repo
+- Show the user the issue/PR body (or the prefilled link's text) before it goes out, and don't invent a summary for a repo
   you haven't looked at.
 - Surface `agentry`'s own errors to the user rather than working around them.
 - Don't mix installers: if a skill is managed by `agentry`, remove it with `agentry remove …`, not by

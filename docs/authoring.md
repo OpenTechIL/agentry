@@ -314,5 +314,8 @@ than guesses, `summary` is one specific line, `target_profiles` is empty unless 
 genuinely needs a non-default destination, and the source `ref` is a branch or tag you
 intend to keep stable.
 
-The `use-agentry` skill in this repo automates both routes via `gh` — install it with
-`agentry add use-agentry` and ask your agent to publish the repo.
+The `use-agentry` skill in this repo automates both routes via `gh`. Install it with
+`agentry add use-agentry` and ask your agent to publish the repo. Without `gh` (or when it isn't
+logged in), the skill gives you a prefilled issue link to submit yourself instead. It also offers
+this once on its own, after you install a skill from a public repo the catalog doesn't list
+yet.
