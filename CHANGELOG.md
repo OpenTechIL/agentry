@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-11-15
+
 ### Fixed
 - **Removing the last component no longer leaves an empty config file behind** when agentry
   created that file. For example, after the last MCP server is removed, `.mcp.json` (or

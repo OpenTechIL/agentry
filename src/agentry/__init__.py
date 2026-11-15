@@ -5,4 +5,4 @@ declare them in ``.agentry.yml``, pin them in ``.agentry.lock``, and install
 them into Claude Code / OpenCode / Cursor with a single ``agentry sync``.
 """
 
-__version__ = "0.3.1"
+__version__ = "0.3.2"
