@@ -2,8 +2,9 @@
 
 agentry installs under three names: ``agentry`` (canonical, the only real executable in a
 frozen build) plus the short aliases ``agy`` and ``agyx``. Each distribution channel ships
-one binary and creates the aliases its own way (symlinks on Linux/macOS, ``.cmd`` shims on
-Windows, ``install_symlink`` for Homebrew, shim entries for Scoop). These tests are the
+the one-folder build (the executable plus ``_internal/``) and creates the aliases its own way
+(symlinks on Linux/macOS, ``.cmd`` shims on Windows, ``install_symlink`` for Homebrew, shim
+entries for Scoop). These tests are the
 guardrail that a rename touched every channel — they assert on names deliberately, because
 a missed one only shows up as a broken release asset.
 """
@@ -41,6 +42,14 @@ def test_pyinstaller_spec_builds_the_canonical_binary():
     assert f"name='{BIN}'" in text or f'name="{BIN}"' in text
 
 
+def test_pyinstaller_spec_defaults_to_one_folder():
+    """A one-file build unpacks itself on every run (~5s on macOS); installers ship the
+    one-folder build, and the one-file build is opt-in."""
+    text = Path("packaging/agentry.spec").read_text(encoding="utf-8")
+    assert 'ONEFILE = os.environ.get("AGENTRY_ONEFILE") == "1"' in text
+    assert f'COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="{BIN}")' in text
+
+
 def test_devcontainer_feature_is_valid_json():
     """The devcontainer Feature manifest must be valid JSON with the spec's required keys."""
     path = Path("packaging/devcontainer/src/agentry/devcontainer-feature.json")
@@ -55,6 +64,10 @@ def test_devcontainer_feature_is_valid_json():
 def test_scoop_manifest_ships_the_binary_and_both_aliases():
     data = json.loads(Path("packaging/scoop/agentry.json").read_text(encoding="utf-8"))
     assert data["version"]
+    # The one-folder zip, unpacked from its agentry\ folder, for the pinned and new versions.
+    for arch in (data["architecture"], data["autoupdate"]["architecture"]):
+        assert arch["64bit"]["url"].endswith("-windows-x86_64.zip")
+        assert arch["64bit"]["extract_dir"] == BIN
     # Scoop's shim-alias form: a bare exe, then [exe, alias] pairs.
     assert data["bin"][0] == f"{BIN}.exe"
     shims = {entry[1] for entry in data["bin"][1:]}
@@ -70,7 +83,14 @@ def test_nfpm_installs_the_binary_and_symlinks_both_aliases():
     assert data["version"] == "${VERSION}"
 
     by_dst = {c["dst"]: c for c in data["contents"]}
-    assert by_dst[f"/usr/bin/{BIN}"]["src"] == f"./dist/{BIN}"
+    # The whole folder goes to /usr/lib/agentry, and /usr/bin/agentry links into it.
+    assert by_dst[f"/usr/lib/{BIN}"] == {
+        "src": f"./dist/{BIN}/",
+        "dst": f"/usr/lib/{BIN}",
+        "type": "tree",
+    }
+    assert by_dst[f"/usr/bin/{BIN}"]["type"] == "symlink"
+    assert by_dst[f"/usr/bin/{BIN}"]["src"] == f"/usr/lib/{BIN}/{BIN}"
     for alias in ALIASES:
         entry = by_dst[f"/usr/bin/{alias}"]
         assert entry["type"] == "symlink"
@@ -80,9 +100,13 @@ def test_nfpm_installs_the_binary_and_symlinks_both_aliases():
 def test_homebrew_formula_installs_the_binary_and_both_aliases():
     text = Path("packaging/homebrew/agentry.rb").read_text(encoding="utf-8")
     assert "class Agentry < Formula" in text
-    assert f'bin.install Dir["{BIN}-*"].first => "{BIN}"' in text
+    # The folder build goes to libexec; bin/ only holds links to its executable.
+    assert 'libexec.install Dir["*"]' in text
+    assert f'bin.install_symlink libexec/"{BIN}"\n' in text
     for alias in ALIASES:
-        assert f'bin.install_symlink bin/"{BIN}" => "{alias}"' in text
+        assert f'bin.install_symlink libexec/"{BIN}" => "{alias}"' in text
+    for target in ("macos-arm64", "macos-x86_64", "linux-x86_64"):
+        assert f'{BIN}-#{{version}}-{target}.tar.gz"' in text
     # The formula's own test must exercise the canonical name.
     assert f'shell_output("#{{bin}}/{BIN} version")' in text
 
@@ -96,8 +120,16 @@ def test_macos_pkg_distribution_is_per_user():
     assert f"{BIN}-component.pkg" in text
     # Version is injected at build time, not hard-coded.
     assert "${VERSION}" in text
-    # The PATH-fixup script the pkg runs must exist.
+    # The PATH-fixup script the pkg runs must exist, and the cleanup it runs first.
     assert Path("packaging/macos/scripts/postinstall").is_file()
+    assert Path("packaging/macos/scripts/preinstall").is_file()
+
+
+def test_macos_preinstall_only_removes_an_agentry_folder():
+    """preinstall clears the previous folder build, but only when it is one."""
+    text = Path("packaging/macos/scripts/preinstall").read_text(encoding="utf-8")
+    assert 'if [ -x "$LIB_DIR/agentry" ] && [ -d "$LIB_DIR/_internal" ]; then' in text
+    assert 'LIB_DIR="$HOME/.local/lib/agentry"' in text
 
 
 def test_macos_postinstall_creates_the_aliases():
@@ -115,6 +147,10 @@ def test_inno_installer_script_ships_the_binary_and_alias_shims():
     assert "PrivilegesRequired=lowest" in text
     assert f"OutputBaseFilename={BIN}-{{#MyAppVersion}}-windows-x86_64-setup" in text
     assert f'#define MyAppExe "{BIN}.exe"' in text
+    # Ships the whole folder build, and replaces _internal\ whole on upgrade.
+    assert 'Source: "..\\..\\dist\\agentry\\*"' in text
+    assert "recursesubdirs createallsubdirs" in text
+    assert 'Type: filesandordirs; Name: "{app}\\_internal"' in text
     # Windows has no unprivileged symlink, so the aliases are .cmd shims.
     for alias in ALIASES:
         assert f"WriteAliasShim('{alias}');" in text
@@ -123,8 +159,11 @@ def test_inno_installer_script_ships_the_binary_and_alias_shims():
 @pytest.mark.parametrize(
     ("script", "quote"),
     [
-        ("install.sh", 'mv "$tmp/agentry" "$INSTALL_DIR/agentry"'),
-        ("install.ps1", 'Move-Item -Force "$tmp\\agentry.exe" "$InstallDir\\agentry.exe"'),
+        ("install.sh", 'ln -s "$LIB_DIR/agentry" "$INSTALL_DIR/agentry"'),
+        (
+            "install.ps1",
+            'Move-Item -Force "$tmp\\unzipped\\agentry\\agentry.exe" "$InstallDir\\agentry.exe"',
+        ),
     ],
 )
 def test_install_scripts_place_the_canonical_binary(script, quote):
@@ -139,9 +178,12 @@ def test_install_scripts_fall_back_to_the_legacy_asset_name(script):
     still resolve an old one — so both names are tried, current first.
     """
     text = Path(script).read_text(encoding="utf-8")
+    archive = ".tar.gz" if script == "install.sh" else ".zip"
+    archive_at = text.index(f'{archive}"')  # the one-folder archive, tried first
     agentry_at = text.index(f"{BIN}-$")  # "agentry-${version_no_v}" / "agentry-$version_no_v"
     legacy_at = text.index("agy-$")
     assert agentry_at < legacy_at, "the current asset name must be preferred"
+    assert archive_at < legacy_at, "the one-folder archive must be preferred"
 
 
 @pytest.mark.parametrize("script", ["install.sh", "install.ps1"])

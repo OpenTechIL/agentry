@@ -63,7 +63,12 @@ the breakage would be a missing binary rather than a clear error message.
 
 **Learnings:**
 
-- **A frozen binary has exactly one executable name.** PyInstaller emits one file, so the
+- **A one-file PyInstaller build is slow to start, every time.** It unpacks itself into a new
+  temp folder on each run, and macOS security-scans the unsigned libraries it unpacks again
+  because the path is new: about 5s per command, against 0.2s from a venv. The one-folder
+  build is scanned once and then starts in about 0.2s, so installers ship that (0.3.5). The
+  executable finds `_internal/` through symlinks, so channels link to it rather than copy it.
+- **A frozen binary has exactly one executable name.** PyInstaller emits one executable, so the
   aliases can't come from the build — every channel has to create them itself: symlinks for
   nfpm/Homebrew/`install.sh`/the macOS pkg, `.cmd` shims for Inno Setup and `install.ps1`
   (Windows has no unprivileged symlink), and, in the not-yet-published Scoop manifest

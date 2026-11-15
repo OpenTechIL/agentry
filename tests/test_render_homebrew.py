@@ -57,3 +57,36 @@ def test_render_raises_on_missing_sha():
     )
     with pytest.raises(SystemExit):
         render(TEMPLATE, "1.2.3", partial)
+
+
+TARBALL_TEMPLATE = (
+    TEMPLATE.replace('macos-arm64"', 'macos-arm64.tar.gz"')
+    .replace('macos-x86_64"', 'macos-x86_64.tar.gz"')
+    .replace('linux-x86_64"', 'linux-x86_64.tar.gz"')
+)
+
+TARBALL_SUMS = """\
+aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa  agentry-1.2.3-macos-arm64.tar.gz
+1111111111111111111111111111111111111111111111111111111111111111  agentry-1.2.3-macos-arm64
+bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb  agentry-1.2.3-macos-x86_64.tar.gz
+cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc  agentry-1.2.3-linux-x86_64.tar.gz
+"""
+
+
+def test_render_keys_tarball_urls_off_the_tarball_hash():
+    """The formula ships the one-folder tarball; its sha is the tarball's, not the bare
+    binary's that sits beside it in SHA256SUMS.txt."""
+    out = render(TARBALL_TEMPLATE, "1.2.3", parse_sums(TARBALL_SUMS))
+    assert "0000000000000000" not in out
+    assert "1111111111111111" not in out
+    arm = out.index("macos-arm64.tar.gz")
+    assert out.index('"aaaa', arm) < out.index("macos-x86_64.tar.gz")
+
+
+def test_shipped_formula_renders_against_tarball_sums():
+    from pathlib import Path
+
+    template = Path("packaging/homebrew/agentry.rb").read_text(encoding="utf-8")
+    out = render(template, "1.2.3", parse_sums(TARBALL_SUMS))
+    assert 'version "1.2.3"' in out
+    assert "0000000000000000" not in out

@@ -12,31 +12,36 @@ class Agentry < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/OpenTechIL/agentry/releases/download/v#{version}/agentry-#{version}-macos-arm64"
+      url "https://github.com/OpenTechIL/agentry/releases/download/v#{version}/agentry-#{version}-macos-arm64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
-      url "https://github.com/OpenTechIL/agentry/releases/download/v#{version}/agentry-#{version}-macos-x86_64"
+      url "https://github.com/OpenTechIL/agentry/releases/download/v#{version}/agentry-#{version}-macos-x86_64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 
   on_linux do
     on_intel do
-      url "https://github.com/OpenTechIL/agentry/releases/download/v#{version}/agentry-#{version}-linux-x86_64"
+      url "https://github.com/OpenTechIL/agentry/releases/download/v#{version}/agentry-#{version}-linux-x86_64.tar.gz"
       sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     # linux-arm64 has no prebuilt binary yet (see install.sh); use `uv tool install`.
   end
 
   def install
-    # The release asset is the bare binary, named agentry-<version>-<target>.
-    bin.install Dir["agentry-*"].first => "agentry"
+    # The release asset is a one-folder build: an agentry/ folder holding the `agentry`
+    # executable and its `_internal/` libraries. Homebrew unpacks it and enters agentry/,
+    # so the folder's contents go to libexec and bin/ only gets symlinks. The executable
+    # finds `_internal/` through the symlink. A one-folder build starts in ~0.2s, where
+    # the one-file build unpacked itself on every run (~5s on macOS).
+    libexec.install Dir["*"]
+    bin.install_symlink libexec/"agentry"
     # Short aliases. `agy` is kept for back-compat, but Google's Antigravity CLI also
     # claims that name — `agyx` is the short name that cannot collide. Homebrew prints its
     # own caveat when a linked binary is shadowed on PATH.
-    bin.install_symlink bin/"agentry" => "agy"
-    bin.install_symlink bin/"agentry" => "agyx"
+    bin.install_symlink libexec/"agentry" => "agy"
+    bin.install_symlink libexec/"agentry" => "agyx"
   end
 
   test do

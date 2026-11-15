@@ -1,13 +1,26 @@
-# packaging/agentry.spec — one-file build for the `agentry` CLI.
+# packaging/agentry.spec — PyInstaller build for the `agentry` CLI.
 #
-# Produces dist/agentry. The `agy` and `agyx` aliases are created next to it by whichever
-# channel installs the binary (install.sh/.ps1, nfpm, Homebrew, Scoop, Inno Setup) — a
-# frozen one-file build has exactly one executable name.
+# Default: a one-folder build, dist/agentry/ = the `agentry` executable + `_internal/`.
+# Every installer ships this folder. It starts in ~0.2s. A one-file build unpacks itself to
+# a new temp dir on every run, and macOS scans the unpacked, unsigned libraries each time,
+# because the path is new every time. That cost ~5s per command.
 #
-# Run from the repo root: `uv run --extra build pyinstaller packaging/agentry.spec`
+# AGENTRY_ONEFILE=1: the one-file build (dist/agentry), still published as the bare
+# `agentry-<version>-<target>` download for anyone who wants a single file. Build it into a
+# separate --distpath / --workpath so the two builds don't collide.
+#
+# The `agy` and `agyx` aliases are created next to the executable by whichever channel
+# installs it (install.sh/.ps1, nfpm, Homebrew, Scoop, Inno Setup, the macOS .pkg).
+#
+# Run from the repo root:
+#   uv run --extra build pyinstaller packaging/agentry.spec
+#   AGENTRY_ONEFILE=1 uv run --extra build pyinstaller packaging/agentry.spec \
+#     --distpath dist-onefile --workpath build-onefile
 import os
 
 from PyInstaller.utils.hooks import collect_all, collect_submodules
+
+ONEFILE = os.environ.get("AGENTRY_ONEFILE") == "1"
 
 # ruamel.yaml ships C extensions + plugins PyInstaller misses; pydantic builds
 # models dynamically. Collect both explicitly.
@@ -30,18 +43,13 @@ a = Analysis(
     noarchive=False,
 )
 pyz = PYZ(a.pure)
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
+
+_exe_options = dict(
     name="agentry",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    runtime_tmpdir=None,
     console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -49,3 +57,9 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
 )
+
+if ONEFILE:
+    exe = EXE(pyz, a.scripts, a.binaries, a.datas, [], runtime_tmpdir=None, **_exe_options)
+else:
+    exe = EXE(pyz, a.scripts, [], exclude_binaries=True, **_exe_options)
+    coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="agentry")
