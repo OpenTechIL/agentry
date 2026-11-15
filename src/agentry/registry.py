@@ -433,19 +433,27 @@ def build_install_profiles(
         driver = drivers.get(target)
         for ctype in present:
             existing = profiles.get(target, {}).get(ctype)
-            base_dest = driver.spec.link.get(ctype) if driver else None
+            # The built-in default may be a link or a copy (e.g. opencode tools).
+            base_strategy = driver.strategy(ctype) if driver else None
+            base_dest: str | None = None
+            if driver is not None and base_strategy is Strategy.LINK:
+                base_dest = driver.spec.link[ctype]
+            elif driver is not None and base_strategy is Strategy.COPY:
+                base_dest = driver.spec.copy[ctype]
+            else:
+                base_strategy = None
             dest = existing.dest if existing and existing.dest else base_dest
             if dest is None:
-                continue  # target doesn't support this type as link — nothing to synthesize
+                continue  # target doesn't support this type as link/copy — nothing to synthesize
             strategy = (
                 Strategy.COPY
                 if entry.copy_install
-                else (existing.strategy if existing else Strategy.LINK)
+                else (existing.strategy if existing else base_strategy or Strategy.LINK)
             )
             if entry.namespaced and driver is not None and driver.namespaces(ctype):
                 dest = _namespace_dest(dest, repo)
-            # Skip a no-op that just restates the built-in link default.
-            if existing is None and strategy is Strategy.LINK and dest == base_dest:
+            # Skip a no-op that just restates the built-in default.
+            if existing is None and strategy is base_strategy and dest == base_dest:
                 continue
             profiles.setdefault(target, {})[ctype] = ProfileRule(strategy=strategy, dest=dest)
     return profiles

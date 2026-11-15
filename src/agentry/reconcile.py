@@ -147,13 +147,18 @@ class SyncResult:
 
 @dataclass(frozen=True)
 class FormatSkip:
-    """A merged component not installed on one target because its content misses an
-    expectation whose action is ``skip`` (``on_mismatch: skip``)."""
+    """A component not installed on one target because it misses an expectation whose
+    action is ``skip`` (``on_mismatch: skip``): a merged component's entries (e.g. a
+    Claude-shaped MCP server on OpenCode), or a link/copy artifact's path (e.g. a directory
+    tool where the target loads only single ``.ts`` / ``.js`` files)."""
 
     ref: str  #: component ref
     target: str
-    where: str  #: ``file:pointer`` the merge would have gone to
-    entries: tuple[str, ...]  #: the offending entry keys
+    #: Where it would have gone: ``file:pointer`` for a merge, the dest path for link/copy.
+    where: str
+    #: The offending entry keys (merge); empty for a path skip.
+    entries: tuple[str, ...]
+    reason: str  #: why, as one clause (e.g. "github uses a format opencode rejects")
     note: str  #: the status-row note
     message: str  #: the full warning, as warned
 
@@ -702,6 +707,11 @@ def _routes_to(
     return (comp.source, comp.type, comp.name, tname) not in variants
 
 
+def _ext(artifact: Path) -> str:
+    """``{ext}`` for a dest template: the artifact's suffix when it's a file, else ``""``."""
+    return artifact.suffix if artifact.is_file() else ""
+
+
 def _desired_for_target(
     comp: Component,
     src: Source,
@@ -735,19 +745,24 @@ def _desired_for_target(
         warnings.append(msg)
         plan.skipped.append(msg)
         return
-    if comp.type not in MERGE_TYPES and comp.transform is None:
+    # Copy-with-rewrite: a transformed file replaces the live symlink. Only single-file
+    # link types qualify; anything else installs the raw artifact (with a note below).
+    transformed = (
+        comp.transform is not None and strat is Strategy.LINK and not TYPE_IS_DIR[comp.type]
+    )
+    if comp.type not in MERGE_TYPES and not transformed:
         # A transformed component installs the rewritten output, not this artifact, so
-        # the source file's format says nothing about what lands.
+        # the source file's format says nothing about what lands; otherwise it does.
+        if _skip_path_artifact(comp, tname, driver, strat, artifact, plan, warnings):
+            return
         _check_format(comp, tname, driver, plan, warnings, artifact=artifact)
     if comp.transform is not None:
-        # Copy-with-rewrite: a transformed file replaces the live symlink. Only
-        # single-file link types qualify; anything else installs normally with a note.
-        if strat is Strategy.LINK and not TYPE_IS_DIR[comp.type]:
+        if transformed:
             plan.transforms.append(
                 DesiredTransform(
                     comp.ref,
                     tname,
-                    driver.link_dest(comp.type, comp.name),
+                    driver.link_dest(comp.type, comp.name, _ext(artifact)),
                     artifact,
                     comp.transform.provider,
                     comp.transform.prompt,
@@ -760,11 +775,15 @@ def _desired_for_target(
         )
     if strat is Strategy.LINK:
         plan.links.append(
-            DesiredLink(comp.ref, tname, driver.link_dest(comp.type, comp.name), artifact)
+            DesiredLink(
+                comp.ref, tname, driver.link_dest(comp.type, comp.name, _ext(artifact)), artifact
+            )
         )
     elif strat is Strategy.COPY:
         plan.copies.append(
-            DesiredCopy(comp.ref, tname, driver.copy_dest(comp.type, comp.name), artifact)
+            DesiredCopy(
+                comp.ref, tname, driver.copy_dest(comp.type, comp.name, _ext(artifact)), artifact
+            )
         )
     elif strat is Strategy.LINK_MERGE:
         lm = _compute_link_merge(
@@ -776,32 +795,51 @@ def _desired_for_target(
             _check_format(comp, tname, driver, plan, warnings, entries=lm.fragment)
             plan.link_merges.append(lm)
     else:
-        dest = driver.merge_dest(comp.type)
-        try:
-            entries, notes = _fragment_entries(artifact, comp.type, dest)
-        except (ValueError, OSError) as exc:
-            warnings.append(f"{comp.ref}: {exc}")
-            return
-        warnings.extend(f"{comp.ref}: {note}" for note in notes)
-        # Defense-in-depth: drop hook events the target doesn't recognize (e.g. Claude
-        # Code rejects a settings.json carrying unknown events). No-op for agents
-        # without a hook-event policy.
-        if comp.type is ComponentType.HOOK:
-            entries = _hook_entries(comp, tname, driver, artifact, dest, entries, plan, warnings)
-            if not entries:
-                return
+        _desired_merge(comp, src, tname, driver, artifact, plan, warnings, root=root)
 
-        def variant() -> str:  # lazy: stats + a descriptor parse, only once a skip happens
-            return _variant_path(comp, tname, artifact, src, root) if root is not None else ""
 
-        if _skip_on_mismatch(comp, tname, driver, dest, entries, plan, warnings, variant):
+def _desired_merge(
+    comp: Component,
+    src: Source,
+    tname: str,
+    driver: Driver,
+    artifact: Path,
+    plan: DesiredPlan,
+    warnings: list[str],
+    *,
+    root: Path | None = None,
+) -> None:
+    """The plain-merge branch of :func:`_desired_for_target`: read the fragment's entries,
+    filter hook events, apply ``on_mismatch: skip``, then plan the merge."""
+    dest = driver.merge_dest(comp.type)
+    try:
+        entries, notes = _fragment_entries(artifact, comp.type, dest)
+    except (ValueError, OSError) as exc:
+        warnings.append(f"{comp.ref}: {exc}")
+        return
+    warnings.extend(f"{comp.ref}: {note}" for note in notes)
+    # Defense-in-depth: drop hook events the target doesn't recognize (e.g. Claude
+    # Code rejects a settings.json carrying unknown events). No-op for agents
+    # without a hook-event policy.
+    if comp.type is ComponentType.HOOK:
+        entries = _hook_entries(comp, tname, driver, artifact, dest, entries, plan, warnings)
+        if not entries:
             return
-        _check_format(comp, tname, driver, plan, warnings, entries=entries)
-        # Seam: a driver.transform (currently always None) would reshape `entries`
-        # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
-        plan.merges.append(
-            DesiredMerge(comp.ref, tname, dest, entries, list(entries), comp.kept_keys(tname))
-        )
+
+    def variant() -> str:  # lazy: stats + a descriptor parse, only once a skip happens
+        return _variant_path(comp, tname, artifact, src, root) if root is not None else ""
+
+    where = f"{dest.file}:{dest.pointer}"
+    if _skip_on_mismatch(
+        comp, tname, driver, where, plan, warnings, entries=entries, variant=variant
+    ):
+        return
+    _check_format(comp, tname, driver, plan, warnings, entries=entries)
+    # Seam: a driver.transform (currently always None) would reshape `entries`
+    # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
+    plan.merges.append(
+        DesiredMerge(comp.ref, tname, dest, entries, list(entries), comp.kept_keys(tname))
+    )
 
 
 def _fragment_entries(
@@ -950,43 +988,81 @@ def _skip_template(comp: Component, exp: FormatExpectation, variant: Callable[[]
     return _SKIP_GENERIC
 
 
+def _skip_path_artifact(
+    comp: Component,
+    tname: str,
+    driver: Driver,
+    strat: Strategy,
+    artifact: Path,
+    plan: DesiredPlan,
+    warnings: list[str],
+) -> bool:
+    """:func:`_skip_on_mismatch` for a link/copy artifact (e.g. a directory tool on a target
+    that loads only single files). True if skipped."""
+    if strat not in (Strategy.LINK, Strategy.COPY):
+        return False
+    exp = driver.spec.expect.get(comp.type)
+    if exp is None or exp.on_mismatch != "skip":
+        return False  # cheap: no stat or dest until a skip rule exists
+    ext = _ext(artifact)
+    dest = (
+        driver.link_dest(comp.type, comp.name, ext)
+        if strat is Strategy.LINK
+        else driver.copy_dest(comp.type, comp.name, ext)
+    )
+    return _skip_on_mismatch(comp, tname, driver, dest, plan, warnings, artifact=artifact)
+
+
 def _skip_on_mismatch(
     comp: Component,
     tname: str,
     driver: Driver,
-    dest: MergeDest,
-    entries: dict,
+    where: str,
     plan: DesiredPlan,
     warnings: list[str],
+    *,
+    entries: dict | None = None,
+    artifact: Path | None = None,
     variant: Callable[[], str] = lambda: "",
 ) -> bool:
-    """A merged component whose content misses an expectation with ``on_mismatch: skip``
-    isn't installed on ``tname`` (the whole component, never half of it). True if skipped.
+    """A component whose content misses an expectation with ``on_mismatch: skip`` isn't
+    installed on ``tname`` (the whole component, never half of it). True if skipped.
 
-    The warning names the offending entries; any copy already installed becomes an orphan
-    and is removed through the normal fingerprint-checked path (a hand-edited one stays).
+    Checks merged ``entries`` (naming the offending ones) or a path artifact (e.g. a
+    directory where the target loads only single files). Any copy agentry already installed
+    becomes an orphan and is removed through the normal owned-removal path (a hand-edited
+    merge entry stays). ``where`` is the would-be destination, for the status row.
     """
     exp = driver.spec.expect.get(comp.type)
     if exp is None or exp.on_mismatch != "skip":
         return False
-    bad = [key for key, entry in entries.items() if check_format(exp, entries={key: entry})]
-    if not bad:
-        return False
-    names = ", ".join(bad)
+    if entries is not None:
+        bad = [key for key, entry in entries.items() if check_format(exp, entries={key: entry})]
+        if not bad:
+            return False
+        names = ", ".join(bad)
+        suffix = f" (entries: {names})"
+        verb = "uses" if len(bad) == 1 else "use"
+        reason = f"{names} {verb} a format {tname} rejects"
+    else:
+        problems = check_format(exp, artifact=artifact)
+        if not problems:
+            return False
+        bad = []
+        reason = "; ".join(problems)
+        suffix = f" ({reason})"
+    note = f"skipped on {tname}: {reason} (see warnings)"
     msg = (
         _skip_template(comp, exp, variant)
         .replace("{ref}", comp.ref)
         .replace("{target}", tname)
         .replace("{type}", comp.type.value)
         .replace("{name}", comp.name)
-        + f" (entries: {names})"
+        .replace("{source}", comp.source)
+        + suffix
     )
     warnings.append(msg)
-    verb = "uses" if len(bad) == 1 else "use"
-    note = f"skipped on {tname}: {names} {verb} a format {tname} rejects (see warnings)"
-    plan.format_skips.append(
-        FormatSkip(comp.ref, tname, f"{dest.file}:{dest.pointer}", tuple(bad), note, msg)
-    )
+    plan.format_skips.append(FormatSkip(comp.ref, tname, where, tuple(bad), reason, note, msg))
     return True
 
 

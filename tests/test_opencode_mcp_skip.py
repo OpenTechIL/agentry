@@ -521,22 +521,65 @@ def test_on_mismatch_skip_rejected_on_a_strategy_that_cannot_skip():
     from agentry.targets import BUILTIN_TARGETS
 
     skip = {"require": ["type"], "on_mismatch": "skip"}
-    for rule in (
-        {"strategy": "link", "dest": ".x/{name}"},
-        {"strategy": "copy", "dest": ".x/{name}"},
-        {"strategy": "link+merge", "dest": ".x/{name}", "file": "x.json", "pointer": "hooks"},
-    ):
-        with pytest.raises(ValidationError, match="needs strategy 'merge'"):
-            ProfileRule.model_validate({**rule, "expect": skip})
-        ProfileRule.model_validate({**rule, "expect": {**skip, "on_mismatch": "warn"}})
+    link_merge = {
+        "strategy": "link+merge",
+        "dest": ".x/{name}",
+        "file": "x.json",
+        "pointer": "hooks",
+    }
+    with pytest.raises(ValidationError, match="needs strategy 'merge', 'link' or 'copy'"):
+        ProfileRule.model_validate({**link_merge, "expect": skip})
+    ProfileRule.model_validate({**link_merge, "expect": {**skip, "on_mismatch": "warn"}})
     ProfileRule.model_validate(
         {"strategy": "merge", "file": "x.json", "pointer": "mcp", "expect": skip}
     )
-    # built-ins stay valid: every built-in skip rule sits on a plain merge
+    # On link/copy only the artifact's path checks run: a skip needs one to ever fire.
+    for rule in (
+        {"strategy": "link", "dest": ".x/{name}"},
+        {"strategy": "copy", "dest": ".x/{name}"},
+    ):
+        with pytest.raises(ValidationError, match="needs a path check"):
+            ProfileRule.model_validate({**rule, "expect": skip})
+        for check in ({"file_only": True}, {"extension": ".ts"}, {"extension": [".ts", ".js"]}):
+            ProfileRule.model_validate({**rule, "expect": {"on_mismatch": "skip", **check}})
+    # built-ins stay valid: no built-in skip rule sits on a link+merge type, and a link/copy
+    # one always has a path check
     for spec in BUILTIN_TARGETS.values():
         for ctype, exp in spec.expect.items():
             if exp.on_mismatch == "skip":
-                assert ctype in spec.merge
+                assert ctype not in spec.link_merge
+                if ctype in spec.link or ctype in spec.copy:
+                    assert exp.file_only or exp.extension
+
+
+def test_on_mismatch_skip_rejected_on_a_merge_type_with_link_or_copy():
+    """A hook/mcp on link/copy never has its content checked, so a skip there can't fire."""
+    import pytest
+    from pydantic import ValidationError
+
+    from agentry.models import Config
+
+    skip = {"file_only": True, "on_mismatch": "skip"}
+    for ctype in ("mcp", "hook"):
+        for strategy in ("link", "copy"):
+            rule = {"strategy": strategy, "dest": ".x/{name}", "expect": skip}
+            with pytest.raises(ValidationError, match=f"on a {ctype} rule needs strategy 'merge'"):
+                Config.model_validate({"target_profiles": {"x": {ctype: rule}}})
+            Config.model_validate(
+                {
+                    "target_profiles": {
+                        "x": {ctype: {**rule, "expect": {**skip, "on_mismatch": "warn"}}}
+                    }
+                }
+            )
+    # the same rule on a file/dir type is fine
+    Config.model_validate(
+        {
+            "target_profiles": {
+                "x": {"tool": {"strategy": "copy", "dest": ".x/{name}", "expect": skip}}
+            }
+        }
+    )
 
 
 def test_doctor_reports_a_skip_once_not_also_as_drift(tmp_path: Path):
@@ -557,6 +600,7 @@ def test_format_skips_are_named_records(tmp_path: Path):
             target="opencode",
             where="opencode.json:mcp",
             entries=("fs",),
+            reason="fs uses a format opencode rejects",
             note="skipped on opencode: fs uses a format opencode rejects (see warnings)",
             message=_skip_line(),
         )

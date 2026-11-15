@@ -71,8 +71,12 @@ class FormatExpectation:
     rule's ``expect:``; the engine never branches on a tool name.
     """
 
-    #: The artifact file must have this suffix (e.g. ``".toml"``). Directories are skipped.
-    extension: str | None = None
+    #: The artifact file must have this suffix (e.g. ``".toml"``), or one of these suffixes
+    #: (e.g. ``(".ts", ".js")``). Directories are skipped; pair with ``file_only`` to
+    #: reject them too.
+    extension: str | tuple[str, ...] | None = None
+    #: The artifact must be a single file, not a directory (e.g. OpenCode tools).
+    file_only: bool = False
     #: Merged keys must be one of these (e.g. a tool's hook event names).
     events: frozenset[str] | None = None
     #: Every merged entry must have these fields.
@@ -94,11 +98,16 @@ class FormatExpectation:
     #: What to do with a merged component that misses this expectation: ``"warn"`` (phase A:
     #: install as-is and warn) or ``"skip"`` (don't install it on this target — for content
     #: that would break the whole target config, e.g. OpenCode rejecting a Claude-shaped
-    #: MCP entry; runtime-confirmed per target before a rule is set to it). Only a plain
-    #: ``merge`` honours ``"skip"``: a profile rule pairing it with another strategy is
-    #: rejected, and one inherited onto another strategy never skips (at most it warns).
+    #: MCP entry, or a directory tool OpenCode would silently ignore; runtime-confirmed per
+    #: target before a rule is set to it). Honoured by a plain ``merge`` (on the merged
+    #: entries) and by ``link`` / ``copy`` on a file/dir type (on the artifact's path checks,
+    #: ``extension`` / ``file_only``). A link+merge never skips (its link and merge stay
+    #: together): a profile rule pairing ``skip`` with it — or with a link/copy rule that
+    #: has no path check, or with a merge type on link/copy — is rejected, and one inherited
+    #: onto such a strategy never skips (at most it warns).
     on_mismatch: str = "warn"
-    #: The ``skip`` warning. ``{ref}`` / ``{target}`` / ``{type}`` / ``{name}`` expand, and
+    #: The ``skip`` warning. ``{ref}`` / ``{target}`` / ``{type}`` / ``{name}`` /
+    #: ``{source}`` expand, and
     #: ``{variant_path}`` — the exact per-harness variant file to create (T16), relative to
     #: the source repo (``--subdir`` included). Empty ⇒ a generic message.
     skip_message: str = ""
@@ -160,13 +169,11 @@ def check_format(
 ) -> list[str]:
     """Every way ``artifact`` / merged ``entries`` miss ``exp`` (empty = compatible)."""
     problems: list[str] = []
-    if (
-        exp.extension
-        and artifact is not None
-        and artifact.is_file()
-        and artifact.suffix != exp.extension
-    ):
-        problems.append(f"'{artifact.name}' is not a {exp.extension} file")
+    exts = (exp.extension,) if isinstance(exp.extension, str) else exp.extension or ()
+    if exts and artifact is not None and artifact.is_file() and artifact.suffix not in exts:
+        problems.append(f"'{artifact.name}' is not a {' or '.join(exts)} file")
+    if exp.file_only and artifact is not None and artifact.is_dir():
+        problems.append(f"'{artifact.name}' is a directory, not a single file")
     if entries is None:
         return problems
     if exp.events is not None:
@@ -177,6 +184,16 @@ def check_format(
         if isinstance(entry, dict):
             problems.extend(_entry_problems(exp, name, entry))
     return problems
+
+
+def _expand(template: str, name: str, ext: str) -> str:
+    """Fill a dest template. A name that already ends in ``ext`` gets it once: a dir-type
+    component (e.g. a tool) listed in ``agentry.yaml`` by ``path:`` / ``glob:`` without a
+    ``name:`` is named after the whole file (``fmt.ts``), and must land as ``fmt.ts``, not
+    ``fmt.ts.ts``. Its ref (and lock identity) keeps the full name."""
+    if ext and name.endswith(ext):
+        ext = ""
+    return template.format(name=name, ext=ext)
 
 
 @dataclass(frozen=True)
@@ -220,11 +237,14 @@ class TargetSpec:
             return Strategy.MERGE
         return None
 
-    def link_dest(self, ctype: ComponentType, name: str) -> str:
-        return self.link[ctype].format(name=name)
+    def link_dest(self, ctype: ComponentType, name: str, ext: str = "") -> str:
+        """The link destination. ``{name}`` and ``{ext}`` (the artifact's file suffix, e.g.
+        ``.ts``; empty for a directory) expand — a tool that loads only ``*.ts`` keeps it."""
+        return _expand(self.link[ctype], name, ext)
 
-    def copy_dest(self, ctype: ComponentType, name: str) -> str:
-        return self.copy[ctype].format(name=name)
+    def copy_dest(self, ctype: ComponentType, name: str, ext: str = "") -> str:
+        """The copy destination; same placeholders as :meth:`link_dest`."""
+        return _expand(self.copy[ctype], name, ext)
 
     def merge_dest(self, ctype: ComponentType) -> MergeDest:
         return self.merge[ctype]

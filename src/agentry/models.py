@@ -15,9 +15,9 @@ from __future__ import annotations
 
 from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 
 
 class ComponentType(str, Enum):
@@ -144,7 +144,7 @@ class Source(BaseModel):
     # ``{target: {type: rule}}``. They apply only to this source's components, over the
     # project's ``target_profiles`` and the built-in (ADR-002 A) — e.g. a Claude plugin's
     # hooks link the plugin root. Removed with the source.
-    profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
+    profiles: dict[str, ProfileRules] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _check_locator(self) -> Source:
@@ -346,7 +346,9 @@ class ExpectRule(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    extension: str | None = None
+    # One suffix (".toml") or several ([".ts", ".js"]) the artifact file must have.
+    extension: str | list[str] | None = None
+    file_only: bool = False
     events: list[str] | None = None
     require: list[str] = Field(default_factory=list)
     types: dict[str, Literal["array", "object", "string", "number", "boolean"]] = Field(
@@ -409,17 +411,23 @@ class ProfileRule(BaseModel):
             )
         if (self.rewrite_from is None) != (self.rewrite_to is None):
             raise ValueError("'rewrite_from' and 'rewrite_to' must be set together")
-        # Only a plain merge can leave a component out whole; a link, copy or link+merge
-        # (whose link and merge must stay together) can only warn.
-        if (
-            self.expect is not None
-            and self.expect.on_mismatch == "skip"
-            and self.strategy is not Strategy.MERGE
-        ):
-            raise ValueError(
-                f"expect.on_mismatch 'skip' needs strategy 'merge', not "
-                f"'{self.strategy.value}' — use 'warn'"
-            )
+        # A plain merge, link or copy can leave a component out whole; a link+merge (whose
+        # link and merge must stay together) can only warn.
+        if self.expect is not None and self.expect.on_mismatch == "skip":
+            if self.strategy is Strategy.LINK_MERGE:
+                raise ValueError(
+                    "expect.on_mismatch 'skip' needs strategy 'merge', 'link' or 'copy', not "
+                    "'link+merge' — use 'warn'"
+                )
+            # On link/copy only the artifact's path checks run, so without one the skip
+            # could never fire.
+            if self.strategy in (Strategy.LINK, Strategy.COPY) and not (
+                self.expect.extension or self.expect.file_only
+            ):
+                raise ValueError(
+                    f"expect.on_mismatch 'skip' on a {self.strategy.value} rule needs a path "
+                    f"check ('extension' or 'file_only') — use 'warn'"
+                )
         # These two are joined onto the project root by the installers, and they can come
         # from a remote catalog overlay — so they get the same treatment as Component.path.
         if self.dest:
@@ -427,6 +435,27 @@ class ProfileRule(BaseModel):
         if self.file:
             _check_rel("profile rule 'file'", self.file)
         return self
+
+
+def _check_profile_types(rules: dict[ComponentType, ProfileRule]) -> dict:
+    """Per-type checks a lone :class:`ProfileRule` can't make (it doesn't know its type)."""
+    for ctype, rule in rules.items():
+        if (
+            ctype in MERGE_TYPES
+            and rule.strategy in (Strategy.LINK, Strategy.COPY)
+            and rule.expect is not None
+            and rule.expect.on_mismatch == "skip"
+        ):
+            # A merge type's content is never checked on link/copy, so it couldn't skip.
+            raise ValueError(
+                f"expect.on_mismatch 'skip' on a {ctype.value} rule needs strategy 'merge', "
+                f"not '{rule.strategy.value}' — use 'warn'"
+            )
+    return rules
+
+
+#: ``{type: rule}`` for one target, with the per-type checks applied.
+ProfileRules = Annotated[dict[ComponentType, ProfileRule], AfterValidator(_check_profile_types)]
 
 
 class Registry(BaseModel):
@@ -477,7 +506,7 @@ class Config(BaseModel):
     # narrowed to selected components at ``agentry add`` time.
     repositories: list[Registry] = Field(default_factory=list)
     # Override built-in target maps or define entirely new tools (data-driven).
-    target_profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
+    target_profiles: dict[str, ProfileRules] = Field(default_factory=dict)
     # AI-agent transform provider (opt-in): how ``agentry emit ... --agent`` invokes your agent CLI.
     transform: TransformConfig | None = None
     # OS-independent content hashing for local sources (line-ending normalization).
@@ -585,7 +614,7 @@ class RegistrySource(BaseModel):
     #: up the repo's default branch, falling back to ``ref``.
     default_branch: bool = False
     #: Install overrides the added source carries as its ``profiles`` (see ``Source``).
-    profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
+    profiles: dict[str, ProfileRules] = Field(default_factory=dict)
     #: The Claude marketplace plugin this source is (its ``name``), for add-time naming.
     plugin: str | None = None
 
@@ -643,7 +672,7 @@ class RepositoryEntry(BaseModel):
     # Per-repo target-profile overrides merged into the project's config on ``agentry add``.
     # Lets a plugin repo declare how its hooks/mcp install (e.g. a claude hook link+merge
     # rewriting ${CLAUDE_PLUGIN_ROOT}) so the curated install works without manual config.
-    target_profiles: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
+    target_profiles: dict[str, ProfileRules] = Field(default_factory=dict)
 
 
 class RepositoryIndex(BaseModel):
@@ -655,7 +684,7 @@ class RepositoryIndex(BaseModel):
     # component type. Installing one (``agentry target add <name>``) merges it into the
     # project's ``target_profiles``, making an otherwise-undefined target resolvable —
     # the community-driver layer. Same shape as ``Config.target_profiles[<target>]``.
-    targets: dict[str, dict[ComponentType, ProfileRule]] = Field(default_factory=dict)
+    targets: dict[str, ProfileRules] = Field(default_factory=dict)
 
 
 # -- lock -----------------------------------------------------------------

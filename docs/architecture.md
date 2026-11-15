@@ -395,9 +395,13 @@ dataclass that *composes* two things:
    `spec.FormatExpectation`). They describe what an agent needs a component's *content* to
    look like, so agentry can **warn** when a correctly placed component won't actually work there.
    - **Fields:**
-     - `extension`: the artifact's own suffix. It is checked for single-file artifacts only. It is
-       skipped for directories, and for components with `transform:`, because the transformed
-       output is what lands.
+     - `extension`: the artifact's own suffix — one (`".toml"`) or any of several
+       (`(".ts", ".js")`; a list in `expect:`). It is checked for single-file artifacts only. It
+       is skipped for directories, and for components whose `transform:` actually applies (a
+       single-file type on a `link` target), because the transformed output is what lands; a
+       transform that falls back to the raw artifact (a dir type, or a copy target) is checked.
+     - `file_only`: the artifact must be a single file; a directory artifact is a mismatch (the
+       complement of `extension`, which ignores directories).
      - `events`: allowed hook-event keys.
      - `require`, `forbid`, `types`, `values`: per-entry field presence, absence, JSON type and
        allowed values.
@@ -413,23 +417,37 @@ dataclass that *composes* two things:
      `target_profiles`. The warning is also recorded in `DesiredPlan.format_issues`, and `doctor`
      reports it as a `format` warning, so `--strict` fails. Nothing on disk changes.
    - **`on_mismatch: warn | skip`** (default `warn`). `warn` is the behaviour above: install as-is
-     and warn. `skip` is for formats a target *rejects outright*: a merged component (plain merge)
-     whose entries violate the rule is **not installed on that target at all** — the whole
-     component, never half of it — with the rule's `skip_message` (or a generic one) naming the
-     offending entries; `DesiredPlan.format_skips` (`FormatSkip` records) gives it a `missing`
-     status row with a note and one `doctor` `format` warning (`--strict` fails) — no second
-     `drift` row, since sync can't install it. The variant hint (`{variant_path}`) is worked out
-     only once a skip happens; a template needing it is never used without one (fallback, else
-     the generic message), and a component that already *is* the per-harness variant is told to
-     rewrite itself. With two or more skips, `sync` prints one short line per skipped pair and
-     keeps the full warnings for `--verbose` and `doctor`. `skip` is valid only on a `merge`
-     profile rule (a validation error otherwise); a built-in skip rule inherited onto another
-     strategy by a strategy-only override never skips (at most it warns). A copy agentry
-     installed earlier becomes an orphan and is removed by the normal fingerprint-checked path; a
-     hand-edited one stays (W4); `keep:` keys are never touched. `link+merge` stays warn-only. A `target_profiles` / source `expect:` override
+     and warn. `skip` is for formats a target *rejects outright*: a component that violates the
+     rule — a plain-merge component's entries, or a link/copy component's artifact path (its
+     `extension` / `file_only` checks, run before it is planned; only a component whose
+     `transform:` actually applies is exempt, since its output is what lands) —
+     is **not installed on that target at all** — the whole component, never half of it — with
+     the rule's `skip_message` (or a generic one; `{ref}`, `{target}`, `{type}`, `{name}`
+     expand) followed by the offending entries or the path problem; `DesiredPlan.format_skips`
+     (`FormatSkip` records: `where` is the merge's `file:pointer` or the link/copy dest,
+     `entries` the offending keys — empty for a path skip — and `reason` one clause saying why)
+     gives it a `missing` status row with a note and one `doctor` `format` warning (`--strict`
+     fails) — no second `drift` row, since sync can't install it. The variant hint
+     (`{variant_path}`) is worked out only once a skip happens; a template needing it is never
+     used without one (fallback, else the generic message), and a component that already *is*
+     the per-harness variant is told to rewrite itself. With two or more skips, `sync` prints
+     one short line per skipped pair (`<ref>: skipped on <target> — <reason>`) and keeps the
+     full warnings for `--verbose` and `doctor`. `skip` is valid on a `merge` rule, and on a
+     `link` / `copy` rule that has a path check (`extension` or `file_only`) for a file/dir type;
+     it is a validation error on `link+merge`, on a link/copy rule without a path check, and on
+     a `hook` / `mcp` rule with `link` / `copy` (their content is never checked there, so it
+     could never fire). A built-in skip rule inherited onto `link+merge` by a strategy-only
+     override never skips (at most it warns). A copy agentry installed earlier becomes an orphan and is
+     removed by the normal fingerprint-checked path; a hand-edited one stays (W4); `keep:` keys
+     are never touched. `link+merge` stays warn-only. A `target_profiles` / source `expect:` override
      carries its own `on_mismatch` (omitted ⇒ `warn`); omitting `expect:` entirely inherits the
      built-in rule, `skip` included.
    - **Built-ins.**
+     - opencode tools are `file_only` with `extension: (".ts", ".js")` and **`on_mismatch:
+       skip`**: OpenCode loads only top-level `*.ts` / `*.js` files in `.opencode/tools/` and
+       silently ignores a directory tool (`dirtool/index.ts`; R3, 1.19.5) or a file of another
+       kind, so either is skipped on opencode with a hint to ship it as one `{name}.ts` /
+       `{name}.js` file.
      - opencode MCP requires `type` (`local`/`remote`) and an array `command`, and forbids
        Claude's `args`/`env` — with **`on_mismatch: skip`**: runtime-confirmed (R3, OpenCode
        1.19.5) that a single non-conforming entry makes OpenCode refuse the whole `opencode.json`,
@@ -482,6 +500,22 @@ target_profiles:
 
 > YAML note: a `dest` containing `{name}` must be **quoted**, or YAML reads `{…}` as a flow mapping.
 
+**Dest placeholders.** A link or copy `dest` expands `{name}` (the component name) and `{ext}`
+(the artifact's file suffix, e.g. `.ts`; empty for a directory artifact), so a tool that only
+loads files by extension keeps it. A name that already ends in that suffix gets it once: a tool
+listed in `agentry.yaml` by `path:` / `glob:` without `name:` is named after the whole file
+(`fmt.ts`, since a tool is a directory type), and lands as `fmt.ts`, not `fmt.ts.ts` — its ref
+keeps the full name, so lock identities don't change. OpenCode is the built-in user: it loads only `*.ts` / `*.js`
+from `.opencode/tools/`, and a *symlinked* tool that imports `@opencode-ai/plugin` crashes every
+`opencode` command (R3, runtime-confirmed on 1.19.5), so opencode tools install as **copies** at
+`.opencode/tools/{name}{ext}`; sync refreshes a copy when the source changes. A *directory*
+tool is not installed there at all — the opencode `file_only` rule skips it (§5 format
+expectations), and a directory copy an earlier version installed is removed as an orphan. An install made by
+an older agentry (an extension-less symlink) is an orphan on upgrade and is removed by the normal
+store-scoped link removal; a user file already at the new path is refused, never overwritten.
+Copies currently have no edit protection — a hand edit to `.opencode/tools/*` is overwritten on
+the next sync and the file is deleted on removal (tracked as a follow-up: W2/W4-style protection for copies).
+
 A referenced target (project or component) with neither a built-in driver nor a profile is reported via `unresolved_targets`, which is fatal for sync (§6 step 0).
 
 **Active vs. referenced targets.** The project's `targets:` is the **single switch**
@@ -514,7 +548,7 @@ flowchart LR
 | skill | `.claude/skills/{name}` | `.opencode/skills/{name}` | — | `.gemini/skills/{name}` | `.windsurf/skills/{name}` | `.kimi-code/skills/{name}` | `.agents/skills/{name}` | `.github/skills/{name}` | `.kiro/skills/{name}` | `.agents/skills/{name}` |
 | agent | `.claude/agents/{name}.md` | `.opencode/agents/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/agents/{name}.md` | — | — | — | `.github/agents/{name}.agent.md` | — | — |
 | command | `.claude/commands/{name}.md` | `.opencode/commands/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/commands/{name}.toml` | `.windsurf/workflows/{name}.md` | — | — | `.github/prompts/{name}.prompt.md` | — | — |
-| tool | `.claude/tools/{name}` | `.opencode/tools/{name}` | — | — | — | — | — | — | — | — |
+| tool | `.claude/tools/{name}` | copy `.opencode/tools/{name}{ext}` | — | — | — | — | — | — | — | — |
 | hook | merge `.claude/settings.json` → `hooks` | — | — | merge `.gemini/settings.json` → `hooks` | merge `.windsurf/hooks.json` → `hooks` | — | — | — | — | — |
 | mcp | merge `.mcp.json` → `mcpServers` | merge `opencode.json` → `mcp` | merge `.cursor/mcp.json` → `mcpServers` | merge `.gemini/settings.json` → `mcpServers` | — | merge `.kimi-code/mcp.json` → `mcpServers` | merge `.codex/config.toml` → `mcp_servers` | merge `.vscode/mcp.json` → `servers` | merge `.kiro/settings/mcp.json` → `mcpServers` | — |
 | memory (`emit triggers`) | `.claude/CLAUDE.md` | `AGENTS.md` | `.cursor/rules/agentry-triggers.mdc` | `GEMINI.md` | `.windsurf/rules/agentry-triggers.md` | `AGENTS.md` | `AGENTS.md` | `.github/copilot-instructions.md` | `.kiro/steering/agentry-triggers.md` | `AGENTS.md` |

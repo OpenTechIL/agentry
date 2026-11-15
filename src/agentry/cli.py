@@ -307,11 +307,9 @@ def _summary_line(kind: str, n: int) -> str:
 
 def _skip_summary_line(skip: FormatSkip) -> str:
     """The short form of one format-skip warning, shown when several are folded."""
-    names = ", ".join(skip.entries)
-    verb = "uses" if len(skip.entries) == 1 else "use"
     return (
-        f"{skip.ref}: skipped on {skip.target} — {names} {verb} a format {skip.target} "
-        f"rejects. Run `{prog()} doctor` (or sync with --verbose) for the fix"
+        f"{skip.ref}: skipped on {skip.target} — {skip.reason}. "
+        f"Run `{prog()} doctor` (or sync with --verbose) for the fix"
     )
 
 

@@ -189,6 +189,7 @@ Which placeholders expand depends on the strategy:
 | Variable | `link` / `copy` | `link+merge` | Value |
 |---|---|---|---|
 | `{name}` | yes | yes | The component name. |
+| `{ext}` | yes | — | The artifact's file extension, such as `.ts`. Empty when the artifact is a folder. The built-in `opencode` driver copies tools to `.opencode/tools/{name}{ext}`, because OpenCode loads only `*.ts` and `*.js` files there. That rule skips folder tools and other file types (see [tool skipped on OpenCode](troubleshooting.md#tool-skipped-on-opencode)). A name that already ends in the extension (a tool listed by `path:` without `name:`, named `fmt.ts`) gets it once: `fmt.ts`, not `fmt.ts.ts`. These are copies: a hand edit to `.opencode/tools/*` is overwritten on the next sync. |
 | `{source}` | — | yes | The source's `name`. |
 | `{repo}` | — | yes | Repo basename from the source URL/path, `.git` stripped. |
 | `{ref}` | — | yes | The requested git ref, with `/` flattened to `-`. |
@@ -247,7 +248,8 @@ A tool you define only in `target_profiles` has no built-in check to inherit.
 
 | Field | Type | Checks |
 |---|---|---|
-| `extension` | str | The artifact file has this suffix, e.g. `".toml"`. Directories are skipped. |
+| `extension` | str or list of str | The artifact file has this suffix, e.g. `".toml"`, or one of these, e.g. `[".ts", ".js"]`. Directories are skipped (add `file_only` to reject them). |
+| `file_only` | bool | The artifact is a single file, not a folder. The built-in `opencode` tool rule sets it (with `extension: [".ts", ".js"]`), because OpenCode can't load folder tools. |
 | `events` | list of str | Every merged key is one of these, such as a tool's hook event names. |
 | `require` | list of str | Every merged entry has these fields. |
 | `types` | map field → `array` \| `object` \| `string` \| `number` \| `boolean` | A field, when present, has this JSON type. |
@@ -256,8 +258,8 @@ A tool you define only in `target_profiles` has no built-in check to inherit.
 | `reject` | map field → list | Values the tool misreads. Flagged with `reject_hint`. |
 | `reject_hint` | str | Why a `reject` value is wrong and what to use instead. Appended to the warning. |
 | `expects` | str | A human summary of what the tool wants, quoted in the warning. |
-| `on_mismatch` | `warn` \| `skip` | What happens when content doesn't match. `warn` (the default) installs it as-is and warns. `skip` doesn't install it on this target, for content that would break the tool, such as a Claude-format MCP server on OpenCode. `skip` needs `strategy: merge`: on any other strategy the rule is rejected when the config loads. |
-| `skip_message` | str | The warning printed for `skip`. `{ref}`, `{target}`, `{type}` and `{name}` expand, and `{variant_path}` expands to the per-target variant file to create (including the source's subdir). Empty: a generic message. |
+| `on_mismatch` | `warn` \| `skip` | What happens when content doesn't match. `warn` (the default) installs it as-is and warns. `skip` doesn't install it on this target, for content that would break the tool, such as a Claude-format MCP server or a folder tool on OpenCode. `skip` works with `strategy: merge`, and with `link` or `copy` when the rule has a path check (`extension` or `file_only`) — for example a folder tool on OpenCode, which loads only single `.ts`/`.js` files. The rule is rejected when the config loads on `link+merge`, on a `link`/`copy` rule without a path check, and on a `hook` or `mcp` rule using `link`/`copy`. |
+| `skip_message` | str | The warning printed for `skip`. `{ref}`, `{target}`, `{type}`, `{name}` and `{source}` expand, and `{variant_path}` expands to the per-target variant file to create (including the source's subdir). Empty: a generic message. |
 | `skip_message_fallback` | str | Used instead of `skip_message` when no variant path can be named (for example a file added with `--path`). Empty: `skip_message` if it doesn't use `{variant_path}`, otherwise the generic message. A component that already is the per-target variant (`mcp/<name>-<target>.json`) gets a built-in "rewrite it in the target's format" message instead of either. |
 
 ```yaml

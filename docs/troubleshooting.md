@@ -594,6 +594,33 @@ The general fixes:
 - **Override the rule** under [`target_profiles`](config-reference.md#target_profiles). If your
   override changes the format the tool reads, add `expect: {}` to drop the check.
 
+### Tool skipped on OpenCode
+
+```text
+s/tool/dirtool: OpenCode only loads single-file tools (.ts/.js directly in .opencode/tools/); this tool isn't one, so it was skipped on opencode. Ship it as one file, tools/dirtool.ts or .js, and add it with `agentry add s/tool/dirtool --path tools/dirtool.ts`, or list it in the source's agentry.yaml. ('dirtool' is a directory, not a single file)
+```
+
+**Cause.** OpenCode loads a tool only from a single `.ts` or `.js` file placed directly in
+`.opencode/tools/`. A tool shipped as a folder (`tools/dirtool/index.ts`), or as a single file of
+another kind (`tools/dirtool.py`, or one with no extension), would be ignored there, so agentry
+skips it on OpenCode. The text in parentheses says which. Other targets still get it. `agentry status` shows it as
+`missing`, and `agentry doctor` lists it under `format`.
+
+**Fix.** Do what the warning says: ship the tool as one file, such as `tools/dirtool.ts`. A
+tool's default location is a folder, so a single-file tool needs its path given explicitly:
+either the consumer adds it with `agentry add <source>/tool/dirtool --path tools/dirtool.ts`, or
+the source's
+[`agentry.yaml`](authoring.md#the-agentryyaml-descriptor) lists it with `path: tools/dirtool.ts`.
+agentry then copies it to `.opencode/tools/dirtool.ts`. (Listed without `name:`, the tool is
+named `dirtool.ts` — its ref is `<source>/tool/dirtool.ts` — and still lands as `dirtool.ts`.)
+
+OpenCode tools are copies, not symlinks: a hand edit to a file in `.opencode/tools/` is
+overwritten on the next `agentry sync`. Edit the source instead.
+
+When several components are skipped, `agentry sync` prints one short line for each, such as
+`s/tool/dirtool: skipped on opencode — 'dirtool' is a directory, not a single file. Run
+`agentry doctor` (or sync with --verbose) for the fix`.
+
 ### MCP server skipped on OpenCode
 
 ```text
