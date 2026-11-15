@@ -29,8 +29,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Removing agentry's last OpenCode entry no longer leaves behind an `opencode.json` that holds
   only the `$schema` line OpenCode writes itself. If agentry created the file and nothing else
   was added, it's deleted.
-
-### Fixed
 - OpenCode tools now install as single files with their extension, as copies, so OpenCode loads
   them. Previously they were silently ignored, and a symlinked tool importing
   `@opencode-ai/plugin` broke every opencode command. Directory-style tools, which OpenCode can't
