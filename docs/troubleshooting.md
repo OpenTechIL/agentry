@@ -911,6 +911,16 @@ The file is kept if:
 - it came from an install made by an older agentry, which didn't record creating it. That file
   stays, as `{}` or similar. Delete it by hand if you don't need it.
 
+## Empty folder left after uninstall
+
+agentry now removes only the folders it created itself. When you uninstall a component, it
+deletes an emptied folder such as `.claude/skills/` or `.claude/` only if it recorded creating
+that folder. A folder you made yourself always stays, even if it's empty.
+
+Folders from installs made before this version weren't recorded. So after you remove those
+components, folders such as an empty `.claude/skills/` stay behind. They're safe to delete by
+hand.
+
 ## A summary line instead of individual warnings
 
 To keep output readable, `sync`, `install`, `update` and `add` collapse a warning that occurs two

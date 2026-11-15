@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 
 from ..resolver import store_dir
-from ._paths import prune_empty_parents, require_confined
+from ._paths import prune_created_dirs, record_created, require_confined
 
 
 def _link_target(artifact: Path, dest: Path) -> str:
@@ -36,14 +36,17 @@ def is_managed_link(root: Path, path: Path) -> bool:
     return target == store or target.startswith(store + os.sep)
 
 
-def install_link(root: Path, artifact: Path, dest_rel: str) -> str:
+def install_link(
+    root: Path, artifact: Path, dest_rel: str, *, created_dirs: set[str] | None = None
+) -> str:
     """Create/refresh a symlink at ``dest_rel`` pointing at ``artifact``.
 
     Returns one of ``"created"``, ``"updated"``, ``"exists"``.
-    Refuses to overwrite a path that isn't already a managed link.
+    Refuses to overwrite a path that isn't already a managed link. Folders it creates are
+    added to ``created_dirs`` (the manifest's record, #48).
     """
     dest = require_confined(root, dest_rel)
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    record_created(root, dest.parent, created_dirs)
     rel_target = _link_target(artifact, dest)
 
     if dest.is_symlink():
@@ -61,12 +64,16 @@ def install_link(root: Path, artifact: Path, dest_rel: str) -> str:
     return "created"
 
 
-def remove_link(root: Path, dest_rel: str) -> bool:
-    """Remove a managed symlink. No-op (returns False) if it isn't ours."""
+def remove_link(root: Path, dest_rel: str, *, created_dirs: set[str] | None = None) -> bool:
+    """Remove a managed symlink. No-op (returns False) if it isn't ours.
+
+    Then removes the now-empty folders agentry recorded creating (``created_dirs``); any
+    other folder, the user's included, stays.
+    """
     dest = require_confined(root, dest_rel)
     if is_managed_link(root, dest):
         dest.unlink()
-        prune_empty_parents(root, dest.parent)
+        prune_created_dirs(root, dest.parent, created_dirs)
         return True
     return False
 

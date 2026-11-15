@@ -1012,6 +1012,10 @@ def sync(
     # Claim-order transfers (ADR-001 Rev 6 C2): reported once, in `updated` — but only after
     # the winner's install succeeded (checked below), never for one that hit a conflict.
     pending_transfers = _transfer_lines(plan, manifest, transitive)
+    # Forget created-file/dir records whose path is gone (the user deleted it): a folder or
+    # file they later recreate by hand is theirs, never ours to remove (#45/#48). Sync only,
+    # once, before any install records something new this run.
+    _drop_stale_created(root, manifest)
     # Every path-strategy orphan is removed before any path is installed, so a path moving
     # between strategies (a loser's link → the winner's copy) never trips "not managed".
     _prune_links(root, links, manifest, result)
@@ -1112,18 +1116,29 @@ def group_collisions(collisions: list[merge_inst.Collision]) -> list[tuple[str, 
     return out
 
 
+def _drop_stale_created(root: Path, manifest: Manifest) -> None:
+    """Drop ``created_dirs`` entries that aren't a real directory any more, and
+    ``created_files`` entries whose file is gone."""
+    manifest.created_dirs = [
+        d for d in manifest.created_dirs if (root / d).is_dir() and not (root / d).is_symlink()
+    ]
+    manifest.created_files = [f for f in manifest.created_files if (root / f).is_file()]
+
+
 def _prune_links(
     root: Path, desired: list[DesiredLink], manifest: Manifest, result: SyncResult
 ) -> None:
     desired_paths = {d.path for d in desired}
     kept: list[InstalledLink] = []
+    dirs = set(manifest.created_dirs)
     for inst in manifest.links:
         if inst.path not in desired_paths:
-            if link_inst.remove_link(root, inst.path):
+            if link_inst.remove_link(root, inst.path, created_dirs=dirs):
                 result.removed.append(f"link {inst.path}")
         else:
             kept.append(inst)
     manifest.links = kept
+    manifest.created_dirs = sorted(dirs)
 
 
 def _install_links(
@@ -1131,9 +1146,10 @@ def _install_links(
 ) -> None:
     desired_by_path = {d.path: d for d in desired}
     have = {inst.path: inst for inst in manifest.links}
+    dirs = set(manifest.created_dirs)
     for path, d in desired_by_path.items():
         try:
-            status = link_inst.install_link(root, d.artifact, path)
+            status = link_inst.install_link(root, d.artifact, path, created_dirs=dirs)
         except FileExistsError as exc:
             result.warnings.append(str(exc))
             continue
@@ -1147,6 +1163,7 @@ def _install_links(
             inst = InstalledLink(component=d.component, target=d.target, path=path)
             manifest.links.append(inst)
             have[path] = inst
+    manifest.created_dirs = sorted(dirs)
 
 
 def _prune_copies(
@@ -1154,13 +1171,15 @@ def _prune_copies(
 ) -> None:
     desired_paths = {d.path for d in desired}
     kept: list[InstalledCopy] = []
+    dirs = set(manifest.created_dirs)
     for inst in manifest.copies:
         if inst.path not in desired_paths:
-            if copy_inst.remove_copy(root, inst.path):
+            if copy_inst.remove_copy(root, inst.path, created_dirs=dirs):
                 result.removed.append(f"copy {inst.path}")
         else:
             kept.append(inst)
     manifest.copies = kept
+    manifest.created_dirs = sorted(dirs)
 
 
 def _install_copies(
@@ -1168,9 +1187,12 @@ def _install_copies(
 ) -> None:
     desired_by_path = {d.path: d for d in desired}
     have = {inst.path: inst for inst in manifest.copies}
+    dirs = set(manifest.created_dirs)
     for path, d in desired_by_path.items():
         try:
-            status = copy_inst.install_copy(root, d.artifact, path, managed=path in have)
+            status = copy_inst.install_copy(
+                root, d.artifact, path, managed=path in have, created_dirs=dirs
+            )
         except FileExistsError as exc:
             result.warnings.append(str(exc))
             continue
@@ -1184,6 +1206,7 @@ def _install_copies(
             inst = InstalledCopy(component=d.component, target=d.target, path=path)
             manifest.copies.append(inst)
             have[path] = inst
+    manifest.created_dirs = sorted(dirs)
 
 
 def _prune_transforms(
@@ -1191,13 +1214,16 @@ def _prune_transforms(
 ) -> None:
     desired_paths = {d.path for d in desired}
     kept: list[InstalledTransform] = []
+    dirs = set(manifest.created_dirs)
     for inst in manifest.transforms:
         if inst.path not in desired_paths:
-            if copy_inst.remove_copy(root, inst.path):  # a transformed file is a managed real file
+            # a transformed file is a managed real file
+            if copy_inst.remove_copy(root, inst.path, created_dirs=dirs):
                 result.removed.append(f"transform {inst.path}")
         else:
             kept.append(inst)
     manifest.transforms = kept
+    manifest.created_dirs = sorted(dirs)
 
 
 def _transitive_mode(winner: str, loser: str, transitive: frozenset[str]) -> str:
@@ -1286,6 +1312,7 @@ def _reconcile_transforms(
     _prune_transforms(root, desired, manifest, result)  # no-op after sync's prune phase
     records = {inst.path: inst for inst in manifest.transforms}
     have = set(records)
+    dirs = set(manifest.created_dirs)
     for path, d in desired_by_path.items():
         if d.provider == transform_inst.AGENT:
             if not allow_transform:
@@ -1306,7 +1333,9 @@ def _reconcile_transforms(
             result.warnings.append(f"{d.component}: transform failed: {exc}")
             continue
         try:
-            status = transform_inst.install_transform(root, content, path, managed=path in have)
+            status = transform_inst.install_transform(
+                root, content, path, managed=path in have, created_dirs=dirs
+            )
         except FileExistsError as exc:
             result.warnings.append(str(exc))
             continue
@@ -1321,6 +1350,7 @@ def _reconcile_transforms(
                 InstalledTransform(component=d.component, target=d.target, path=path)
             )
             have.add(path)
+    manifest.created_dirs = sorted(dirs)
 
 
 def _warn_unparseable(
@@ -1866,7 +1896,8 @@ def _reconcile_merge_targets(
     kept), and each changed file is written once at the end. Runs after generators, so
     conflicts are judged against whatever a generator wrote.
     """
-    docs = merge_inst.Documents(root, manifest.created_files, manifest.created_dirs)
+    # One set shared by the merge files and the link half of link+merges (#48).
+    docs = merge_inst.Documents(root, manifest.created_files, set(manifest.created_dirs))
     records: list[InstalledMerge | InstalledLinkMerge] = [*manifest.merges, *manifest.link_merges]
     # Every pointer agentry merges into, per file: the only keys an empty skeleton may hold.
     pointers: dict[str, set[str]] = {}
@@ -2126,7 +2157,7 @@ def _reconcile_link_merges(
         claims.release(k)
         # A path now owned by a link/copy/transform winner (ADR-001 Rev 6) isn't ours to drop.
         unlinked = m.link_path.casefold() not in owned_paths and link_inst.remove_link(
-            root, m.link_path
+            root, m.link_path, created_dirs=docs.created_dirs
         )
         if unlinked or merge_removed:
             result.removed.append(f"link+merge {m.link_path} + {m.file}:{m.pointer}")
@@ -2142,7 +2173,9 @@ def _reconcile_link_merges(
             continue
         plan, stale = planned
         try:
-            link_status = link_inst.install_link(root, d.artifact, d.link_path)
+            link_status = link_inst.install_link(
+                root, d.artifact, d.link_path, created_dirs=docs.created_dirs
+            )
         except FileExistsError as exc:
             result.warnings.append(str(exc))
             if old is not None:
@@ -2151,7 +2184,7 @@ def _reconcile_link_merges(
         # The dest template (e.g. {repo}@{ref}) may have moved the link — drop the old one,
         # but only now that the new link exists, so a failed install never loses both.
         if old is not None and old.link_path != d.link_path:
-            link_inst.remove_link(root, old.link_path)
+            link_inst.remove_link(root, old.link_path, created_dirs=docs.created_dirs)
         _commit_record(docs, k, d.dest, old, plan, stale, claims, result, d.kept, d.bare)
         if link_status == "created" or plan.created:
             result.created.append(f"link+merge {d.link_path} + {d.dest.file}:{d.dest.pointer}")

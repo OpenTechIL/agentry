@@ -12,7 +12,7 @@ import shutil
 from pathlib import Path
 
 from ..emit import _strip_frontmatter, run_agent
-from ._paths import require_confined
+from ._paths import record_created, require_confined
 
 STRIP_FRONTMATTER = "strip-frontmatter"
 AGENT = "agent"
@@ -34,7 +34,14 @@ def render(artifact: Path, provider: str, prompt: str | None, *, command: list[s
     raise ValueError(f"unknown transform provider: {provider}")
 
 
-def install_transform(root: Path, content: str, dest_rel: str, *, managed: bool) -> str:
+def install_transform(
+    root: Path,
+    content: str,
+    dest_rel: str,
+    *,
+    managed: bool,
+    created_dirs: set[str] | None = None,
+) -> str:
     """Write ``content`` to ``dest_rel`` as a real file. Returns created/updated/exists.
 
     Refuses to overwrite a path agentry doesn't already manage (the never-clobber invariant).
@@ -51,10 +58,10 @@ def install_transform(root: Path, content: str, dest_rel: str, *, managed: bool)
             dest.unlink()
         elif dest.is_dir():
             shutil.rmtree(dest)
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        record_created(root, dest.parent, created_dirs)
         dest.write_text(content, encoding="utf-8")
         return "updated"
-    dest.parent.mkdir(parents=True, exist_ok=True)
+    record_created(root, dest.parent, created_dirs)
     dest.write_text(content, encoding="utf-8")
     return "created"
 
