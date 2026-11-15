@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Release signatures now use the standard Sigstore bundle format. Verify them with a recent cosign
   (2.6 or later, or 3.x), using the same `cosign verify-blob` command as before.
+- agentry no longer writes Claude-format MCP servers into opencode.json, because OpenCode rejects
+  the whole config file when it finds one. They're skipped with a warning, and any already
+  installed are removed on the next sync. Ship an OpenCode-specific variant (for example
+  `mcp/github-opencode.json`) to install an MCP server on OpenCode.
 
 ## [0.3.3] — 2026-11-15
 

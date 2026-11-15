@@ -230,7 +230,9 @@ target_profiles:
 
 Some tools need a different *format*, not just a different place. Examples: OpenCode's MCP
 entries, Gemini's TOML commands, Gemini's hook event names. agentry installs the bytes as they
-are, but warns when content visibly won't work in the target. `agentry doctor` reports each
+are, but warns when content visibly won't work in the target. The exception is a mismatch that
+would make the tool reject its whole config, such as a Claude-format MCP server in OpenCode's
+`opencode.json`: that entry is skipped instead. `agentry doctor` reports each
 case under the `format` category, and `doctor --strict` fails. The built-in drivers ship these
 checks. `expect:` lets you change them for one (tool, type) rule:
 
@@ -253,6 +255,9 @@ A tool you define only in `target_profiles` has no built-in check to inherit.
 | `reject` | map field → list | Values the tool misreads. Flagged with `reject_hint`. |
 | `reject_hint` | str | Why a `reject` value is wrong and what to use instead. Appended to the warning. |
 | `expects` | str | A human summary of what the tool wants, quoted in the warning. |
+| `on_mismatch` | `warn` \| `skip` | What happens when content doesn't match. `warn` (the default) installs it as-is and warns. `skip` doesn't install it on this target, for content that would break the tool, such as a Claude-format MCP server on OpenCode. `skip` needs `strategy: merge`: on any other strategy the rule is rejected when the config loads. |
+| `skip_message` | str | The warning printed for `skip`. `{ref}`, `{target}`, `{type}` and `{name}` expand, and `{variant_path}` expands to the per-target variant file to create (including the source's subdir). Empty: a generic message. |
+| `skip_message_fallback` | str | Used instead of `skip_message` when no variant path can be named (for example a file added with `--path`). Empty: `skip_message` if it doesn't use `{variant_path}`, otherwise the generic message. A component that already is the per-target variant (`mcp/<name>-<target>.json`) gets a built-in "rewrite it in the target's format" message instead of either. |
 
 ```yaml
 target_profiles:

@@ -566,7 +566,8 @@ agentry can check the entry, and it removes a matching one cleanly without this 
 
 agentry puts a component where each tool looks for it, but it doesn't translate the content.
 Some tools expect a different format, so agentry checks for known mismatches. It still installs
-the component as-is, prints a `may not work in <target>` warning, and `agentry doctor` lists it
+the component as-is (except where the mismatch would break the tool's whole config, as with
+[MCP servers on OpenCode](#mcp-server-skipped-on-opencode), which are skipped), prints a `may not work in <target>` warning, and `agentry doctor` lists it
 under the `format` category (`doctor --strict` fails). Each warning names what the target expects
 and what's wrong.
 
@@ -593,26 +594,71 @@ The general fixes:
 - **Override the rule** under [`target_profiles`](config-reference.md#target_profiles). If your
   override changes the format the tool reads, add `expect: {}` to drop the check.
 
-### OpenCode: an MCP server in Claude's shape
+### MCP server skipped on OpenCode
 
 ```text
-demo/mcp/github: may not work in opencode (expects `type: "local"` with `command` as one array and `environment`): 'github' has no 'type'; 'github'.command is a string, not an array; 'github' uses 'args', which is not accepted; 'github' uses 'env', which is not accepted — installed as-is. Ship an opencode-specific mcp, or override mcp for opencode under target_profiles
+s/mcp/github: this MCP server uses Claude's format, which OpenCode rejects; it would make OpenCode refuse the whole project config — skipped on opencode. Ship mcp/github-opencode.json (an OpenCode-specific variant of this file), or override mcp for opencode under target_profiles. (entries: github)
 ```
 
-**Cause.** OpenCode's `opencode.json` wants `type: "local"` (or `"remote"`), `command` as one
-array with the arguments included, and `environment` instead of `env`. It rejects unknown fields
-such as `args`. A Claude-style `{"command": "npx", "args": [...], "env": {...}}` entry doesn't
-start. A `type: "http"` entry gets the same warning (`'docs'.type is 'http', not one of local,
-remote`).
+**Cause.** The MCP server is written in Claude's shape, for example
+`{"command": "npx", "args": [...], "env": {...}}`. OpenCode's `opencode.json` wants `type: "local"`
+(or `"remote"`), `command` as one array with the arguments included, and `environment` instead
+of `env`. A single entry in the wrong shape makes OpenCode refuse the whole file, so agentry
+doesn't write it at all. Every other target still gets the server. On OpenCode, `agentry status`
+shows it as `missing`, and `agentry doctor` lists it once, under `format` (not again as drift:
+`agentry sync` can't fix it).
 
-**Fix.** Ship an OpenCode variant, `mcp/github-opencode.json`, in the same source and enable
-it alongside `github`:
+When several MCP servers are skipped, `agentry sync` prints one short line for each and keeps the
+full warning above for `agentry doctor` and `agentry sync --verbose`:
+
+```text
+s/mcp/github: skipped on opencode — github uses a format opencode rejects. Run `agentry doctor` (or sync with --verbose) for the fix
+```
+
+If an earlier agentry already wrote such an entry, the next sync removes it:
+
+```text
+- merge opencode.json:mcp (github)
+```
+
+**Fix.** Ship an OpenCode variant of that file in the same source, at the path the warning
+names, and enable it. For `mcp/github.json` that's `mcp/github-opencode.json`:
 
 ```json
 {"github": {"type": "local", "command": ["npx", "-y", "gh-mcp"], "environment": {"TOKEN": "x"}}}
 ```
 
-OpenCode then gets only the variant, and the other targets keep `mcp/github.json`.
+OpenCode then gets the variant, and the other targets keep the original.
+
+For a plugin's root `.mcp.json`, or MCP servers defined inline in its `plugin.json`, the warning
+points at the plugin's `mcp/` folder, which is where the variant has to go:
+
+```text
+plug/mcp/mcp: this MCP server uses Claude's format, which OpenCode rejects; it would make OpenCode refuse the whole project config — skipped on opencode. Ship mcp/mcp-opencode.json (an OpenCode-specific variant of this file), or override mcp for opencode under target_profiles. (entries: gh)
+plug/mcp/plugin-mcp: this MCP server uses Claude's format, which OpenCode rejects; it would make OpenCode refuse the whole project config — skipped on opencode. Ship mcp/plugin-mcp-opencode.json (an OpenCode-specific variant of this file), or override mcp for opencode under target_profiles. (entries: inl)
+```
+
+The path includes the source's subdirectory, if it has one: with `--subdir pkg` it reads
+`Ship pkg/mcp/mcp-opencode.json (…)`. Write the variant as an object of named servers in
+OpenCode's shape.
+
+If the MCP file was added with an explicit `--path` (or placed by an `agentry.yaml` descriptor),
+a variant file isn't looked up, so the warning offers only the override:
+
+```text
+mono/mcp/custom: this MCP server uses Claude's format, which OpenCode rejects; it would make OpenCode refuse the whole project config — skipped on opencode. Override mcp for opencode under target_profiles. (entries: srv)
+```
+
+In that case, add a separate OpenCode-shaped MCP component limited to `targets: [opencode]`, or
+override the `mcp` rule for `opencode` under
+[`target_profiles`](config-reference.md#target_profiles).
+
+If the skipped file is already the OpenCode variant (`mcp/github-opencode.json`) but is still in
+Claude's shape, the warning tells you to fix that file:
+
+```text
+s/mcp/github-opencode: this opencode-specific variant doesn't match what opencode accepts — skipped on opencode. Rewrite it in opencode's format (`type: "local"` with `command` as one array and `environment`), or override mcp for opencode under target_profiles. (entries: github)
+```
 
 ### Gemini: a command that isn't a `.toml` file
 

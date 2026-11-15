@@ -169,6 +169,8 @@ def run_checks(root: Path) -> list[Check]:
     checks.extend(
         [
             *(Check("warn", "format", issue) for issue in plan.format_issues),
+            # merged components skipped for a format their target rejects (on_mismatch: skip)
+            *(Check("warn", "format", skip.message) for skip in plan.format_skips),
             # component targets the project hasn't activated
             *(Check("warn", "target", issue) for issue in plan.inactive),
             # ignored source `profiles:` parts: an identity override, an undefined target
@@ -184,6 +186,9 @@ def run_checks(root: Path) -> list[Check]:
 
     try:
         rows, _ = status(root, planned=planned)  # single use, after the plan checks above
+        # A pair skipped for its format is already a `format` warning above, and sync can't
+        # install it: a `drift` "missing" row would report it twice and point at the wrong fix.
+        format_skipped = {(s.ref, s.target) for s in plan.format_skips}
         for r in rows:
             if r.drifted:
                 # One line per entry agentry can't vouch for (ADR-001 Rev 3, PM R5): the
@@ -203,6 +208,8 @@ def run_checks(root: Path) -> list[Check]:
                             f"or run `{prog()} keep {r.ref} {e.keep_arg or e.key}` to keep yours",
                         )
                     )
+                continue
+            if (r.ref, r.target) in format_skipped and r.state == "missing":
                 continue
             if not r.state.startswith("ok"):  # "ok (kept)" is healthy: the user's choice
                 # A row with a note can't be fixed by sync (a refused merge, a hand edit):

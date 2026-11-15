@@ -27,10 +27,10 @@ from agentry.reconcile import plan_for_status, status, sync
 
 _ENV = {"COLUMNS": "200", "PATH": "/usr/bin:/bin"}
 
-DOCTOR_STDOUT = "  ! format  s/mcp/gh: may not work in opencode (expects `type: \"local\"` with `command` as one array and `environment`): 'gh' has no 'type'; 'gh'.command is a string, not an array; 'gh' uses 'args', \nwhich is not accepted — installed as-is. Ship an opencode-specific mcp, or override mcp for opencode under target_profiles\n  ! target  s/mcp/gh: target 'copilot' is not in the project's targets — skipped. Add it with `agentry target use copilot`, or remove it from this component.\n  ! drift  .mcp.json: 'mcpServers.gh' (from s/mcp/gh → claude) was edited by hand — delete it and run `agentry sync` to get the current version, or run `agentry keep s/mcp/gh claude:gh` to keep yours\n  ! drift  s/mcp/mine → claude: missing (.mcp.json already has 'mcpServers.mine' (not added by agentry) — rename or remove your entry, or disable s/mcp/mine)\ndoctor: 0 errors, 4 warning(s).\n"
+DOCTOR_STDOUT = "  ! format  s/mcp/gh: this MCP server uses Claude's format, which OpenCode rejects; it would make OpenCode refuse the whole project config — skipped on opencode. Ship mcp/gh-opencode.json (an \nOpenCode-specific variant of this file), or override mcp for opencode under target_profiles. (entries: gh)\n  ! target  s/mcp/gh: target 'copilot' is not in the project's targets — skipped. Add it with `agentry target use copilot`, or remove it from this component.\n  ! drift  .mcp.json: 'mcpServers.gh' (from s/mcp/gh → claude) was edited by hand — delete it and run `agentry sync` to get the current version, or run `agentry keep s/mcp/gh gh` to keep yours\n  ! drift  s/mcp/mine → claude: missing (.mcp.json already has 'mcpServers.mine' (not added by agentry) — rename or remove your entry, or disable s/mcp/mine)\ndoctor: 0 errors, 4 warning(s).\n"
 DOCTOR_STDERR = ""
-STATUS_STDOUT = "                      Install status                      \n┏━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓\n┃ ref        ┃ target   ┃ where                ┃ state   ┃\n┡━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩\n│ s/mcp/gh   │ claude   │ .mcp.json:mcpServers │ drift   │\n│ s/mcp/gh   │ opencode │ opencode.json:mcp    │ ok      │\n│ s/mcp/mine │ claude   │ .mcp.json:mcpServers │ missing │\n└────────────┴──────────┴──────────────────────┴─────────┘\n  s/mcp/gh → claude: edited by hand — delete the entry and run `agentry sync` to restore it, or run `agentry keep s/mcp/gh claude:gh` to keep yours\n  s/mcp/mine → claude: .mcp.json already has 'mcpServers.mine' (not added by agentry) — rename or remove your entry, or disable s/mcp/mine\n"
-STATUS_STDERR = "! s/mcp/gh: target 'copilot' is not in the project's targets — skipped. Add it with `agentry target use copilot`, or remove it from this component.\n! s/mcp/gh: may not work in opencode (expects `type: \"local\"` with `command` as one array and `environment`): 'gh' has no 'type'; 'gh'.command is a string, not an array; 'gh' uses 'args', which is not\naccepted — installed as-is. Ship an opencode-specific mcp, or override mcp for opencode under target_profiles\n"
+STATUS_STDOUT = "                      Install status                      \n┏━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┓\n┃ ref        ┃ target   ┃ where                ┃ state   ┃\n┡━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━┩\n│ s/mcp/gh   │ claude   │ .mcp.json:mcpServers │ drift   │\n│ s/mcp/gh   │ opencode │ opencode.json:mcp    │ missing │\n│ s/mcp/mine │ claude   │ .mcp.json:mcpServers │ missing │\n└────────────┴──────────┴──────────────────────┴─────────┘\n  s/mcp/gh → claude: edited by hand — delete the entry and run `agentry sync` to restore it, or run `agentry keep s/mcp/gh gh` to keep yours\n  s/mcp/gh → opencode: skipped on opencode: gh uses a format opencode rejects (see warnings)\n  s/mcp/mine → claude: .mcp.json already has 'mcpServers.mine' (not added by agentry) — rename or remove your entry, or disable s/mcp/mine\n"
+STATUS_STDERR = "! s/mcp/gh: target 'copilot' is not in the project's targets — skipped. Add it with `agentry target use copilot`, or remove it from this component.\n! s/mcp/gh: this MCP server uses Claude's format, which OpenCode rejects; it would make OpenCode refuse the whole project config — skipped on opencode. Ship mcp/gh-opencode.json (an OpenCode-specific \nvariant of this file), or override mcp for opencode under target_profiles. (entries: gh)\n"
 
 
 _BOX = re.compile("[\u2500-\u257f]")
@@ -91,10 +91,11 @@ def test_status_reusing_a_plan_matches_status_planning_itself(tmp_path: Path):
 
 def test_portable_normalization_still_discriminates():
     """Guard the guard: normalization absorbs box style and wrapping, nothing else."""
+    assert "│ drift" in STATUS_STDOUT  # the border glyph the next check removes
     assert _portable("┏━┳┓\n┃ a ┃") == _portable("┌─┬┐\n│ a │")
     assert _portable("which is not\naccepted") == _portable("which is \nnot accepted")
     assert _portable(STATUS_STDOUT) != _portable(STATUS_STDOUT.replace("drift", "ok", 1))
-    assert _portable(STATUS_STDOUT) != _portable(STATUS_STDOUT.replace("│ ok", "  ok", 1))
+    assert _portable(STATUS_STDOUT) != _portable(STATUS_STDOUT.replace("│ drift", "  drift", 1))
 
 
 def test_doctor_with_undefined_target_shows_target_error_and_no_drift(tmp_path: Path):
@@ -141,3 +142,24 @@ def test_doctor_resolves_the_graph_once(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(deps, "resolve_graph", counting)
     run_checks(proj)
     assert len(calls) == 1
+
+
+def test_printed_keep_hint_works_verbatim(tmp_path: Path, monkeypatch):
+    """The drift hint doctor/status print is a working command: running it exactly as printed
+    makes the hand-edited entry the user's (kept), and the drift goes away."""
+    import re
+    import shlex
+
+    proj = _golden_project(tmp_path)
+    monkeypatch.chdir(proj)
+    out = CliRunner(env=_ENV).invoke(app, ["doctor"]).stdout
+    (hint,) = set(re.findall(r"run `(agentry keep [^`]+)` to keep yours", out))
+    argv = shlex.split(hint)[1:]
+    res = CliRunner(env=_ENV).invoke(app, argv)
+    assert res.exit_code == 0, res.output
+    edited = json.loads((proj / ".mcp.json").read_text("utf-8"))["mcpServers"]["gh"]
+    assert edited["args"] == ["EDITED"]  # the user's version stays
+    after = CliRunner(env=_ENV).invoke(app, ["doctor"]).stdout
+    assert "'mcpServers.gh' (from s/mcp/gh → claude) was edited by hand" not in after
+    sync(proj)
+    assert json.loads((proj / ".mcp.json").read_text("utf-8"))["mcpServers"]["gh"] == edited

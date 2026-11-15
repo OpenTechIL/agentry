@@ -128,19 +128,63 @@ def _project(tmp_path: Path, targets: list[Target], *comps: tuple[ComponentType,
     return proj
 
 
+#: The built-in opencode MCP checks, but with the generic warn-and-install action. Since O1
+#: (R3) the built-in action is `skip`; tests of the generic warn path use this override so
+#: the opencode rule keeps exercising warn-only behaviour.
+_OC_WARN = {
+    "opencode": {
+        "mcp": {
+            "strategy": "merge",
+            "file": "opencode.json",
+            "pointer": "mcp",
+            "expect": {
+                "require": ["type"],
+                "types": {"command": "array"},
+                "forbid": ["args", "env"],
+                "values": {"type": ["local", "remote"]},
+                "expects": '`type: "local"` with `command` as one array and `environment`',
+                "on_mismatch": "warn",
+            },
+        }
+    }
+}
+
+
+def _warn_only(proj: Path) -> Path:
+    store = ConfigStore.load(proj)
+    store.doc["target_profiles"] = _OC_WARN
+    store.save()
+    return proj
+
+
 def _fmt(warnings: list[str], target: str) -> list[str]:
     return [w for w in warnings if f": may not work in {target}" in w]
 
 
-def test_o1_claude_shaped_mcp_warns_for_opencode_and_installs_as_is(tmp_path: Path):
+def test_o1_claude_shaped_mcp_is_skipped_on_opencode_not_installed(tmp_path: Path):
+    """Since O1 (runtime-confirmed in R3): the built-in opencode mcp rule SKIPS a Claude-shaped
+    entry instead of writing it — OpenCode would reject the whole config. No "may not work"
+    line; the skip warning names every problem's entry. (Full coverage:
+    test_opencode_mcp_skip.py.)"""
     proj = _project(tmp_path, [Target.OPENCODE], (_C.MCP, "fs"))
+    res = sync(proj)
+    assert _fmt(res.warnings, "opencode") == []
+    (w,) = [w for w in res.warnings if "skipped on opencode" in w]
+    assert w.startswith("s/mcp/fs: this MCP server uses Claude's format")
+    assert w.endswith("(entries: fs)")
+    assert not (proj / "opencode.json").exists()
+
+
+def test_o1_warn_only_override_installs_as_is_with_every_problem_named(tmp_path: Path):
+    """The generic warn path, via an override that keeps the checks but warns: the entry is
+    installed byte-for-byte as the source wrote it, and each violation is named."""
+    proj = _warn_only(_project(tmp_path, [Target.OPENCODE], (_C.MCP, "fs")))
     res = sync(proj)
     (w,) = _fmt(res.warnings, "opencode")
     assert w.startswith("s/mcp/fs: may not work in opencode")
     assert "'fs' has no 'type'" in w and "'fs'.command is a string, not an array" in w
     assert "'fs' uses 'args'" in w
     assert "installed as-is" in w and "target_profiles" in w
-    # installed byte-for-byte as the source wrote it
     assert json.loads((proj / "opencode.json").read_text(encoding="utf-8"))["mcp"]["fs"] == {
         "command": "npx",
         "args": ["-y", "fs"],
@@ -195,6 +239,7 @@ def test_one_warning_per_component_and_target(tmp_path: Path):
         (_C.HOOK, "fmt"),
         (_C.COMMAND, "ship"),
     )
+    _warn_only(proj)
     res = sync(proj)
     pairs = [
         (w.split(":")[0], w.split("may not work in ")[1].split()[0])
@@ -208,9 +253,11 @@ def test_one_warning_per_component_and_target(tmp_path: Path):
 
 
 def test_format_rules_change_no_bytes_on_disk(tmp_path: Path):
-    """The same project synced with the built-in rule and with it dropped (a profile override
-    with `expect: {}`) writes identical files: a rule only ever warns."""
-    with_rule = _project(tmp_path / "a", [Target.OPENCODE], (_C.MCP, "fs"))
+    """The same project synced with a warn-action rule and with the rule dropped (a profile
+    override with `expect: {}`) writes identical files: a warn rule only ever warns. (A
+    `skip`-action rule, like opencode's built-in mcp rule since O1, does change what's
+    written — covered in test_opencode_mcp_skip.py.)"""
+    with_rule = _warn_only(_project(tmp_path / "a", [Target.OPENCODE], (_C.MCP, "fs")))
     assert _fmt(sync(with_rule).warnings, "opencode")
 
     without = _project(tmp_path / "b", [Target.OPENCODE], (_C.MCP, "fs"))
@@ -233,10 +280,12 @@ def test_format_rules_change_no_bytes_on_disk(tmp_path: Path):
 
 def test_format_warnings_do_not_break_idempotency(tmp_path: Path):
     proj = _project(tmp_path, [Target.GEMINI, Target.OPENCODE], (_C.MCP, "fs"), (_C.HOOK, "fmt"))
+    _warn_only(proj)
     sync(proj)
     res = sync(proj)
     assert res.created == [] and res.updated == [] and res.removed == []
     assert _fmt(res.warnings, "opencode")  # still reported every sync
+    assert _fmt(res.warnings, "gemini")
 
 
 # --- doctor ----------------------------------------------------------------------------
@@ -244,6 +293,7 @@ def test_format_warnings_do_not_break_idempotency(tmp_path: Path):
 
 def test_doctor_reports_format_warnings_and_strict_fails(tmp_path: Path, monkeypatch):
     proj = _project(tmp_path, [Target.GEMINI, Target.OPENCODE], (_C.MCP, "fs"), (_C.HOOK, "fmt"))
+    _warn_only(proj)
     sync(proj)
     fmt = [c for c in run_checks(proj) if c.category == "format"]
     assert fmt and all(c.level == "warn" for c in fmt)
@@ -534,6 +584,7 @@ def test_format_summary_counts_components_not_pairs(tmp_path: Path, monkeypatch)
         (_C.HOOK, "fmt"),
     )
     _add_web_mcp(tmp_path, proj)
+    _warn_only(proj)
     res = sync(proj)
     pairs = [w for w in res.warnings if "may not work in" in w]
     assert len(pairs) == 5 and len({w.split(":")[0] for w in pairs}) == 4
@@ -549,6 +600,7 @@ def test_format_summary_counts_components_not_pairs(tmp_path: Path, monkeypatch)
 def test_format_summary_singular_for_one_component_on_two_targets(tmp_path: Path, monkeypatch):
     proj = _project(tmp_path, [Target.GEMINI, Target.OPENCODE])
     _add_web_mcp(tmp_path, proj)
+    _warn_only(proj)
     pairs = [w for w in sync(proj).warnings if "may not work in" in w]
     assert len(pairs) == 2
 

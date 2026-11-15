@@ -41,7 +41,7 @@ from .models import (
 )
 from .naming import closest, repo_basename
 from .progname import CANONICAL, prog
-from .reconcile import SyncResult, status, sync
+from .reconcile import FormatSkip, SyncResult, status, sync
 from .resolver import ResolveError, effective_root, resolve
 from .targets import (
     BUILTIN_TARGETS,
@@ -305,6 +305,16 @@ def _summary_line(kind: str, n: int) -> str:
     )
 
 
+def _skip_summary_line(skip: FormatSkip) -> str:
+    """The short form of one format-skip warning, shown when several are folded."""
+    names = ", ".join(skip.entries)
+    verb = "uses" if len(skip.entries) == 1 else "use"
+    return (
+        f"{skip.ref}: skipped on {skip.target} — {names} {verb} a format {skip.target} "
+        f"rejects. Run `{prog()} doctor` (or sync with --verbose) for the fix"
+    )
+
+
 def _print_result(res: SyncResult, *, verbose: bool = False) -> None:
     for name, sha in res.resolved.items():
         console.print(f"  [dim]resolved[/dim] {_e(name)} → [cyan]{_e(sha[:12])}[/cyan]")
@@ -322,6 +332,10 @@ def _print_result(res: SyncResult, *, verbose: bool = False) -> None:
         for line, msgs in res.grouped:  # one line per plugin pair's collisions
             hidden.update({m: res.warnings.count(m) for m in msgs})
             summaries.append(line)
+        if len(res.format_skips) >= _SUMMARY_MIN:  # one short line per skipped pair
+            for skip in res.format_skips:
+                hidden[skip.message] += 1
+                summaries.append(_skip_summary_line(skip))
         for kind, msgs in res.summarized.items():
             n = _summary_count(kind, msgs)
             # plugin lines collapse per source: one source's keys still print in full

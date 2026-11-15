@@ -33,6 +33,22 @@ DRIVER = Driver(
                 forbid=("args", "env"),
                 values={"type": ("local", "remote")},
                 expects='`type: "local"` with `command` as one array and `environment`',
+                # Runtime-confirmed (R3, OpenCode 1.19.5): one non-conforming entry makes
+                # OpenCode refuse the whole opencode.json, so it is skipped, not installed.
+                on_mismatch="skip",
+                skip_message=(
+                    "{ref}: this MCP server uses Claude's format, which OpenCode rejects; it "
+                    "would make OpenCode refuse the whole project config — skipped on opencode. "
+                    "Ship {variant_path} (an OpenCode-specific variant of this file), or "
+                    "override mcp for opencode under target_profiles."
+                ),
+                # When no working variant path can be named (an explicit `path:`, a
+                # descriptor-placed file), name none rather than one that wouldn't be found.
+                skip_message_fallback=(
+                    "{ref}: this MCP server uses Claude's format, which OpenCode rejects; it "
+                    "would make OpenCode refuse the whole project config — skipped on opencode. "
+                    "Override mcp for opencode under target_profiles."
+                ),
             ),
         },
     ),
