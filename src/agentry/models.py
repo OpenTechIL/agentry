@@ -747,6 +747,13 @@ class InstalledTransform(BaseModel):
     path: str  # the written path, relative to project root
 
 
+class CreatedPointer(BaseModel):
+    """A top-level config key (``pointer``) that agentry's merge created in ``file`` (#100)."""
+
+    file: str
+    pointer: str
+
+
 class Manifest(BaseModel):
     """Record of everything agentry installed on disk (``.agentry/.manifest.json``)."""
 
@@ -763,6 +770,9 @@ class Manifest(BaseModel):
     # (#45). Absent in older manifests ⇒ nothing is deleted. Additive: still version 2.
     created_files: list[str] = Field(default_factory=list)
     created_dirs: list[str] = Field(default_factory=list)
+    # Pointer keys (e.g. ``mcpServers``) agentry's merge created, per file (#100). Only these
+    # are dropped once empty; a pointer the user made stays, even as ``{}``. Absent ⇒ kept.
+    created_pointers: list[CreatedPointer] = Field(default_factory=list)
 
 
 Source.model_rebuild()  # ``profiles`` refers to ProfileRule, defined after Source

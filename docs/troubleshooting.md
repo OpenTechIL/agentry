@@ -911,6 +911,11 @@ The file is kept if:
 - it came from an install made by an older agentry, which didn't record creating it. That file
   stays, as `{}` or similar. Delete it by hand if you don't need it.
 
+The same applies to the section inside the file. An empty section you created yourself, such as
+`"servers": {}` in `.vscode/mcp.json`, stays after agentry removes its last entry from it. A
+section agentry added is removed. A section added by an older agentry version wasn't recorded,
+so it's left empty, for example `"servers": {}`. It's safe to delete by hand.
+
 ## Empty folder left after uninstall
 
 agentry now removes only the folders it created itself. When you uninstall a component, it

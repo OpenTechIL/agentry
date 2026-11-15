@@ -657,6 +657,19 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
   - **Removal** deletes only owned, non-preexisting keys whose fingerprint still matches. An
     edited entry is left in place, with a warning. A key whose ownership was never proven (no
     fingerprint) is never removed.
+  - **Pointer sections agentry created** (#100). When a merge has to create the pointer section
+    itself (e.g. `mcpServers` in a `.mcp.json` that had none), the manifest records it in
+    `created_pointers` as `(file, pointer)`. When removal empties a section, it is deleted only if
+    recorded; otherwise it stays as `{}` (an empty table in TOML), because a section the user wrote
+    — even an empty one — is theirs. The record is per file and pointer, not per component, so a
+    section several components share goes only when the last entry leaves. Stale records are
+    dropped: when the file is gone (`_drop_stale_created`, once per sync), and when the section is
+    absent the first time a sync reads the file — so a section the user deletes and later recreates
+    by hand is never claimed. `status`/`doctor` pass no records and never change them. Installs made
+    before this change have no record: their emptied section stays `{}` (safe; for a file agentry
+    created, the #45 skeleton rule still deletes the whole file, since an empty pointer section is
+    part of the skeleton). Residual, as for files and folders: a section deleted and recreated by
+    hand *between* two syncs is indistinguishable and, if left empty, is removed.
   - **Config files agentry created** (#45). When a merge writes a config file that didn't exist,
     the manifest records it in `created_files`, and every folder created for it in
     `created_dirs`. When a sync leaves such a file as **exactly agentry's empty skeleton**, the

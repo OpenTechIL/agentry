@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Removing agentry's last entry from a config section no longer deletes the section itself (for
+  example an empty `"servers": {}`) when you created it; a section added by an older agentry
+  version is now left empty (safe to delete by hand).
+
 ## [0.3.2] — 2026-11-15
 
 ### Fixed
