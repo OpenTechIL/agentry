@@ -740,6 +740,10 @@ class InstalledGenerated(BaseModel):
     component: str  # component ref
     target: str
     paths: list[str]  # project-relative paths agentry owns and will delete on removal
+    # The spec that last ran, so an edited spec (``add <ref> --generate-command …``) re-runs
+    # and re-records ``paths``. Absent in older manifests ⇒ backfilled, nothing re-runs.
+    # Additive: still version 2.
+    spec: GeneratorSpec | None = None
 
 
 class InstalledLinkMerge(BaseModel):

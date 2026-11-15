@@ -27,6 +27,36 @@ behind these commands.
 | `agentry trust <source>` | Consent for a source to run code at install (generators), pinned to its SHA in the lock. Trusted sources run without `--allow-run`; trust drops if the source moves |
 | `agentry deps` | Show the resolved dependency map (transitive closure of enabled components) |
 
+### `agentry add` on a component that's already declared
+
+Running `agentry add <source>/<type>/<name>` for a component already in `.agentry.yml` doesn't add
+it again. It applies the options you pass that differ from the config, and tells you which case
+you're in:
+
+| Situation | Output |
+|---|---|
+| Not declared yet | `Added s/skill/s`, then the sync |
+| Declared, and you pass a different `--path` or generator | `Updated s/skill/s: path unset → alt/s`, then the sync |
+| Declared, nothing to change | `s/skill/s is already declared — no change.` Nothing is written, and there's no sync. |
+| Declared but disabled | `` s/skill/s is already declared but disabled — run `agentry enable s/skill/s`. `` It stays disabled; `add` never re-enables it. |
+
+A changed generator prints one line per part that changed, for example
+`Updated s/skill/s: generate.produces out1 → out2`. The sync that follows re-runs the edited
+generator (if the source is trusted or you pass `--allow-run`). It tracks the new outputs and
+deletes old outputs that the new spec no longer produces. A generator is given whole:
+`--generate-setup` or `--produces` without `--generate-command` exits 1 and changes nothing.
+This applies to a new ref too. A generator written another way in `.agentry.yml` (`setup: []`,
+flow style) that matches the flags counts as no change.
+
+A component can't have both `path` and `generate`, or both `generate` and `transform`. Asking
+for a combination like that fails, exits 1 and changes nothing. The message names the field
+that's actually in the way:
+
+```text
+s/skill/s already has `path:` in .agentry.yml; a component can't have both `path` and `generate`. Remove `path:` from it first, or drop --generate-command. Nothing was changed.
+s/agent/a has `transform:` in .agentry.yml; a component can't have both `generate` and `transform`. Remove `transform:` from it first, or drop --generate-command. Nothing was changed.
+```
+
 ## Sources
 
 | Command | What it does |

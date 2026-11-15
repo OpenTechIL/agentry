@@ -14,7 +14,16 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from .models import Component, ComponentType, Config, ProfileRule, Registry, Source, SourceType
+from .models import (
+    Component,
+    ComponentType,
+    Config,
+    GeneratorSpec,
+    ProfileRule,
+    Registry,
+    Source,
+    SourceType,
+)
 from .progname import prog
 
 CONFIG_NAME = ".agentry.yml"
@@ -218,13 +227,36 @@ class ConfigStore:
                 tr["prompt"] = comp.transform.prompt
             item["transform"] = tr
         if comp.generate is not None:
-            gen = CommentedMap()
-            if comp.generate.setup:
-                gen["setup"] = CommentedSeq(CommentedSeq(cmd) for cmd in comp.generate.setup)
-            gen["command"] = CommentedSeq(comp.generate.command)
-            gen["produces"] = CommentedSeq(comp.generate.produces)
-            item["generate"] = gen
+            item["generate"] = _generate_cmap(comp.generate)
         comps.append(item)
+
+    def update_component(self, ref: str, changes: dict[str, object]) -> dict[str, tuple]:
+        """Set ``changes`` (``path`` and/or ``generate``) on a declared component, in place.
+
+        Round-trip: only the fields whose value differs are written; comments, key order and
+        every other field (``enabled``, ``targets``, ``keep``, …) are left alone. Returns
+        ``{field: (old, new)}`` for what actually changed (empty if nothing did, or if ``ref``
+        isn't declared).
+        """
+        for c in self._seq("components"):
+            if _comp_ref(c) != ref:
+                continue
+            done: dict[str, tuple] = {}
+            for key, value in changes.items():
+                old = c.get(key)
+                if key == "generate" and isinstance(value, GeneratorSpec):
+                    # Compare by value, not YAML shape: `setup: []`, flow vs block style and
+                    # key order are all the same spec and must not count as a change.
+                    old_spec = _as_generator(old)
+                    if old_spec == value:
+                        continue
+                    c[key] = _generate_cmap(value)
+                    done[key] = (old_spec, value)
+                elif old != value:
+                    c[key] = value
+                    done[key] = (old, value)
+            return done
+        return {}
 
     def remove_component(self, ref: str) -> bool:
         comps = self._seq("components")
@@ -267,6 +299,25 @@ class ConfigStore:
         # Validate before writing so we never persist a broken config.
         self.parsed()
         self.path_for(self.root).write_text(self.dumps(), encoding="utf-8")
+
+
+def _as_generator(raw: object) -> GeneratorSpec | None:
+    """A stored ``generate:`` value as a spec (None if unset or not a valid spec)."""
+    if raw is None:
+        return None
+    try:
+        return GeneratorSpec.model_validate(_plain(raw))
+    except ValueError:
+        return None
+
+
+def _generate_cmap(spec: GeneratorSpec) -> CommentedMap:
+    gen = CommentedMap()
+    if spec.setup:
+        gen["setup"] = CommentedSeq(CommentedSeq(cmd) for cmd in spec.setup)
+    gen["command"] = CommentedSeq(spec.command)
+    gen["produces"] = CommentedSeq(spec.produces)
+    return gen
 
 
 def _comp_ref(c: dict) -> str:

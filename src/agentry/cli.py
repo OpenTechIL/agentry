@@ -745,15 +745,16 @@ def _interactive_trust(source: str, sha: str) -> bool:
         return False  # no input: decline, as when not a terminal
 
 
-def _save_validated(store: ConfigStore) -> None:
+def _save_validated(store: ConfigStore, cfg: Config | None = None) -> None:
     """Persist a config edit only if the edited config still resolves every target.
 
     Every command that edits ``.agentry.yml`` and then syncs goes through here: the
     post-edit config is checked in memory first, so a typo'd target refuses the command
     with nothing written (an edit that *fixes* the typo passes). Exits 1 on refusal.
+    ``cfg`` is the already-parsed edited config, when the caller has one.
     """
     try:
-        check_targets(store.parsed())
+        check_targets(cfg if cfg is not None else store.parsed())
     except UnresolvedTargetError as exc:
         err.print(_e(exc), style="red")
         raise typer.Exit(1)
@@ -1005,7 +1006,8 @@ def add(
     produces: list[str] = typer.Option(
         None,
         "--produces",
-        help="Path(s) the generate command creates; agentry tracks + cleans exactly these. Repeatable.",
+        help="Path(s) the generate command creates; agentry tracks + cleans exactly these. "
+        "Requires --generate-command. Repeatable.",
     ),
     source_name: str = typer.Option(
         None,
@@ -1061,9 +1063,20 @@ def add(
             "[red]--type applies only to catalog refs, not a full <source>/<type>/<name> ref.[/red]"
         )
         raise typer.Exit(1)
+    if not generate_command and (generate_setup or produces):
+        # Like a new ref's, a declared ref's generator is given whole: these only qualify
+        # --generate-command, so alone they would be silently dropped.
+        given = "--generate-setup" if generate_setup else "--produces"
+        err.print(
+            f"[red]{given} needs --generate-command: a generator is given whole "
+            f"(--generate-command, --produces, and any --generate-setup).[/red] "
+            "Nothing was changed."
+        )
+        raise typer.Exit(1)
     source, ctype, name = _parse_ref(ref)
     store = _load()
-    if store.parsed().source(source) is None:
+    cfg = store.parsed()
+    if cfg.source(source) is None:
         err.print(
             f"[red]Unknown source '{_e(source)}'. Add it first with `{prog()} source add`.[/red]"
         )
@@ -1083,10 +1096,116 @@ def add(
     except ValueError as exc:
         err.print(f"[red]{_e(exc)}[/red]")
         raise typer.Exit(1)
+    existing = cfg.find_component(comp.ref)
+    if existing is not None:
+        # Already declared (PM ruling c): update only the options that differ; never re-add,
+        # never auto-enable. Nothing written ⇒ no sync.
+        if _update_declared(store, existing, path=path, generate=generate):
+            _do_sync(allow_run=allow_run, verbose=verbose)
+        return
     store.add_component(comp)
     _save_validated(store)
     console.print(f"[green]Added[/green] {_e(ref)}")
     _do_sync(allow_run=allow_run, verbose=verbose)
+
+
+def _update_declared(
+    store: ConfigStore,
+    existing: Component,
+    *,
+    path: str | None,
+    generate: GeneratorSpec | None,
+) -> bool:
+    """``add <ref>`` on a ref already in ``.agentry.yml``. Returns True if it wrote anything.
+
+    Only the options actually passed (and different) change, in the round-trip document;
+    the edited config is then validated as a whole. If it's invalid, nothing is saved (the
+    in-memory edit is dropped with the store) and it exits 1 naming the real conflict.
+    """
+    ref = existing.ref
+    requested: dict[str, object] = {}
+    if path is not None:
+        requested["path"] = path
+    if generate is not None:
+        requested["generate"] = generate
+    changed = store.update_component(ref, requested) if requested else {}
+    if changed:
+        try:
+            cfg = store.parsed()
+        except ValueError as exc:
+            err.print(f"[red]{_e(_conflict_hint(existing, exc))}[/red] Nothing was changed.")
+            raise typer.Exit(1) from None
+        _save_validated(store, cfg)
+        for fld, (old, new) in changed.items():
+            for label, before, after in _changed_lines(fld, old, new):
+                console.print(
+                    f"[green]Updated[/green] {_e(ref)}: {_e(label)} {_e(before)} → {_e(after)}"
+                )
+    if not existing.enabled:
+        console.print(
+            f"{_e(ref)} is already declared but disabled — run `{prog()} enable {_e(ref)}`."
+        )
+    elif not changed:
+        console.print(f"{_e(ref)} is already declared — no change.")
+    return bool(changed)
+
+
+def _conflict_hint(existing: Component, exc: ValueError) -> str:
+    """What to do about an ``add`` option that clashes with the declared component."""
+    from pydantic import ValidationError
+
+    msgs = [e["msg"] for e in exc.errors()] if isinstance(exc, ValidationError) else [str(exc)]
+    msg = " ".join(m.removeprefix("Value error, ") for m in msgs)
+    ref = existing.ref
+    if "set either 'path' or 'generate'" in msg:
+        have, flag = (
+            ("path", "--generate-command") if existing.path is not None else ("generate", "--path")
+        )
+        return (
+            f"{ref} already has `{have}:` in .agentry.yml; a component can't have both `path` "
+            f"and `generate`. Remove `{have}:` from it first, or drop {flag}."
+        )
+    if "'generate' and 'transform' are mutually exclusive" in msg:
+        return (
+            f"{ref} has `transform:` in .agentry.yml; a component can't have both `generate` "
+            "and `transform`. Remove `transform:` from it first, or drop --generate-command."
+        )
+    return msg
+
+
+def _changed_lines(fld: str, old: object, new: object) -> list[tuple[str, str, str]]:
+    """``(label, before, after)`` for each ``Updated`` line of one changed field.
+
+    A generator replaced by another lists only the parts that differ (``generate.produces``
+    …), so a change to ``produces`` or ``setup`` alone never reads ``generate g → g``.
+    """
+    if isinstance(old, GeneratorSpec) and isinstance(new, GeneratorSpec):
+        parts = (
+            ("command", _argv(old.command), _argv(new.command)),
+            ("setup", _setup(old.setup), _setup(new.setup)),
+            ("produces", ", ".join(old.produces), ", ".join(new.produces)),
+        )
+        return [(f"{fld}.{name}", a, b) for name, a, b in parts if a != b]
+    return [(fld, _shown_value(old), _shown_value(new))]
+
+
+def _argv(argv: list[str]) -> str:
+    import shlex
+
+    return shlex.join(argv)
+
+
+def _setup(setup: list[list[str]]) -> str:
+    return "; ".join(_argv(cmd) for cmd in setup) or "none"
+
+
+def _shown_value(value: object) -> str:
+    """A config value for an ``Updated`` line: ``unset``, a path, or a generator's command."""
+    if value is None:
+        return "unset"
+    if isinstance(value, GeneratorSpec):
+        return _argv(value.command)
+    return str(value)
 
 
 @app.command()

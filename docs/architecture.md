@@ -63,6 +63,13 @@ instead of an artifact — for tools like graphify that ship no skill file and g
 install time. Running third-party commands is **opt-in** (`agentry sync --allow-run`) and the
 commands are printed before execution; `produces` lists the project-relative paths agentry
 tracks so removal deletes exactly those and nothing else. See `installers/generate.py`.
+The manifest records the spec that last ran alongside its `paths`. A generator whose outputs
+are present and tracked is skipped, unless its spec has changed since: an edited `command`,
+`setup` or `produces` re-runs it (still gated by trust / `--allow-run`). After a successful
+re-run the record takes the new `produces`, and any old tracked path that the new spec no
+longer produces (and that doesn't overlap a new output) is deleted, so nothing it made is left
+untracked. If the re-run is skipped or fails, the old record stays and the next sync retries.
+A record from an older manifest (with no spec) adopts the current spec without re-running.
 
 ## 4. Source-repo layout: convention or descriptor
 
@@ -161,6 +168,22 @@ component can resolve it directly, bypassing discovery:
   `--allow-transform` and **write-once** (regenerate by removing the output), since its output
   isn't byte-reproducible. The never-clobber invariant holds — it refuses to overwrite an
   unmanaged file. See `installers/transform.py` and the transform-seam design spec.
+
+**`agentry add` on a declared ref** (`cli._update_declared`). `add <source>/<type>/<name>` for
+a component already in `.agentry.yml` never adds a second entry and never re-enables a
+disabled one. It edits the round-trip document in place (`ConfigStore.update_component`),
+touching only the options that were passed (`--path`, or the generator flags) and differ from
+the declared value. Comments, key order and every other field stay as they were. Generators
+are compared by value, as parsed `GeneratorSpec`s, so `setup: []`, flow style or key order
+never count as a change. The edited config is then validated as a whole. If validation fails
+(`path` together with `generate`, or `generate` together with `transform`), nothing is saved,
+the command exits 1, and the message names the field that is actually in conflict. A real
+change is printed as `Updated <ref>: <field> old → new` (for a generator, one line per changed
+part: `generate.command`, `generate.setup`, `generate.produces`) and followed by a sync, which
+re-runs an edited generator (see "Generate strategy" above). With nothing to change, it prints
+`already declared — no change`, writes nothing and doesn't sync. A generator is always given
+whole: `--generate-setup` or `--produces` without `--generate-command` exits 1, for a new ref
+as well as a declared one, instead of being dropped silently.
 
 **Catalogs (`registry.py`).** A `repositories:` list in `.agentry.yml` points at JSON
 catalogs (a local file or an http(s) URL) that map a bare repo name to its source + optional
@@ -567,8 +590,9 @@ definition formats** agentry doesn't translate (e.g. Gemini's TOML commands inst
                 installed, so a path moving between strategies never trips "not managed"
    links:       create/refresh desired (a same-strategy transfer relinks + relabels the record)
    copies:      copy desired (never over an unmanaged path)
-   generated:   remove orphans (delete produced paths) → run (gated by trust / --allow-run),
-                record produced paths
+   generated:   remove orphans (delete produced paths) → run (gated by trust / --allow-run)
+                when untracked, outputs missing, spec edited, or updating → record produced
+                paths + spec (an edited spec's dropped paths are deleted after its re-run)
    merge pass:  one file-grouped pass over merges, then link+merges (reconcile.
                 _reconcile_merge_targets). It runs after generators, so conflicts are judged
                 against what a generator wrote:
