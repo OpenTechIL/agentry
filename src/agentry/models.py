@@ -380,6 +380,10 @@ class ProfileRule(BaseModel):
     # Claude plugin's root, so ${CLAUDE_PLUGIN_ROOT} paths in inline plugin.json hooks
     # resolve under the link (ADR-002 §3).
     link_from: Literal["artifact", "source_root"] = "artifact"
+    # merge / link+merge only: top-level key/value pairs the tool itself writes into `file`
+    # (e.g. {"$schema": "https://opencode.ai/config.json"}); the #45 empty-file check ignores
+    # them on an exact value match. Omitted ⇒ inherit the built-in's for the same file.
+    tool_keys: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
     # Optional content expectations for this type on this tool (see ExpectRule).
     expect: ExpectRule | None = None
     # How the tool identifies this type when it isn't by path (ADR-003):

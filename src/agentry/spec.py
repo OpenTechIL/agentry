@@ -28,6 +28,10 @@ class MergeDest:
     #: same as ``pointer`` (handled implicitly), but e.g. an OpenCode ``mcp`` config
     #: may carry the Claude-style ``mcpServers`` wrapper.
     aliases: tuple[str, ...] = ()
+    #: Top-level ``(key, value)`` pairs the *tool itself* writes into ``file`` (e.g.
+    #: OpenCode's ``"$schema": "https://opencode.ai/config.json"``). They aren't user content,
+    #: so the #45 empty-skeleton check ignores them — only on an exact value match.
+    tool_keys: tuple[tuple[str, object], ...] = ()
 
     @property
     def wrapper_keys(self) -> tuple[str, ...]:

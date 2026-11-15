@@ -21,7 +21,13 @@ DRIVER = Driver(
             _C.TOOL: ".opencode/tools/{name}",
         },
         merge={
-            _C.MCP: MergeDest("opencode.json", "mcp", aliases=("mcpServers",)),
+            _C.MCP: MergeDest(
+                "opencode.json",
+                "mcp",
+                aliases=("mcpServers",),
+                # OpenCode adds this line itself; it isn't the user's (R3 Q1).
+                tool_keys=(("$schema", "https://opencode.ai/config.json"),),
+            ),
         },
         memory_file="AGENTS.md",
         # opencode.ai/config.json: local/remote MCP entries need `type`, take `command` as one

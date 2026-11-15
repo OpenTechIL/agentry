@@ -101,14 +101,14 @@ def _apply_profile(
         elif rule.strategy is Strategy.LINK_MERGE:
             link_merge[ctype] = LinkMergeDest(
                 rule.dest,  # type: ignore[arg-type]
-                MergeDest(rule.file, rule.pointer),  # type: ignore[arg-type]
+                _merge_dest(rule, base, ctype),
                 rule.rewrite_from or "",
                 rule.rewrite_to or "",
                 rule.link_from,
             )
             _clear(ctype, keep=link_merge)
         else:
-            merge[ctype] = MergeDest(rule.file, rule.pointer)  # type: ignore[arg-type]
+            merge[ctype] = _merge_dest(rule, base, ctype)
             _clear(ctype, keep=merge)
     return TargetSpec(
         name=name,
@@ -120,6 +120,22 @@ def _apply_profile(
         expect=expect,
         identity=identity,
     )
+
+
+def _merge_dest(rule: ProfileRule, base: TargetSpec | None, ctype: ComponentType) -> MergeDest:
+    """A profile rule's merge destination. ``tool_keys`` given ⇒ those; omitted ⇒ inherit
+    the built-in's for the *same file* (a pointer-only override keeps OpenCode's $schema)."""
+    tool_keys: tuple[tuple[str, object], ...]
+    if "tool_keys" in rule.model_fields_set:
+        tool_keys = tuple(rule.tool_keys.items())
+    else:
+        prior = None
+        if base is not None:
+            prior = base.merge.get(ctype) or (
+                base.link_merge[ctype].merge if ctype in base.link_merge else None
+            )
+        tool_keys = prior.tool_keys if prior is not None and prior.file == rule.file else ()
+    return MergeDest(rule.file, rule.pointer, tool_keys=tool_keys)  # type: ignore[arg-type]
 
 
 def _to_expectation(rule: ExpectRule) -> FormatExpectation:

@@ -336,6 +336,8 @@ def _profile_rule_map(rule: ProfileRule) -> CommentedMap:
         item["link_from"] = rule.link_from
     if "identity" in rule.model_fields_set:
         item["identity"] = rule.identity
+    if rule.tool_keys:
+        item["tool_keys"] = CommentedMap(rule.tool_keys)
     return item
 
 

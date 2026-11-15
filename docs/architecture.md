@@ -721,7 +721,16 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
     `created_dirs`. When a sync leaves such a file as **exactly agentry's empty skeleton**, the
     file is deleted (`- remove {file} (created by agentry, now empty)`). The skeleton is either
     no keys at all, or only the pointer keys agentry merges into, each an empty mapping, and it
-    must serialise identically to a freshly built skeleton. Its recorded folders are then removed
+    must serialise identically to a freshly built skeleton. **Tool-written keys** are the one
+    allowance: a merge destination may declare top-level `(key, value)` pairs the *tool itself*
+    writes into the file (`MergeDest.tool_keys`; OpenCode adds `"$schema":
+    "https://opencode.ai/config.json"` to `opencode.json`). They are ignored on an **exact value
+    match**, at the top level only, and only for a file agentry created — they never make a
+    pre-existing file deletable; a tool key named like one of agentry's pointers is ignored (the
+    pointer rule wins). The set is the union over every resolved driver (built-ins, profiles,
+    source profiles), so it still applies after the file's last component is removed; a
+    `target_profiles` rule may set `tool_keys`, and a pointer-only override inherits the
+    built-in's for the same file. Its recorded folders are then removed
     deepest-first, but only while they are completely empty. The file **stays** in every other
     case:
     - a key the user added, even one with an empty or falsy value;

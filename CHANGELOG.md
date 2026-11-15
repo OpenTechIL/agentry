@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are present. It tracks the new `produces` paths and deletes old outputs the new spec no longer
   produces.
 
+### Fixed
+- Removing agentry's last OpenCode entry no longer leaves behind an `opencode.json` that holds
+  only the `$schema` line OpenCode writes itself. If agentry created the file and nothing else
+  was added, it's deleted.
+
 ## [0.3.3] — 2026-11-15
 
 ### Fixed

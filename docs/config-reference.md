@@ -173,6 +173,7 @@ for that tool. Two uses:
 | `dest` | str | `link`, `copy`, `link+merge` | Destination path template — see [template variables](#dest-template-variables). Must be relative and inside the project. |
 | `file` | str | `merge`, `link+merge` | Config file to merge into. JSON or TOML, by extension. Must be relative and inside the project. |
 | `pointer` | str | `merge`, `link+merge` | Top-level key in that file that agentry owns. |
+| `tool_keys` | map | optional, `merge` / `link+merge` | Top-level keys the tool itself writes into `file`, such as OpenCode's `"$schema": "https://opencode.ai/config.json"`. When agentry checks whether a file it created is back to empty, a key here with exactly this value doesn't count as content, so the file can still be deleted. Omitted: inherit the built-in's keys for the same `file`. `{}`: none. The built-in `opencode` driver sets the `$schema` line above. |
 | `link_from` | `artifact` \| `source_root` | `artifact`, `link+merge` only | What the link half points at: the component's own file or folder, or the whole source. Marketplace plugins use `source_root`, so hooks that call `${CLAUDE_PLUGIN_ROOT}/…` scripts find them. |
 | `rewrite_from` / `rewrite_to` | str | optional, `link+merge` | Rewrite a command-path prefix in the merged fragment so symlinked scripts resolve. Set both or neither. |
 | `expect` | [ExpectRule](#expect) | optional | What this tool needs from the component's *content*. Omitted inherits the built-in check. See [expect](#expect). |

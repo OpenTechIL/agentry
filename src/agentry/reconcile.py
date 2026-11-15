@@ -2024,6 +2024,26 @@ def _commit_record(
     claims.claim(who, dest.file, dest.pointer, plan.entries)
 
 
+def _tool_keys_by_file(config: Config) -> dict[str, dict[str, list[object]]]:
+    """Every tool-written top-level key/value (Q1), per merge file, from every resolved
+    driver — not just this sync's desired dests, so a file whose last component was just
+    removed still recognizes its tool's own keys. Two targets declaring different values for
+    one file/key both count (a union of exact values: each is still an exact match)."""
+    drivers = resolve_drivers(config)
+    specs = [d.spec for d in drivers.values()]
+    for src in config.sources:
+        specs += [d.spec for d in source_drivers(drivers, src).values()]
+    out: dict[str, dict[str, list[object]]] = {}
+    for spec in specs:
+        dests = [*spec.merge.values(), *(lm.merge for lm in spec.link_merge.values())]
+        for dest in dests:
+            for key, value in dest.tool_keys:
+                values = out.setdefault(dest.file, {}).setdefault(key, [])
+                if value not in values:
+                    values.append(value)
+    return out
+
+
 def _reconcile_merge_targets(
     root: Path,
     config: Config,
@@ -2059,6 +2079,7 @@ def _reconcile_merge_targets(
         pointers.setdefault(rec.file, set()).add(rec.pointer)
     for dest in [*(dm.dest for dm in merges), *(dlm.dest for dlm in link_merges)]:
         pointers.setdefault(dest.file, set()).add(dest.pointer)
+    tool_keys = _tool_keys_by_file(config)
     if update and any(r.keys and not r.entries for r in records):
         # Migration verifies v1 entries against the fragment being installed; after a
         # re-resolve that is the *new* revision, so unchanged entries can't be proven.
@@ -2081,7 +2102,7 @@ def _reconcile_merge_targets(
     _reconcile_link_merges(
         root, docs, link_merges, manifest, result, claims, kept_for, path_owned or set()
     )
-    for file in docs.flush(pointers):
+    for file in docs.flush(pointers, tool_keys):
         result.removed.append(f"remove {file} (created by agentry, now empty)")
     manifest.created_files = sorted(docs.created_files)
     manifest.created_pointers = [
