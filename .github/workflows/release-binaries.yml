@@ -5,17 +5,26 @@ name: Release Binaries
 # the GitHub Release for a v* tag. This is the sole release/distribution channel
 # (no PyPI).
 #
+# Two PyInstaller builds per target (see packaging/agentry.spec):
+#   - one-folder (dist/agentry/: the executable + _internal/): every installer and archive
+#     ships this. It starts in ~0.2s.
+#   - one-file (dist-onefile/agentry): the bare single-file download. It unpacks itself on
+#     every run, so it starts slower (~5s on macOS); kept for anyone who wants one file.
+#
 # Artifacts per release:
-#   agentry-<version>-linux-x86_64             raw binary
-#   agentry-<version>-macos-x86_64             raw binary
-#   agentry-<version>-macos-arm64              raw binary
+#   agentry-<version>-linux-x86_64.tar.gz      one-folder build (agentry/ folder)
+#   agentry-<version>-macos-x86_64.tar.gz      one-folder build (agentry/ folder)
+#   agentry-<version>-macos-arm64.tar.gz       one-folder build (agentry/ folder)
+#   agentry-<version>-windows-x86_64.zip       one-folder build (agentry\ folder)
+#   agentry-<version>-linux-x86_64             single-file binary
+#   agentry-<version>-macos-x86_64             single-file binary
+#   agentry-<version>-macos-arm64              single-file binary
+#   agentry-<version>-windows-x86_64.exe       single-file binary
 #   agentry-<version>-macos-x86_64.pkg         macOS installer (per-user)
 #   agentry-<version>-macos-arm64.pkg          macOS installer (per-user)
-#   agentry-<version>-windows-x86_64.exe       raw binary
 #   agentry-<version>-windows-x86_64-setup.exe Inno Setup installer
 #   agentry_<version>_amd64.deb                Debian/Ubuntu package
 #   agentry-<version>.x86_64.rpm               Fedora/RHEL package
-#   agentry-<version>-linux-x86_64.tar.gz      tarball
 #   SHA256SUMS.txt                             checksums for all of the above
 #   <asset>.cosign.bundle                      keyless Sigstore signature per asset
 #
@@ -63,18 +72,26 @@ jobs:
         run: sudo softwareupdate --install-rosetta --agree-to-license || true
       # --frozen: build from exactly the committed uv.lock, never re-resolve. CI (--locked /
       # `uv lock --check`) guarantees that lock matches pyproject.toml before a tag exists.
-      - name: Build binary
+      - name: Build binaries
         shell: bash
         run: |
-          if [ -n "${{ matrix.pyarch }}" ]; then
-            # Cross-build for Intel on the arm64 runner: an x86_64 CPython runs
-            # under Rosetta, so PyInstaller freezes an x86_64 binary with x86_64
-            # dependency wheels.
-            uv run --frozen --python "cpython-3.12-macos-${{ matrix.pyarch }}" \
-              --extra build pyinstaller packaging/agentry.spec
-          else
-            uv run --frozen --extra build pyinstaller packaging/agentry.spec
-          fi
+          set -euo pipefail
+          pyi() {
+            if [ -n "${{ matrix.pyarch }}" ]; then
+              # Cross-build for Intel on the arm64 runner: an x86_64 CPython runs
+              # under Rosetta, so PyInstaller freezes an x86_64 binary with x86_64
+              # dependency wheels.
+              uv run --frozen --python "cpython-3.12-macos-${{ matrix.pyarch }}" \
+                --extra build pyinstaller "$@"
+            else
+              uv run --frozen --extra build pyinstaller "$@"
+            fi
+          }
+          # One-folder build -> dist/agentry/ (what the installers and archives ship).
+          pyi packaging/agentry.spec
+          # One-file build -> dist-onefile/agentry (the bare single-file download).
+          AGENTRY_ONEFILE=1 pyi --distpath dist-onefile --workpath build-onefile \
+            packaging/agentry.spec
       - name: Resolve version
         id: ver
         shell: bash
@@ -82,10 +99,10 @@ jobs:
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
             echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
           else
-            echo "version=$(./dist/agentry${{ matrix.ext }} version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+            echo "version=$(./dist/agentry/agentry${{ matrix.ext }} version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
           fi
 
-      # --- Linux: native packages (.deb / .rpm) + tarball, from ./dist/agentry ---
+      # --- Linux: native packages (.deb / .rpm) + tarball, from ./dist/agentry/ ---
       - name: Build Linux packages
         if: matrix.target == 'linux-x86_64'
         env:
@@ -96,8 +113,13 @@ jobs:
           nfpm package -f packaging/nfpm.yaml -p deb -t .
           nfpm package -f packaging/nfpm.yaml -p rpm -t .
           tar -czf "agentry-${VERSION}-linux-x86_64.tar.gz" -C dist agentry
+          # Install the .deb on the runner and run it through its /usr/bin links.
+          sudo dpkg -i "agentry_${VERSION}_amd64.deb"
+          agentry version
+          agyx version
+          sudo dpkg -r agentry
 
-      # --- Windows: Inno Setup installer, from dist\agentry.exe ---
+      # --- Windows: Inno Setup installer + zip, from dist\agentry\ ---
       - name: Build Windows installer
         if: matrix.target == 'windows-x86_64'
         shell: pwsh
@@ -108,8 +130,43 @@ jobs:
             packaging\windows\agentry.iss
           # Keep every release asset flat at the repo root for a clean upload.
           Move-Item dist\agentry-*-setup.exe .
+          Compress-Archive -Path dist\agentry `
+            -DestinationPath "agentry-${{ steps.ver.outputs.version }}-windows-x86_64.zip"
 
-      # --- macOS: per-user .pkg installer (~/.local/bin), from ./dist/agentry ---
+      # install.ps1 end to end: serve this build's zip from a local HTTP server, point a
+      # copy of the script at it, install, and run the result and an alias shim.
+      - name: Test install.ps1
+        if: matrix.target == 'windows-x86_64'
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $zip = "agentry-$v-windows-x86_64.zip"
+          $rel = "relsrv\v$v"
+          New-Item -ItemType Directory -Force $rel | Out-Null
+          Copy-Item $zip $rel
+          $h = (Get-FileHash "$rel\$zip" -Algorithm SHA256).Hash.ToLower()
+          Set-Content "$rel\SHA256SUMS.txt" "$h  $zip"
+          $line = '$base  = "https://github.com/$Repo/releases/download/$tag"'
+          $script = Get-Content install.ps1 -Raw
+          if (-not $script.Contains($line)) { throw "install.ps1 no longer has the line this step redirects" }
+          $script.Replace($line, '$base  = "http://127.0.0.1:8765/$tag"') | Set-Content test-install.ps1
+          $srv = Start-Process python -ArgumentList '-m','http.server','8765','--directory','relsrv' -PassThru
+          Start-Sleep -Seconds 3
+          try {
+            $env:AGENTRY_VERSION = $v
+            $env:AGENTRY_INSTALL_DIR = "$PWD\test-install"
+            ./test-install.ps1
+            if (-not (Test-Path "test-install\_internal")) { throw "_internal was not installed" }
+            & "test-install\agentry.exe" version
+            if ($LASTEXITCODE) { throw "agentry.exe exited $LASTEXITCODE" }
+            & "test-install\agyx.cmd" version
+            if ($LASTEXITCODE) { throw "agyx.cmd exited $LASTEXITCODE" }
+          } finally {
+            Stop-Process $srv
+            Remove-Item -Recurse -Force relsrv, test-install, test-install.ps1
+          }
+
+      # --- macOS: tarball + per-user .pkg installer (~/.local), from ./dist/agentry/ ---
       - name: Build macOS installer
         if: startsWith(matrix.target, 'macos-')
         env:
@@ -117,13 +174,15 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
-          # Payload rooted at the user's home; enable_currentUserHome maps it to ~,
-          # so ./local/bin/agentry lands at ~/.local/bin/agentry (matches install.sh).
-          # The postinstall script adds the agy/agyx symlinks next to it.
-          mkdir -p pkgroot/.local/bin
-          cp dist/agentry pkgroot/.local/bin/agentry
-          chmod +x pkgroot/.local/bin/agentry
-          chmod +x packaging/macos/scripts/postinstall
+          tar -czf "agentry-${VERSION}-${TARGET}.tar.gz" -C dist agentry
+          # Payload rooted at the user's home; enable_currentUserHome maps it to ~, so the
+          # folder lands at ~/.local/lib/agentry/ and ~/.local/bin/agentry links to it
+          # (matches install.sh). preinstall clears out an earlier install; postinstall
+          # adds the agy/agyx symlinks.
+          mkdir -p pkgroot/.local/lib pkgroot/.local/bin
+          cp -R dist/agentry pkgroot/.local/lib/agentry
+          ln -s ../lib/agentry/agentry pkgroot/.local/bin/agentry
+          chmod +x packaging/macos/scripts/preinstall packaging/macos/scripts/postinstall
           pkgbuild --root pkgroot \
             --identifier com.opentech.agentry \
             --version "$VERSION" \
@@ -134,26 +193,38 @@ jobs:
           productbuild --distribution distribution.xml \
             --package-path . \
             "agentry-${VERSION}-${TARGET}.pkg"
-          # Verify the payload lands at ~/.local/bin/agentry.
+          # Verify the payload: the folder build, and a link to it in ~/.local/bin.
           pkgutil --expand-full "agentry-${VERSION}-${TARGET}.pkg" /tmp/pkgcheck
-          ls /tmp/pkgcheck/*.pkg/Payload/.local/bin/agentry
+          test -x /tmp/pkgcheck/*.pkg/Payload/.local/lib/agentry/agentry
+          test -d /tmp/pkgcheck/*.pkg/Payload/.local/lib/agentry/_internal
+          test -L /tmp/pkgcheck/*.pkg/Payload/.local/bin/agentry
           # Drop intermediates so only the final product pkg is uploaded
           # (agentry-component.pkg would otherwise match the agentry-* upload glob).
           rm -rf agentry-component.pkg distribution.xml pkgroot /tmp/pkgcheck
 
       - name: Rename raw binary
         shell: bash
-        run: mv "dist/agentry${{ matrix.ext }}" "agentry-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
+        run: mv "dist-onefile/agentry${{ matrix.ext }}" "agentry-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }}"
       - name: Smoke test
         shell: bash
-        run: ./agentry-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }} version
+        run: |
+          set -euo pipefail
+          ./agentry-${{ steps.ver.outputs.version }}-${{ matrix.target }}${{ matrix.ext }} version
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ./dist/agentry/agentry.exe version
+          else
+            # Installers link to the folder build; it must find _internal/ through a link.
+            ln -s "$PWD/dist/agentry/agentry" smoke-link
+            ./smoke-link version
+            rm smoke-link
+          fi
 
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: agentry-${{ matrix.target }}
-          # Raw binary, plus any installer/packages produced above — all live
-          # flat at the repo root, so a single set of globs keeps the layout.
+          # Raw binary, folder archive, plus any installer/packages produced above — all
+          # live flat at the repo root, so a single set of globs keeps the layout.
           path: |
             agentry-*
             *.deb

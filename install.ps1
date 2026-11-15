@@ -1,7 +1,9 @@
 # install.ps1 — download and install the `agentry` binary from GitHub Releases.
 #
-# Installs `agentry.exe` plus the short aliases `agy.cmd` and `agyx.cmd`. `agy` is also the
-# command for Google's Antigravity CLI; `agyx` is the short name that cannot collide.
+# Installs the one-folder build (`agentry.exe` plus its `_internal\` libraries) into the
+# install dir, plus the short aliases `agy.cmd` and `agyx.cmd`. `agy` is also the command
+# for Google's Antigravity CLI; `agyx` is the short name that cannot collide. Releases
+# without a folder archive (before 0.3.5) install the single-file `agentry.exe` instead.
 #
 #   irm https://raw.githubusercontent.com/OpenTechIL/agentry/main/install.ps1 | iex
 #
@@ -35,27 +37,42 @@ try {
   Invoke-WebRequest "$base/SHA256SUMS.txt" -OutFile "$tmp\SHA256SUMS.txt"
   $sums = Get-Content "$tmp\SHA256SUMS.txt"
 
-  # Release assets were named agy-<version>-<target>.exe before 0.1.4. Prefer the current
-  # name and fall back, so this script can still install releases older than 0.1.4, which
-  # only published agy-* assets. (Copies of this script older than 0.1.4 can't install
-  # current releases: those no longer publish agy-* assets.)
+  # Prefer the one-folder zip (0.3.5 and later). Otherwise use the single-file exe.
+  # Release assets were named agy-<version>-<target>.exe before 0.1.4: that name is tried
+  # last, so this script can still install releases older than 0.1.4, which only published
+  # agy-* assets. (Copies of this script older than 0.1.4 can't install current releases:
+  # those no longer publish agy-* assets.)
   $asset = $null
-  foreach ($candidate in @("agentry-$version_no_v-$target.exe", "agy-$version_no_v-$target.exe")) {
+  foreach ($candidate in @("agentry-$version_no_v-$target.zip", "agentry-$version_no_v-$target.exe", "agy-$version_no_v-$target.exe")) {
     if ($sums -match "  $([regex]::Escape($candidate))$") { $asset = $candidate; break }
   }
   if (-not $asset) { throw "no asset for $target in release $tag" }
 
   Write-Host "Downloading $asset ($tag)…"
-  Invoke-WebRequest "$base/$asset" -OutFile "$tmp\agentry.exe"
+  # Saved under the asset's own name: Expand-Archive refuses a file without a .zip suffix.
+  $download = Join-Path $tmp $asset
+  Invoke-WebRequest "$base/$asset" -OutFile $download
 
   $line = Select-String -Path "$tmp\SHA256SUMS.txt" -Pattern "  $([regex]::Escape($asset))$" | Select-Object -First 1
   if (-not $line) { throw "no checksum entry for $asset" }
   $expected = ($line.Line -split '\s+')[0].ToLower()
-  $actual = (Get-FileHash "$tmp\agentry.exe" -Algorithm SHA256).Hash.ToLower()
+  $actual = (Get-FileHash $download -Algorithm SHA256).Hash.ToLower()
   if ($expected -ne $actual) { throw "checksum mismatch (expected $expected, got $actual)" }
 
   New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
-  Move-Item -Force "$tmp\agentry.exe" "$InstallDir\agentry.exe"
+  if ($asset.EndsWith('.zip')) {
+    # The zip holds one agentry\ folder: agentry.exe and _internal\. Unpack it in the temp
+    # dir first, then replace _internal\ whole, so no library from an older version stays.
+    Expand-Archive -Path $download -DestinationPath "$tmp\unzipped"
+    if (-not (Test-Path "$tmp\unzipped\agentry\agentry.exe")) { throw "$asset has no agentry\agentry.exe" }
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$InstallDir\_internal"
+    Move-Item -Force "$tmp\unzipped\agentry\_internal" "$InstallDir\_internal"
+    Move-Item -Force "$tmp\unzipped\agentry\agentry.exe" "$InstallDir\agentry.exe"
+  } else {
+    Move-Item -Force $download "$InstallDir\agentry.exe"
+    # A single-file exe doesn't use _internal\; drop one left by a folder install.
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$InstallDir\_internal"
+  }
   # Alias shims. Windows offers no reliable symlink for an unprivileged install, so a
   # one-line .cmd wrapper is the portable equivalent. An older install left a real
   # agy.exe here; remove it so the alias wins rather than a stale binary.

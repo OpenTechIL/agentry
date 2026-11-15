@@ -34,6 +34,21 @@ agentry --version   # confirms you are talking to agentry
 agentry prints a one-line notice to stderr when it is invoked as `agy` and finds a
 different `agy` earlier on `PATH`. Silence it with `AGENTRY_NO_COLLISION_WARN=1`.
 
+## Every agentry command takes a few seconds
+
+**Symptom.** Even `agentry --version` takes several seconds (about 5s on macOS), every time.
+
+**Cause.** You're running the single-file build: `agentry-<version>-<os>-<arch>` downloaded on
+its own, or an install from 0.3.4 or earlier (Homebrew, `install.sh`, the `.pkg`, `.deb`, `.rpm`
+and Windows installers all shipped it). It unpacks itself into a new temp folder on every run,
+and macOS security-scans the unpacked libraries each time because the folder is new.
+
+**Fix.** Update to 0.3.5 or later the way you installed it (`brew update && brew upgrade
+agentry`, or re-run the `install.sh` / `install.ps1` one-liner). Installers now ship a folder
+build that starts in about 0.2s. If you download by hand, take the `.tar.gz` / `.zip` instead of
+the bare binary. Check which one you have with `ls -l "$(command -v agentry)"`: the folder build
+is a link into a `lib/agentry/` (or Homebrew `libexec/`) folder.
+
 ## `No .agentry.yml found in <dir>`
 
 **Cause.** agentry reads its config from the **current directory only** — there is no

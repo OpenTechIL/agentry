@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- agentry starts much faster: about 0.2s per command instead of about 5s on macOS. Every
+  installer (Homebrew, `install.sh`, `install.ps1`, the macOS `.pkg`, `.deb`, `.rpm`, the
+  Windows installer and Scoop) now ships agentry as a folder (the `agentry` program and its
+  `_internal/` libraries) instead of a single file that unpacked itself on every run. Update
+  the way you installed it. `install.sh` puts the folder in `~/.local/lib/agentry` (or
+  `AGENTRY_LIB_DIR`) and links `~/.local/bin/agentry` to it; the `.deb` / `.rpm` use
+  `/usr/lib/agentry`. New release assets: `agentry-<version>-<os>-<arch>.tar.gz` for macOS
+  and `agentry-<version>-windows-x86_64.zip`. The Linux `.tar.gz` now holds an `agentry/`
+  folder instead of the bare binary. The bare single-file downloads are still published.
+
 ### Fixed
 - The fix-it hint for a tool skipped on OpenCode now suggests a `.ts` file next to the
   original. A tool added with `--path scripts/fmt.py` is pointed at `scripts/fmt.ts`, not

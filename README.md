@@ -186,7 +186,9 @@ installer prints the exact line to add.
 <summary><b>Optional environment variables</b></summary>
 
 - `AGENTRY_VERSION=<version>` — install a specific release instead of the latest.
-- `AGENTRY_INSTALL_DIR=<dir>` — install somewhere other than the default.
+- `AGENTRY_INSTALL_DIR=<dir>` — where the `agentry` command goes (default `~/.local/bin`).
+- `AGENTRY_LIB_DIR=<dir>` — where its program folder goes (`install.sh` only; default
+  `lib/agentry` next to the install dir, so `~/.local/lib/agentry`).
 
 </details>
 
@@ -209,13 +211,17 @@ the release you downloaded, without the leading `v`):
 
 | Platform | Asset | How to install | Lands at |
 |---|---|---|---|
-| macOS (Apple Silicon) | `agentry-<version>-macos-arm64.pkg` | double-click | `~/.local/bin/agentry` (per-user, no admin) |
-| macOS (Intel) | `agentry-<version>-macos-x86_64.pkg` | double-click | `~/.local/bin/agentry` (per-user, no admin) |
+| macOS (Apple Silicon) | `agentry-<version>-macos-arm64.pkg` | double-click | `~/.local/bin/agentry`, linked to `~/.local/lib/agentry/` (per-user, no admin) |
+| macOS (Intel) | `agentry-<version>-macos-x86_64.pkg` | double-click | `~/.local/bin/agentry`, linked to `~/.local/lib/agentry/` (per-user, no admin) |
 | Windows | `agentry-<version>-windows-x86_64-setup.exe` | double-click | `%LOCALAPPDATA%\Programs\agentry` (adds to PATH) |
-| Debian/Ubuntu | `agentry_<version>_amd64.deb` | `sudo apt install ./agentry_<version>_amd64.deb` | `/usr/bin/agentry` |
-| Fedora/RHEL | `agentry-<version>-1.x86_64.rpm` | `sudo dnf install ./agentry-<version>-1.x86_64.rpm` | `/usr/bin/agentry` |
+| Debian/Ubuntu | `agentry_<version>_amd64.deb` | `sudo apt install ./agentry_<version>_amd64.deb` | `/usr/bin/agentry`, linked to `/usr/lib/agentry/` |
+| Fedora/RHEL | `agentry-<version>-1.x86_64.rpm` | `sudo dnf install ./agentry-<version>-1.x86_64.rpm` | `/usr/bin/agentry`, linked to `/usr/lib/agentry/` |
+| Any (manual) | `agentry-<version>-<os>-<arch>.tar.gz` / `.zip` | unpack, run `agentry/agentry` | wherever you unpack it; keep the `agentry/` folder together |
 
-The macOS `.pkg` adds `~/.local/bin` to your `PATH` for you.
+The macOS `.pkg` adds `~/.local/bin` to your `PATH` for you. Every installer ships agentry as a
+folder (the `agentry` program and its `_internal/` libraries), which starts in about 0.2s. The
+bare `agentry-<version>-<os>-<arch>` single-file download is still there, but it unpacks itself
+on every run, so each command takes a few seconds longer.
 
 **Expect a security warning on first run.** Every release asset is
 [signed with cosign](https://github.com/OpenTechIL/agentry/blob/main/packaging/README.md#signing--cosign-keyless-sigstore)
@@ -266,7 +272,7 @@ originally:
 
 | How you installed it | How to update |
 |---|---|
-| `install.sh` / `install.ps1` | Re-run the same curl/`irm` one-liner — it always fetches the latest release and overwrites the existing binary in place. |
+| `install.sh` / `install.ps1` | Re-run the same curl/`irm` one-liner — it always fetches the latest release and replaces the existing install in place. |
 | Homebrew | `brew upgrade agentry` |
 | `.pkg` / `.exe` / `.deb` / `.rpm` | Download the newer asset from the [latest release](https://github.com/OpenTechIL/agentry/releases/latest) and install it the same way — it replaces the previous version. |
 | `uv tool install` | `uv tool upgrade agentry` (falls back to `uv tool install --reinstall git+https://github.com/OpenTechIL/agentry` if it doesn't pick up new commits) |

@@ -1,7 +1,8 @@
 # packaging/nfpm.yaml — build native Linux packages (.deb / .rpm) for `agentry`.
 #
-# Consumed by release-binaries.yml. The PyInstaller one-file binary must exist
-# at ./dist/agentry first (`uv run --extra build pyinstaller packaging/agentry.spec`).
+# Consumed by release-binaries.yml. The PyInstaller one-folder build must exist at
+# ./dist/agentry/ first (`uv run --extra build pyinstaller packaging/agentry.spec`). It
+# installs to /usr/lib/agentry/, and /usr/bin/agentry links to the executable there.
 # VERSION is supplied via the environment (nfpm expands ${VERSION}):
 #
 #   VERSION=1.2.3 nfpm package -f packaging/nfpm.yaml -p deb -t ./out
@@ -25,10 +26,14 @@ description: |
   declare them in .agentry.yml, pin them in .agentry.lock, and reconcile with a
   single `agentry sync`.
 contents:
-  - src: ./dist/agentry
+  # The whole one-folder build: the `agentry` executable and its `_internal/` libraries.
+  - src: ./dist/agentry/
+    dst: /usr/lib/agentry
+    type: tree
+  # A link, not a copy: the executable finds `_internal/` next to its real path.
+  - src: /usr/lib/agentry/agentry
     dst: /usr/bin/agentry
-    file_info:
-      mode: 0755
+    type: symlink
   # Short aliases. `agy` is kept for back-compat but also belongs to Google's Antigravity
   # CLI, so `agyx` is the short name that can't collide. See src/agentry/progname.py.
   - src: /usr/bin/agentry

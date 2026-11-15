@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- packaging/macos/distribution.xml : productbuild distribution for the agentry .pkg.
-     Consumed by release-binaries.yml. The PyInstaller binary must exist at ./dist/agentry
-     first; the workflow wraps it in a component pkg (agentry-component.pkg) then runs
+     Consumed by release-binaries.yml. The PyInstaller one-folder build must exist at
+     ./dist/agentry/ first; the workflow wraps it in a component pkg (agentry-component.pkg) then runs
      productbuild against this file. ${VERSION} is substituted at build time (like
      nfpm.yaml) before productbuild reads it; see packaging/README.md for the exact
      commands (XML comments cannot contain a double hyphen, so they are omitted here).
 
      enable_currentUserHome makes this a per-user install (no admin): the component's
-     payload is laid down relative to the user's home, so local/bin/agentry becomes
-     ~/.local/bin/agentry, matching install.sh's default AGENTRY_INSTALL_DIR. The postinstall
-     script adds the agy and agyx symlinks alongside it. -->
+     payload is laid down relative to the user's home: the folder build lands in
+     ~/.local/lib/agentry/ and ~/.local/bin/agentry links to it, matching install.sh's
+     defaults. The preinstall script clears out an earlier install; the postinstall
+     script adds the agy and agyx symlinks. -->
 <installer-gui-script minSpecVersion="2">
     <title>agentry</title>
     <!-- per-user only: no admin, installs into the user's home -->

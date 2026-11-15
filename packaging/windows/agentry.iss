@@ -1,13 +1,13 @@
 ; packaging/windows/agentry.iss — Inno Setup script for the `agentry` CLI installer.
 ;
-; Consumed by release-binaries.yml. The PyInstaller binary must exist at
-; ..\..\dist\agentry.exe first. Version is passed on the command line:
+; Consumed by release-binaries.yml. The PyInstaller one-folder build must exist at
+; ..\..\dist\agentry\ (agentry.exe + _internal\) first. Version is passed on the command line:
 ;
 ;   iscc /DMyAppVersion=1.2.3 packaging\windows\agentry.iss
 ;
 ; Produces: dist\agentry-<version>-windows-x86_64-setup.exe
 ;
-; This is a per-user install (no admin required): it drops agentry.exe under
+; This is a per-user install (no admin required): it drops agentry.exe and _internal\ under
 ; %LOCALAPPDATA%\Programs\agentry and adds that directory to the user PATH,
 ; matching the behaviour of install.ps1.
 ;
@@ -50,8 +50,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[InstallDelete]
+; Replace _internal\ whole on upgrade, so no library from an older version stays behind.
+Type: filesandordirs; Name: "{app}\_internal"
+
 [Files]
-Source: "..\..\dist\{#MyAppExe}"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\..\dist\agentry\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 
 [Registry]

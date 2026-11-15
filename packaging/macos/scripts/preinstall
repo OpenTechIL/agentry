@@ -1,0 +1,24 @@
+#!/bin/sh
+# packaging/macos/scripts/preinstall — run by the agentry component pkg before its payload
+# is laid down. This is a per-user (enable_currentUserHome) install, so it runs as the user
+# with $HOME pointing at their home directory.
+#
+# The payload is the one-folder build at ~/.local/lib/agentry/ plus a link at
+# ~/.local/bin/agentry. Clear out what an earlier install left there first:
+#   - the previous folder, so no library from an older version stays behind (only when
+#     it is an agentry install: it has the executable and _internal/);
+#   - a real binary at ~/.local/bin/agentry (installs before 0.3.5, or install.sh's
+#     single-file fallback), which the link replaces.
+set -eu
+
+LIB_DIR="$HOME/.local/lib/agentry"
+BIN="$HOME/.local/bin/agentry"
+
+if [ -x "$LIB_DIR/agentry" ] && [ -d "$LIB_DIR/_internal" ]; then
+  rm -rf "$LIB_DIR"
+fi
+if [ -f "$BIN" ] && [ ! -L "$BIN" ]; then
+  rm -f "$BIN"
+fi
+
+exit 0

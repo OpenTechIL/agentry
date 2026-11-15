@@ -6,11 +6,11 @@ Usage:  python scripts/render_homebrew.py <version> <sha256sums-path> <template-
 Reads the placeholder formula (packaging/homebrew/agentry.rb) and the release's
 SHA256SUMS.txt, then prints the rendered formula to stdout with:
   * the `version "…"` line set to <version>, and
-  * each `sha256 "0000…"` placeholder replaced by the real hash of the binary
+  * each `sha256 "0000…"` placeholder replaced by the real hash of the asset
     named in the preceding `url "…"` line.
 
 The three placeholder shas in the template are identical, so a plain `sed`
-can't tell them apart — we key each one off the `agentry-<version>-<target>` asset
+can't tell them apart — we key each one off the `agentry-<version>-<target>.tar.gz` asset
 named in the url line just above it.
 """
 
@@ -19,9 +19,11 @@ from __future__ import annotations
 import re
 import sys
 
-# url "…/agentry-#{version}-<target>" — the template uses #{version} interpolation,
-# so match the literal token here (the rendered URL is resolved by Homebrew).
-_URL_TARGET = re.compile(r'url\s+".*agentry-#\{version\}-([a-z0-9_-]+)"')
+# url "…/agentry-#{version}-<target>[.tar.gz]" — the template uses #{version}
+# interpolation, so match the literal token here (the rendered URL is resolved by Homebrew).
+# The captured group is the asset's name after `agentry-<version>-`, extension included
+# (`macos-arm64.tar.gz`), since that's how SHA256SUMS.txt names it.
+_URL_TARGET = re.compile(r'url\s+".*agentry-#\{version\}-([a-z0-9_-]+(?:\.[a-z0-9]+)*)"')
 _VERSION_LINE = re.compile(r'^(\s*version\s+)"[^"]*"(.*)$')
 _SHA_LINE = re.compile(r'^(\s*sha256\s+)"[^"]*"(.*)$')
 
