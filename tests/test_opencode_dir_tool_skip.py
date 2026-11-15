@@ -220,10 +220,6 @@ def test_previously_linked_directory_tool_removed_on_upgrade(tmp_path: Path):
     assert res.warnings.count(_line()) == 1
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="DEFECT: `agentry add` of an already-declared ref ignores --path ('Added', no change)",
-)
 @pytest.mark.parametrize("subdir", [None, "sub"], ids=["no_subdir", "subdir"])
 def test_following_the_printed_command_verbatim_installs_the_tool(
     tmp_path: Path, monkeypatch, subdir
