@@ -25,7 +25,7 @@ DRIVER = Driver(
                 "opencode.json",
                 "mcp",
                 aliases=("mcpServers",),
-                # OpenCode adds this line itself; it isn't the user's (R3 Q1).
+                # OpenCode adds this line itself; it isn't the user's content.
                 tool_keys=(("$schema", "https://opencode.ai/config.json"),),
             ),
         },

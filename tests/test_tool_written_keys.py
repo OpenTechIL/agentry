@@ -1,4 +1,4 @@
-"""Q1 (PM ruling on R3): OpenCode's own `$schema` line doesn't keep an emptied opencode.json.
+"""OpenCode's own `$schema` line doesn't keep an emptied opencode.json.
 
 OpenCode writes `"$schema": "https://opencode.ai/config.json"` into the project's opencode.json
 on startup. The opencode target declares that exact key/value as *tool-written* (data on the
@@ -13,14 +13,17 @@ import json
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from agentry.cli import app
 from agentry.config import ConfigStore
 from agentry.doctor import run_checks
+from agentry.installers.merge import _is_skeleton
 from agentry.manifest import manifest_path
-from agentry.models import Component, ComponentType, Source, SourceType
+from agentry.models import Component, ComponentType, ProfileRule, Source, SourceType, Strategy
 from agentry.reconcile import status, sync
+from agentry.targets import resolve_targets
 
 _SCHEMA = "https://opencode.ai/config.json"
 _OC = {"fs": {"type": "local", "command": ["npx", "-y", "fs"]}}
@@ -204,3 +207,79 @@ def test_nested_schema_key_is_not_a_tool_key(tmp_path: Path):
     res = sync(proj)
     assert path.is_file()
     assert _line("opencode.json") not in res.removed
+
+
+# --- review regressions -------------------------------------------------------------------
+
+
+def test_source_profile_tool_keys_never_make_a_user_key_deletable(tmp_path: Path):
+    """Tool keys come only from built-ins and the project's own target_profiles. A source's
+    `profiles:` (which can arrive from a remote catalog) declaring `tool_keys` is ignored, so a
+    hand-added key matching it still keeps the agentry-created file."""
+    src = tmp_path / "src"
+    (src / "mcp").mkdir(parents=True)
+    (src / "mcp" / "fs.json").write_bytes(json.dumps(_OC).encode("utf-8"))
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    rule = ProfileRule(
+        strategy=Strategy.MERGE, file="opencode.json", pointer="mcp", tool_keys={"model": "x"}
+    )
+    store = ConfigStore.create(proj, ["opencode"])
+    store.add_source(
+        Source(
+            name="s",
+            type=SourceType.LOCAL,
+            path=str(src),
+            profiles={"opencode": {ComponentType.MCP: rule}},
+        )
+    )
+    store.add_component(Component(source="s", type=ComponentType.MCP, name="fs"))
+    store.save()
+    sync(proj)
+    _tool_writes(proj, "opencode.json", model="x")
+    _drop(proj)
+    res = sync(proj)
+    assert json.loads((proj / "opencode.json").read_text("utf-8"))["model"] == "x"
+    assert _line("opencode.json") not in res.removed
+    assert any("sets `tool_keys`" in w and "ignored" in w for w in res.warnings)
+
+
+def test_explicit_empty_tool_keys_survives_a_config_round_trip(tmp_path: Path):
+    """`tool_keys: {}` is an opt-out; re-serializing the rule must keep it, or a reload would
+    re-inherit the built-in `$schema` allowance."""
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    store = ConfigStore.create(proj, ["opencode"])
+    rule = ProfileRule(strategy=Strategy.MERGE, file="opencode.json", pointer="mcp", tool_keys={})
+    store.merge_target_profiles({"opencode": {ComponentType.MCP: rule}})
+    store.save()
+    reloaded = ConfigStore.load(proj).parsed()
+    back = reloaded.target_profiles["opencode"][ComponentType.MCP]
+    assert "tool_keys" in back.model_fields_set and back.tool_keys == {}
+    assert resolve_targets(reloaded)["opencode"].merge[ComponentType.MCP].tool_keys == ()
+
+
+@pytest.mark.parametrize(
+    ("on_disk", "declared"),
+    [(1, True), (True, 1), (1.0, 1), (0, False), (False, None)],
+    ids=["int-vs-true", "true-vs-int", "float-vs-int", "zero-vs-false", "false-vs-null"],
+)
+def test_tool_key_value_match_is_type_strict(on_disk: object, declared: object):
+    """`True == 1 == 1.0` in Python; a tool key only matches on the same type and value."""
+    assert not _is_skeleton(Path("x.json"), {"k": on_disk}, set(), {"k": [declared]})
+    assert _is_skeleton(Path("x.json"), {"k": declared}, set(), {"k": [declared]})
+
+
+@pytest.mark.parametrize("strategy", [Strategy.LINK, Strategy.COPY])
+def test_tool_keys_rejected_on_path_strategies(strategy: Strategy):
+    with pytest.raises(ValidationError, match="tool_keys"):
+        ProfileRule(strategy=strategy, dest=".x/{name}", tool_keys={"$schema": _SCHEMA})
+    with pytest.raises(ValidationError, match="tool_keys"):
+        ProfileRule(strategy=strategy, dest=".x/{name}", tool_keys={})
+
+
+def test_tool_keys_accepted_on_merge_strategies():
+    ProfileRule(strategy=Strategy.MERGE, file="a.json", pointer="p", tool_keys={"k": 1})
+    ProfileRule(
+        strategy=Strategy.LINK_MERGE, dest=".x/{name}", file="a.json", pointer="p", tool_keys={}
+    )

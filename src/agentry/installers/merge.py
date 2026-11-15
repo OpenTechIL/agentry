@@ -302,7 +302,7 @@ class Documents:
         """
         deleted: list[str] = []
         for file, (path, doc, before) in self._docs.items():
-            # Only a file agentry created is ever deleted; tool_keys never widen that (Q1).
+            # Only a file agentry created is ever deleted; tool_keys never widen that.
             if file in self.created_files and _is_skeleton(
                 path, doc, (pointers or {}).get(file), (tool_keys or {}).get(file)
             ):
@@ -344,7 +344,7 @@ def _is_skeleton(
         if key in allowed:
             if not isinstance(value, MutableMapping) or len(value) != 0:
                 return False
-        elif key not in written or _plain(value) not in written[key]:
+        elif key not in written or not any(_same(_plain(value), w) for w in written[key]):
             return False
     skeleton: MutableMapping = tomlkit.document() if _is_toml(path) else {}
     for key, value in doc.items():
@@ -501,6 +501,11 @@ def _article(word: str) -> str:
     if word == "null":
         return "null"
     return f"{'an' if word[:1] in 'aeiou' else 'a'} {word}"
+
+
+def _same(a: object, b: object) -> bool:
+    """Equal in type *and* value (``True == 1 == 1.0`` in Python, but not here)."""
+    return type(a) is type(b) and a == b
 
 
 def _plain(value: object) -> object:

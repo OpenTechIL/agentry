@@ -214,6 +214,9 @@ class DesiredPlan:
     #: Agent identity findings (also in the caller's warnings): a missing frontmatter
     #: ``name``, or a ``:`` in it (ADR-003) — doctor reports them too.
     identity_notes: list[str] = field(default_factory=list)
+    #: Tool-written top-level keys per merge file (see :func:`_tool_keys_by_file`), from the
+    #: same driver map this plan was built with — so the merge pass needn't re-resolve it.
+    tool_keys: dict[str, dict[str, list[object]]] = field(default_factory=dict)
 
 
 def compute_desired(
@@ -236,7 +239,7 @@ def compute_desired(
         )
 
     # Build a (type, name) -> path index per source.
-    plan = DesiredPlan()
+    plan = DesiredPlan(tool_keys=_tool_keys_by_file(drivers))
     indexes = _index_sources(root, config, plan)
     warnings.extend(plan.profile_notes)
     warnings.extend(plan.plugin_notes)
@@ -1191,6 +1194,7 @@ def sync(
         winners=plan.winners,
         path_owned=path_owned,
         transitive=transitive,
+        tool_keys=plan.tool_keys,
     )
     _reconcile_transforms(
         root, transforms, manifest, result, allow_transform=allow_transform, command=transform_cmd
@@ -1701,6 +1705,14 @@ def _index_sources(
                 "ignored; identity describes how the target tool names components and can "
                 "only be set in target_profiles."
             )
+        for tname, rules in src.profiles.items():
+            for ctype, rule in rules.items():
+                if "tool_keys" in rule.model_fields_set:
+                    plan.profile_notes.append(
+                        f"source '{src.name}': profiles: sets `tool_keys` for "
+                        f"{tname}.{ctype.value} — ignored; tool-written keys describe the "
+                        "target tool and can only be set in target_profiles."
+                    )
         for tname in src.profiles:
             if tname not in resolve_targets(config):
                 plan.profile_notes.append(
@@ -2024,22 +2036,24 @@ def _commit_record(
     claims.claim(who, dest.file, dest.pointer, plan.entries)
 
 
-def _tool_keys_by_file(config: Config) -> dict[str, dict[str, list[object]]]:
-    """Every tool-written top-level key/value (Q1), per merge file, from every resolved
-    driver — not just this sync's desired dests, so a file whose last component was just
-    removed still recognizes its tool's own keys. Two targets declaring different values for
-    one file/key both count (a union of exact values: each is still an exact match)."""
-    drivers = resolve_drivers(config)
-    specs = [d.spec for d in drivers.values()]
-    for src in config.sources:
-        specs += [d.spec for d in source_drivers(drivers, src).values()]
+def _tool_keys_by_file(drivers: dict[str, Driver]) -> dict[str, dict[str, list[object]]]:
+    """Every tool-written top-level key/value, per merge file, from the project's resolved
+    drivers (built-ins + ``target_profiles``) — not just this sync's desired dests, so a file
+    whose last component was just removed still recognizes its tool's own keys.
+
+    Deliberately *not* from any source's ``profiles:``: those can come from a remote
+    catalog, and a tool key decides whether an agentry-created file holding that key/value
+    gets deleted — a source must never be able to mark a user's key as disposable. Two
+    targets declaring different values for one file/key both count (a union of exact
+    values: each is still an exact, type-strict match)."""
     out: dict[str, dict[str, list[object]]] = {}
-    for spec in specs:
+    for driver in drivers.values():
+        spec = driver.spec
         dests = [*spec.merge.values(), *(lm.merge for lm in spec.link_merge.values())]
         for dest in dests:
             for key, value in dest.tool_keys:
                 values = out.setdefault(dest.file, {}).setdefault(key, [])
-                if value not in values:
+                if not any(type(v) is type(value) and v == value for v in values):
                     values.append(value)
     return out
 
@@ -2057,6 +2071,7 @@ def _reconcile_merge_targets(
     winners: dict[tuple[str, str, str], tuple[Who, bool]] | None = None,
     path_owned: set[str] | None = None,
     transitive: frozenset[str] = frozenset(),
+    tool_keys: dict[str, dict[str, list[object]]] | None = None,
 ) -> None:
     """The single file-grouped merge pass (ADR-001 §8): merges, then link+merges.
 
@@ -2079,7 +2094,6 @@ def _reconcile_merge_targets(
         pointers.setdefault(rec.file, set()).add(rec.pointer)
     for dest in [*(dm.dest for dm in merges), *(dlm.dest for dlm in link_merges)]:
         pointers.setdefault(dest.file, set()).add(dest.pointer)
-    tool_keys = _tool_keys_by_file(config)
     if update and any(r.keys and not r.entries for r in records):
         # Migration verifies v1 entries against the fragment being installed; after a
         # re-resolve that is the *new* revision, so unchanged entries can't be proven.
