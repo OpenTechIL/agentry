@@ -115,6 +115,10 @@ cosign verify-blob \
 The same works against `SHA256SUMS.txt.cosign.bundle`, or against any installer/package
 (`.exe` / `.deb` / `.rpm`) by pointing `--bundle` at its matching `.cosign.bundle`.
 
+Releases after 0.3.3 are signed in the standard Sigstore bundle format; 0.3.3 and earlier used
+cosign's older bundle format. The command above verifies both formats with cosign 2.6.5 and
+3.x, with no extra flags. If an older cosign can't read a bundle, upgrade cosign.
+
 **Scope of what this proves and doesn't:** cosign gives cryptographic, publicly-auditable
 provenance (this artifact was built by *this* workflow in *this* repo). It is **not** OS-level
 code signing — it does **not** remove the Windows SmartScreen "unknown publisher" prompt or the
