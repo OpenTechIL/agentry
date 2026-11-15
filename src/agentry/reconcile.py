@@ -787,35 +787,51 @@ def _desired_for_target(
             _check_format(comp, tname, driver, plan, warnings, entries=lm.fragment)
             plan.link_merges.append(lm)
     else:
-        dest = driver.merge_dest(comp.type)
-        try:
-            entries, notes = _fragment_entries(artifact, comp.type, dest)
-        except (ValueError, OSError) as exc:
-            warnings.append(f"{comp.ref}: {exc}")
-            return
-        warnings.extend(f"{comp.ref}: {note}" for note in notes)
-        # Defense-in-depth: drop hook events the target doesn't recognize (e.g. Claude
-        # Code rejects a settings.json carrying unknown events). No-op for agents
-        # without a hook-event policy.
-        if comp.type is ComponentType.HOOK:
-            entries = _hook_entries(comp, tname, driver, artifact, dest, entries, plan, warnings)
-            if not entries:
-                return
+        _desired_merge(comp, src, tname, driver, artifact, plan, warnings, root=root)
 
-        def variant() -> str:  # lazy: stats + a descriptor parse, only once a skip happens
-            return _variant_path(comp, tname, artifact, src, root) if root is not None else ""
 
-        where = f"{dest.file}:{dest.pointer}"
-        if _skip_on_mismatch(
-            comp, tname, driver, where, plan, warnings, entries=entries, variant=variant
-        ):
+def _desired_merge(
+    comp: Component,
+    src: Source,
+    tname: str,
+    driver: Driver,
+    artifact: Path,
+    plan: DesiredPlan,
+    warnings: list[str],
+    *,
+    root: Path | None = None,
+) -> None:
+    """The plain-merge branch of :func:`_desired_for_target`: read the fragment's entries,
+    filter hook events, apply ``on_mismatch: skip``, then plan the merge."""
+    dest = driver.merge_dest(comp.type)
+    try:
+        entries, notes = _fragment_entries(artifact, comp.type, dest)
+    except (ValueError, OSError) as exc:
+        warnings.append(f"{comp.ref}: {exc}")
+        return
+    warnings.extend(f"{comp.ref}: {note}" for note in notes)
+    # Defense-in-depth: drop hook events the target doesn't recognize (e.g. Claude
+    # Code rejects a settings.json carrying unknown events). No-op for agents
+    # without a hook-event policy.
+    if comp.type is ComponentType.HOOK:
+        entries = _hook_entries(comp, tname, driver, artifact, dest, entries, plan, warnings)
+        if not entries:
             return
-        _check_format(comp, tname, driver, plan, warnings, entries=entries)
-        # Seam: a driver.transform (currently always None) would reshape `entries`
-        # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
-        plan.merges.append(
-            DesiredMerge(comp.ref, tname, dest, entries, list(entries), comp.kept_keys(tname))
-        )
+
+    def variant() -> str:  # lazy: stats + a descriptor parse, only once a skip happens
+        return _variant_path(comp, tname, artifact, src, root) if root is not None else ""
+
+    where = f"{dest.file}:{dest.pointer}"
+    if _skip_on_mismatch(
+        comp, tname, driver, where, plan, warnings, entries=entries, variant=variant
+    ):
+        return
+    _check_format(comp, tname, driver, plan, warnings, entries=entries)
+    # Seam: a driver.transform (currently always None) would reshape `entries`
+    # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
+    plan.merges.append(
+        DesiredMerge(comp.ref, tname, dest, entries, list(entries), comp.kept_keys(tname))
+    )
 
 
 def _fragment_entries(

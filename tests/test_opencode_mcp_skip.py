@@ -521,7 +521,12 @@ def test_on_mismatch_skip_rejected_on_a_strategy_that_cannot_skip():
     from agentry.targets import BUILTIN_TARGETS
 
     skip = {"require": ["type"], "on_mismatch": "skip"}
-    link_merge = {"strategy": "link+merge", "dest": ".x/{name}", "file": "x.json", "pointer": "hooks"}
+    link_merge = {
+        "strategy": "link+merge",
+        "dest": ".x/{name}",
+        "file": "x.json",
+        "pointer": "hooks",
+    }
     with pytest.raises(ValidationError, match="needs strategy 'merge', 'link' or 'copy'"):
         ProfileRule.model_validate({**link_merge, "expect": skip})
     ProfileRule.model_validate({**link_merge, "expect": {**skip, "on_mismatch": "warn"}})
