@@ -38,6 +38,22 @@ DRIVER = Driver(
         # opencode.ai/config.json: local/remote MCP entries need `type`, take `command` as one
         # array and `environment` (not Claude's `args` / `env`), and reject unknown fields.
         expect={
+            # OpenCode loads only top-level *.ts / *.js in .opencode/tools/ (R3, 1.19.5): a
+            # directory tool (dirtool/index.ts) is silently ignored, so it's skipped here.
+            _C.TOOL: FormatExpectation(
+                file_only=True,
+                expects="a single .ts or .js file",
+                on_mismatch="skip",
+                # `--path` resolves under the source's effective root (its --subdir
+                # included), so `tools/{name}.ts` is right as printed.
+                skip_message=(
+                    "{ref}: OpenCode only loads single-file tools (.ts/.js directly in "
+                    ".opencode/tools/); this tool is a directory, so it was skipped on "
+                    "opencode. Ship it as one file, tools/{name}.ts or .js, and add it with "
+                    "`agentry add {source}/tool/{name} --path tools/{name}.ts`, or list it in "
+                    "the source's agentry.yaml."
+                ),
+            ),
             _C.MCP: FormatExpectation(
                 require=("type",),
                 types={"command": "array"},

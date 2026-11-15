@@ -594,6 +594,24 @@ The general fixes:
 - **Override the rule** under [`target_profiles`](config-reference.md#target_profiles). If your
   override changes the format the tool reads, add `expect: {}` to drop the check.
 
+### Tool skipped on OpenCode
+
+```text
+s/tool/dirtool: OpenCode only loads single-file tools (.ts/.js directly in .opencode/tools/); this tool is a directory, so it was skipped on opencode. Ship it as one file, tools/dirtool.ts or .js, and add it with `agentry add s/tool/dirtool --path tools/dirtool.ts`, or list it in the source's agentry.yaml.
+```
+
+**Cause.** OpenCode loads a tool only from a single `.ts` or `.js` file placed directly in
+`.opencode/tools/`. A tool shipped as a folder (`tools/dirtool/index.ts`) would be ignored there,
+so agentry skips it on OpenCode. Other targets still get it. `agentry status` shows it as
+`missing`, and `agentry doctor` lists it under `format`.
+
+**Fix.** Do what the warning says: ship the tool as one file, such as `tools/dirtool.ts`. A
+tool's default location is a folder, so a single-file tool needs its path given explicitly:
+either the consumer adds it with `agentry add <source>/tool/dirtool --path tools/dirtool.ts`, or
+the source's
+[`agentry.yaml`](authoring.md#the-agentryyaml-descriptor) lists it with `path: tools/dirtool.ts`.
+agentry then copies it to `.opencode/tools/dirtool.ts`.
+
 ### MCP server skipped on OpenCode
 
 ```text

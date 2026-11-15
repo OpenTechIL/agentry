@@ -347,6 +347,7 @@ class ExpectRule(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     extension: str | None = None
+    file_only: bool = False
     events: list[str] | None = None
     require: list[str] = Field(default_factory=list)
     types: dict[str, Literal["array", "object", "string", "number", "boolean"]] = Field(
@@ -409,15 +410,15 @@ class ProfileRule(BaseModel):
             )
         if (self.rewrite_from is None) != (self.rewrite_to is None):
             raise ValueError("'rewrite_from' and 'rewrite_to' must be set together")
-        # Only a plain merge can leave a component out whole; a link, copy or link+merge
-        # (whose link and merge must stay together) can only warn.
+        # A plain merge, link or copy can leave a component out whole; a link+merge (whose
+        # link and merge must stay together) can only warn.
         if (
             self.expect is not None
             and self.expect.on_mismatch == "skip"
-            and self.strategy is not Strategy.MERGE
+            and self.strategy not in (Strategy.MERGE, Strategy.LINK, Strategy.COPY)
         ):
             raise ValueError(
-                f"expect.on_mismatch 'skip' needs strategy 'merge', not "
+                f"expect.on_mismatch 'skip' needs strategy 'merge', 'link' or 'copy', not "
                 f"'{self.strategy.value}' — use 'warn'"
             )
         # These two are joined onto the project root by the installers, and they can come

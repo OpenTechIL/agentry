@@ -398,6 +398,8 @@ dataclass that *composes* two things:
      - `extension`: the artifact's own suffix. It is checked for single-file artifacts only. It is
        skipped for directories, and for components with `transform:`, because the transformed
        output is what lands.
+     - `file_only`: the artifact must be a single file; a directory artifact is a mismatch (the
+       inverse of `extension`, which ignores directories).
      - `events`: allowed hook-event keys.
      - `require`, `forbid`, `types`, `values`: per-entry field presence, absence, JSON type and
        allowed values.
@@ -413,23 +415,30 @@ dataclass that *composes* two things:
      `target_profiles`. The warning is also recorded in `DesiredPlan.format_issues`, and `doctor`
      reports it as a `format` warning, so `--strict` fails. Nothing on disk changes.
    - **`on_mismatch: warn | skip`** (default `warn`). `warn` is the behaviour above: install as-is
-     and warn. `skip` is for formats a target *rejects outright*: a merged component (plain merge)
-     whose entries violate the rule is **not installed on that target at all** — the whole
-     component, never half of it — with the rule's `skip_message` (or a generic one) naming the
-     offending entries; `DesiredPlan.format_skips` (`FormatSkip` records) gives it a `missing`
-     status row with a note and one `doctor` `format` warning (`--strict` fails) — no second
-     `drift` row, since sync can't install it. The variant hint (`{variant_path}`) is worked out
-     only once a skip happens; a template needing it is never used without one (fallback, else
-     the generic message), and a component that already *is* the per-harness variant is told to
-     rewrite itself. With two or more skips, `sync` prints one short line per skipped pair and
-     keeps the full warnings for `--verbose` and `doctor`. `skip` is valid only on a `merge`
-     profile rule (a validation error otherwise); a built-in skip rule inherited onto another
-     strategy by a strategy-only override never skips (at most it warns). A copy agentry
-     installed earlier becomes an orphan and is removed by the normal fingerprint-checked path; a
-     hand-edited one stays (W4); `keep:` keys are never touched. `link+merge` stays warn-only. A `target_profiles` / source `expect:` override
+     and warn. `skip` is for formats a target *rejects outright*: a component that violates the
+     rule — a plain-merge component's entries, or a link/copy component's artifact (checked
+     before it is planned; a `transform:` component is exempt, since its output is what lands) —
+     is **not installed on that target at all** — the whole component, never half of it — with
+     the rule's `skip_message` (or a generic one; `{ref}`, `{target}`, `{type}`, `{name}`
+     expand) naming the offending entries; `DesiredPlan.format_skips` (`FormatSkip` records)
+     gives it a `missing` status row with a note and one `doctor` `format` warning (`--strict`
+     fails) — no second `drift` row, since sync can't install it. The variant hint
+     (`{variant_path}`) is worked out only once a skip happens; a template needing it is never
+     used without one (fallback, else the generic message), and a component that already *is*
+     the per-harness variant is told to rewrite itself. With two or more skips, `sync` prints
+     one short line per skipped pair and keeps the full warnings for `--verbose` and `doctor`.
+     `skip` is valid on a `merge`, `link` or `copy` profile rule (a validation error on
+     `link+merge`); a built-in skip rule inherited onto `link+merge` by a strategy-only override
+     never skips (at most it warns). A copy agentry installed earlier becomes an orphan and is
+     removed by the normal fingerprint-checked path; a hand-edited one stays (W4); `keep:` keys
+     are never touched. `link+merge` stays warn-only. A `target_profiles` / source `expect:` override
      carries its own `on_mismatch` (omitted ⇒ `warn`); omitting `expect:` entirely inherits the
      built-in rule, `skip` included.
    - **Built-ins.**
+     - opencode tools are `file_only` with **`on_mismatch: skip`**: OpenCode loads only top-level
+       `*.ts` / `*.js` files in `.opencode/tools/` and silently ignores a directory tool
+       (`dirtool/index.ts`; R3, 1.19.5), so a directory tool is skipped on opencode with a hint
+       to ship it as one `{name}.ts` / `{name}.js` file.
      - opencode MCP requires `type` (`local`/`remote`) and an array `command`, and forbids
        Claude's `args`/`env` — with **`on_mismatch: skip`**: runtime-confirmed (R3, OpenCode
        1.19.5) that a single non-conforming entry makes OpenCode refuse the whole `opencode.json`,
@@ -487,7 +496,9 @@ target_profiles:
 loads files by extension keeps it. OpenCode is the built-in user: it loads only `*.ts` / `*.js`
 from `.opencode/tools/`, and a *symlinked* tool that imports `@opencode-ai/plugin` crashes every
 `opencode` command (R3, runtime-confirmed on 1.19.5), so opencode tools install as **copies** at
-`.opencode/tools/{name}{ext}`; sync refreshes a copy when the source changes. An install made by
+`.opencode/tools/{name}{ext}`; sync refreshes a copy when the source changes. A *directory*
+tool is not installed there at all — the opencode `file_only` rule skips it (§5 format
+expectations), and a directory copy an earlier version installed is removed as an orphan. An install made by
 an older agentry (an extension-less symlink) is an orphan on upgrade and is removed by the normal
 store-scoped link removal; a user file already at the new path is refused, never overwritten.
 Copies currently have no edit protection — a hand edit is restored on the next sync and the file

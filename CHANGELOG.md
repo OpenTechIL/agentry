@@ -31,9 +31,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was added, it's deleted.
 
 ### Fixed
-- OpenCode tools now install with their file extension and as copies, so OpenCode loads them;
-  previously they were silently ignored, and a symlinked tool that imports `@opencode-ai/plugin`
-  broke every opencode command.
+- OpenCode tools now install as single files with their extension, as copies, so OpenCode loads
+  them. Previously they were silently ignored, and a symlinked tool importing
+  `@opencode-ai/plugin` broke every opencode command. Directory-style tools, which OpenCode can't
+  load, are now skipped with a warning.
 
 ## [0.3.3] — 2026-11-15
 

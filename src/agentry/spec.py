@@ -73,6 +73,8 @@ class FormatExpectation:
 
     #: The artifact file must have this suffix (e.g. ``".toml"``). Directories are skipped.
     extension: str | None = None
+    #: The artifact must be a single file, not a directory (e.g. OpenCode tools).
+    file_only: bool = False
     #: Merged keys must be one of these (e.g. a tool's hook event names).
     events: frozenset[str] | None = None
     #: Every merged entry must have these fields.
@@ -98,7 +100,8 @@ class FormatExpectation:
     #: ``merge`` honours ``"skip"``: a profile rule pairing it with another strategy is
     #: rejected, and one inherited onto another strategy never skips (at most it warns).
     on_mismatch: str = "warn"
-    #: The ``skip`` warning. ``{ref}`` / ``{target}`` / ``{type}`` / ``{name}`` expand, and
+    #: The ``skip`` warning. ``{ref}`` / ``{target}`` / ``{type}`` / ``{name}`` /
+    #: ``{source}`` expand, and
     #: ``{variant_path}`` — the exact per-harness variant file to create (T16), relative to
     #: the source repo (``--subdir`` included). Empty ⇒ a generic message.
     skip_message: str = ""
@@ -167,6 +170,8 @@ def check_format(
         and artifact.suffix != exp.extension
     ):
         problems.append(f"'{artifact.name}' is not a {exp.extension} file")
+    if exp.file_only and artifact is not None and artifact.is_dir():
+        problems.append(f"'{artifact.name}' is a directory, not a single file")
     if entries is None:
         return problems
     if exp.events is not None:

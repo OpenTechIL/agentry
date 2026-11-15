@@ -521,22 +521,21 @@ def test_on_mismatch_skip_rejected_on_a_strategy_that_cannot_skip():
     from agentry.targets import BUILTIN_TARGETS
 
     skip = {"require": ["type"], "on_mismatch": "skip"}
+    link_merge = {"strategy": "link+merge", "dest": ".x/{name}", "file": "x.json", "pointer": "hooks"}
+    with pytest.raises(ValidationError, match="needs strategy 'merge', 'link' or 'copy'"):
+        ProfileRule.model_validate({**link_merge, "expect": skip})
+    ProfileRule.model_validate({**link_merge, "expect": {**skip, "on_mismatch": "warn"}})
     for rule in (
+        {"strategy": "merge", "file": "x.json", "pointer": "mcp"},
         {"strategy": "link", "dest": ".x/{name}"},
         {"strategy": "copy", "dest": ".x/{name}"},
-        {"strategy": "link+merge", "dest": ".x/{name}", "file": "x.json", "pointer": "hooks"},
     ):
-        with pytest.raises(ValidationError, match="needs strategy 'merge'"):
-            ProfileRule.model_validate({**rule, "expect": skip})
-        ProfileRule.model_validate({**rule, "expect": {**skip, "on_mismatch": "warn"}})
-    ProfileRule.model_validate(
-        {"strategy": "merge", "file": "x.json", "pointer": "mcp", "expect": skip}
-    )
-    # built-ins stay valid: every built-in skip rule sits on a plain merge
+        ProfileRule.model_validate({**rule, "expect": skip})
+    # built-ins stay valid: no built-in skip rule sits on a link+merge type
     for spec in BUILTIN_TARGETS.values():
         for ctype, exp in spec.expect.items():
             if exp.on_mismatch == "skip":
-                assert ctype in spec.merge
+                assert ctype not in spec.link_merge
 
 
 def test_doctor_reports_a_skip_once_not_also_as_drift(tmp_path: Path):
