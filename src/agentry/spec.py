@@ -220,11 +220,14 @@ class TargetSpec:
             return Strategy.MERGE
         return None
 
-    def link_dest(self, ctype: ComponentType, name: str) -> str:
-        return self.link[ctype].format(name=name)
+    def link_dest(self, ctype: ComponentType, name: str, ext: str = "") -> str:
+        """The link destination. ``{name}`` and ``{ext}`` (the artifact's file suffix, e.g.
+        ``.ts``; empty for a directory) expand — a tool that loads only ``*.ts`` keeps it."""
+        return self.link[ctype].format(name=name, ext=ext)
 
-    def copy_dest(self, ctype: ComponentType, name: str) -> str:
-        return self.copy[ctype].format(name=name)
+    def copy_dest(self, ctype: ComponentType, name: str, ext: str = "") -> str:
+        """The copy destination; same placeholders as :meth:`link_dest`."""
+        return self.copy[ctype].format(name=name, ext=ext)
 
     def merge_dest(self, ctype: ComponentType) -> MergeDest:
         return self.merge[ctype]

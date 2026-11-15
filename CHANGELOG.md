@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the `$schema` line OpenCode writes itself. If agentry created the file and nothing else
   was added, it's deleted.
 
+### Fixed
+- OpenCode tools now install with their file extension and as copies, so OpenCode loads them;
+  previously they were silently ignored, and a symlinked tool that imports `@opencode-ai/plugin`
+  broke every opencode command.
+
 ## [0.3.3] — 2026-11-15
 
 ### Fixed

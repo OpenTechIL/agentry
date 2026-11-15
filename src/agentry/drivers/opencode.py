@@ -18,7 +18,12 @@ DRIVER = Driver(
             _C.SKILL: ".opencode/skills/{name}",
             _C.AGENT: ".opencode/agents/{name}.md",
             _C.COMMAND: ".opencode/commands/{name}.md",
-            _C.TOOL: ".opencode/tools/{name}",
+        },
+        # OpenCode loads only *.ts / *.js from .opencode/tools/, and a symlinked tool that
+        # imports @opencode-ai/plugin crashes every opencode command (R3, 1.19.5): tools keep
+        # their extension and install as copies (sync refreshes them).
+        copy={
+            _C.TOOL: ".opencode/tools/{name}{ext}",
         },
         merge={
             _C.MCP: MergeDest(

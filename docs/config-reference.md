@@ -189,6 +189,7 @@ Which placeholders expand depends on the strategy:
 | Variable | `link` / `copy` | `link+merge` | Value |
 |---|---|---|---|
 | `{name}` | yes | yes | The component name. |
+| `{ext}` | yes | — | The artifact's file extension, such as `.ts`. Empty when the artifact is a folder. The built-in `opencode` driver copies tools to `.opencode/tools/{name}{ext}`, because OpenCode loads only `*.ts` and `*.js` files there. |
 | `{source}` | — | yes | The source's `name`. |
 | `{repo}` | — | yes | Repo basename from the source URL/path, `.git` stripped. |
 | `{ref}` | — | yes | The requested git ref, with `/` flattened to `-`. |

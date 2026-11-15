@@ -482,6 +482,17 @@ target_profiles:
 
 > YAML note: a `dest` containing `{name}` must be **quoted**, or YAML reads `{…}` as a flow mapping.
 
+**Dest placeholders.** A link or copy `dest` expands `{name}` (the component name) and `{ext}`
+(the artifact's file suffix, e.g. `.ts`; empty for a directory artifact), so a tool that only
+loads files by extension keeps it. OpenCode is the built-in user: it loads only `*.ts` / `*.js`
+from `.opencode/tools/`, and a *symlinked* tool that imports `@opencode-ai/plugin` crashes every
+`opencode` command (R3, runtime-confirmed on 1.19.5), so opencode tools install as **copies** at
+`.opencode/tools/{name}{ext}`; sync refreshes a copy when the source changes. An install made by
+an older agentry (an extension-less symlink) is an orphan on upgrade and is removed by the normal
+store-scoped link removal; a user file already at the new path is refused, never overwritten.
+Copies currently have no edit protection — a hand edit is restored on the next sync and the file
+is deleted on removal (tracked as a follow-up: W2/W4-style protection for copies).
+
 A referenced target (project or component) with neither a built-in driver nor a profile is reported via `unresolved_targets`, which is fatal for sync (§6 step 0).
 
 **Active vs. referenced targets.** The project's `targets:` is the **single switch**
@@ -514,7 +525,7 @@ flowchart LR
 | skill | `.claude/skills/{name}` | `.opencode/skills/{name}` | — | `.gemini/skills/{name}` | `.windsurf/skills/{name}` | `.kimi-code/skills/{name}` | `.agents/skills/{name}` | `.github/skills/{name}` | `.kiro/skills/{name}` | `.agents/skills/{name}` |
 | agent | `.claude/agents/{name}.md` | `.opencode/agents/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/agents/{name}.md` | — | — | — | `.github/agents/{name}.agent.md` | — | — |
 | command | `.claude/commands/{name}.md` | `.opencode/commands/{name}.md` | `.cursor/rules/{name}.mdc` | `.gemini/commands/{name}.toml` | `.windsurf/workflows/{name}.md` | — | — | `.github/prompts/{name}.prompt.md` | — | — |
-| tool | `.claude/tools/{name}` | `.opencode/tools/{name}` | — | — | — | — | — | — | — | — |
+| tool | `.claude/tools/{name}` | copy `.opencode/tools/{name}{ext}` | — | — | — | — | — | — | — | — |
 | hook | merge `.claude/settings.json` → `hooks` | — | — | merge `.gemini/settings.json` → `hooks` | merge `.windsurf/hooks.json` → `hooks` | — | — | — | — | — |
 | mcp | merge `.mcp.json` → `mcpServers` | merge `opencode.json` → `mcp` | merge `.cursor/mcp.json` → `mcpServers` | merge `.gemini/settings.json` → `mcpServers` | — | merge `.kimi-code/mcp.json` → `mcpServers` | merge `.codex/config.toml` → `mcp_servers` | merge `.vscode/mcp.json` → `servers` | merge `.kiro/settings/mcp.json` → `mcpServers` | — |
 | memory (`emit triggers`) | `.claude/CLAUDE.md` | `AGENTS.md` | `.cursor/rules/agentry-triggers.mdc` | `GEMINI.md` | `.windsurf/rules/agentry-triggers.md` | `AGENTS.md` | `AGENTS.md` | `.github/copilot-instructions.md` | `.kiro/steering/agentry-triggers.md` | `AGENTS.md` |

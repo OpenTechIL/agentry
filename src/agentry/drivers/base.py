@@ -85,11 +85,11 @@ class Driver:
     def strategy(self, ctype: ComponentType) -> Strategy | None:
         return self.spec.strategy(ctype)
 
-    def link_dest(self, ctype: ComponentType, name: str) -> str:
-        return self.spec.link_dest(ctype, name)
+    def link_dest(self, ctype: ComponentType, name: str, ext: str = "") -> str:
+        return self.spec.link_dest(ctype, name, ext)
 
-    def copy_dest(self, ctype: ComponentType, name: str) -> str:
-        return self.spec.copy_dest(ctype, name)
+    def copy_dest(self, ctype: ComponentType, name: str, ext: str = "") -> str:
+        return self.spec.copy_dest(ctype, name, ext)
 
     def merge_dest(self, ctype: ComponentType) -> MergeDest:
         return self.spec.merge_dest(ctype)

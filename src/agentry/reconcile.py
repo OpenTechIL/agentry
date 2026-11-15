@@ -702,6 +702,11 @@ def _routes_to(
     return (comp.source, comp.type, comp.name, tname) not in variants
 
 
+def _ext(artifact: Path) -> str:
+    """``{ext}`` for a dest template: the artifact's suffix when it's a file, else ``""``."""
+    return artifact.suffix if artifact.is_file() else ""
+
+
 def _desired_for_target(
     comp: Component,
     src: Source,
@@ -747,7 +752,7 @@ def _desired_for_target(
                 DesiredTransform(
                     comp.ref,
                     tname,
-                    driver.link_dest(comp.type, comp.name),
+                    driver.link_dest(comp.type, comp.name, _ext(artifact)),
                     artifact,
                     comp.transform.provider,
                     comp.transform.prompt,
@@ -760,11 +765,15 @@ def _desired_for_target(
         )
     if strat is Strategy.LINK:
         plan.links.append(
-            DesiredLink(comp.ref, tname, driver.link_dest(comp.type, comp.name), artifact)
+            DesiredLink(
+                comp.ref, tname, driver.link_dest(comp.type, comp.name, _ext(artifact)), artifact
+            )
         )
     elif strat is Strategy.COPY:
         plan.copies.append(
-            DesiredCopy(comp.ref, tname, driver.copy_dest(comp.type, comp.name), artifact)
+            DesiredCopy(
+                comp.ref, tname, driver.copy_dest(comp.type, comp.name, _ext(artifact)), artifact
+            )
         )
     elif strat is Strategy.LINK_MERGE:
         lm = _compute_link_merge(
