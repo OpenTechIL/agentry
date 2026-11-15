@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- The fix-it hint for a tool skipped on OpenCode now suggests a `.ts` file next to the
+  original. A tool added with `--path scripts/fmt.py` is pointed at `scripts/fmt.ts`, not
+  `tools/fmt.ts`. `target_profiles` skip messages can use the new `{src_dir}` placeholder.
+
 ## [0.3.4] — 2026-11-15
 
 ### Changed

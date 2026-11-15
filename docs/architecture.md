@@ -422,8 +422,9 @@ dataclass that *composes* two things:
      `extension` / `file_only` checks, run before it is planned; only a component whose
      `transform:` actually applies is exempt, since its output is what lands) —
      is **not installed on that target at all** — the whole component, never half of it — with
-     the rule's `skip_message` (or a generic one; `{ref}`, `{target}`, `{type}`, `{name}`
-     expand) followed by the offending entries or the path problem; `DesiredPlan.format_skips`
+     the rule's `skip_message` (or a generic one; `{ref}`, `{target}`, `{type}`, `{name}`,
+     `{source}` and `{src_dir}` — the component's source folder, from its `path:` or its
+     type's default folder — expand) followed by the offending entries or the path problem; `DesiredPlan.format_skips`
      (`FormatSkip` records: `where` is the merge's `file:pointer` or the link/copy dest,
      `entries` the offending keys — empty for a path skip — and `reason` one clause saying why)
      gives it a `missing` status row with a note and one `doctor` `format` warning (`--strict`
