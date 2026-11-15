@@ -230,7 +230,9 @@ target_profiles:
 
 Some tools need a different *format*, not just a different place. Examples: OpenCode's MCP
 entries, Gemini's TOML commands, Gemini's hook event names. agentry installs the bytes as they
-are, but warns when content visibly won't work in the target. `agentry doctor` reports each
+are, but warns when content visibly won't work in the target. The exception is a mismatch that
+would make the tool reject its whole config, such as a Claude-format MCP server in OpenCode's
+`opencode.json`: that entry is skipped instead. `agentry doctor` reports each
 case under the `format` category, and `doctor --strict` fails. The built-in drivers ship these
 checks. `expect:` lets you change them for one (tool, type) rule:
 

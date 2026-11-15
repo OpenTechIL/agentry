@@ -357,6 +357,10 @@ class ExpectRule(BaseModel):
     reject: dict[str, list[str]] = Field(default_factory=dict)
     reject_hint: str = ""
     expects: str = ""
+    # "warn" (install as-is, the default) or "skip" (don't install on mismatch).
+    on_mismatch: Literal["warn", "skip"] = "warn"
+    skip_message: str = ""
+    skip_message_fallback: str = ""
 
 
 class ProfileRule(BaseModel):

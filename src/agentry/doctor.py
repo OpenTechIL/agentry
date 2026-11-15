@@ -169,6 +169,8 @@ def run_checks(root: Path) -> list[Check]:
     checks.extend(
         [
             *(Check("warn", "format", issue) for issue in plan.format_issues),
+            # merged components skipped for a format their target rejects (on_mismatch: skip)
+            *(Check("warn", "format", skip[4]) for skip in plan.format_skips),
             # component targets the project hasn't activated
             *(Check("warn", "target", issue) for issue in plan.inactive),
             # ignored source `profiles:` parts: an identity override, an undefined target

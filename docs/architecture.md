@@ -389,9 +389,22 @@ dataclass that *composes* two things:
      which names the workaround: ship a target-specific artifact, or override the type in
      `target_profiles`. The warning is also recorded in `DesiredPlan.format_issues`, and `doctor`
      reports it as a `format` warning, so `--strict` fails. Nothing on disk changes.
+   - **`on_mismatch: warn | skip`** (default `warn`). `warn` is the behaviour above: install as-is
+     and warn. `skip` is for formats a target *rejects outright*: a merged component (plain merge)
+     whose entries violate the rule is **not installed on that target at all** — the whole
+     component, never half of it — with the rule's `skip_message` (or a generic one) naming the
+     offending entries; `DesiredPlan.format_skips` gives it a `missing` status row with a note and a
+     `doctor` warning (`--strict` fails). A copy agentry installed earlier becomes an orphan and is
+     removed by the normal fingerprint-checked path; a hand-edited one stays (W4); `keep:` keys are
+     never touched. `link+merge` stays warn-only. A `target_profiles` / source `expect:` override
+     carries its own `on_mismatch` (omitted ⇒ `warn`); omitting `expect:` entirely inherits the
+     built-in rule, `skip` included.
    - **Built-ins.**
      - opencode MCP requires `type` (`local`/`remote`) and an array `command`, and forbids
-       Claude's `args`/`env`.
+       Claude's `args`/`env` — with **`on_mismatch: skip`**: runtime-confirmed (R3, OpenCode
+       1.19.5) that a single non-conforming entry makes OpenCode refuse the whole `opencode.json`,
+       so a Claude-format MCP server is skipped on opencode rather than installed. Ship an
+       `mcp/<name>-opencode.json` variant (§5 per-harness routing) to install it there.
      - gemini commands must be `.toml`.
      - gemini MCP rejects `type: http`/`streamable-http`. Gemini reads `url` as SSE, so streamable
        HTTP servers need `httpUrl`.
@@ -656,7 +669,9 @@ agentry never destroys anything it didn't create. Two invariants enforce this:
       and reviewable. The manifest is gitignored and per-machine.
   - **Removal** deletes only owned, non-preexisting keys whose fingerprint still matches. An
     edited entry is left in place, with a warning. A key whose ownership was never proven (no
-    fingerprint) is never removed.
+    fingerprint) is never removed. The same path handles a component that becomes **skipped by
+    a format rule** (`on_mismatch: skip`, §5): its earlier entries are orphans, removed only while
+    their fingerprint still matches.
   - **Pointer sections agentry created** (#100). When a merge has to create the pointer section
     itself (e.g. `mcpServers` in a `.mcp.json` that had none), the manifest records it in
     `created_pointers` as `(file, pointer)`. When removal empties a section, it is deleted only if

@@ -87,6 +87,18 @@ class FormatExpectation:
     reject_hint: str = ""
     #: Human summary of what the target wants, quoted in the warning.
     expects: str = ""
+    #: What to do with a merged component that misses this expectation: ``"warn"`` (phase A:
+    #: install as-is and warn) or ``"skip"`` (don't install it on this target — for content
+    #: that would break the whole target config, e.g. OpenCode rejecting a Claude-shaped
+    #: MCP entry; runtime-confirmed per target before a rule is set to it).
+    on_mismatch: str = "warn"
+    #: The ``skip`` warning. ``{ref}`` / ``{target}`` / ``{type}`` / ``{name}`` expand, and
+    #: ``{variant_path}`` — the exact per-harness variant file to create (T16), relative to
+    #: the source repo (``--subdir`` included). Empty ⇒ a generic message.
+    skip_message: str = ""
+    #: Used instead when no working variant path can be named (see
+    #: ``reconcile._variant_path``). Empty ⇒ ``skip_message`` with ``{variant_path}`` dropped.
+    skip_message_fallback: str = ""
 
 
 _JSON_TYPES = {

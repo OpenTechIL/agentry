@@ -133,6 +133,9 @@ def _to_expectation(rule: ExpectRule) -> FormatExpectation:
         reject={k: tuple(v) for k, v in rule.reject.items()},
         reject_hint=rule.reject_hint,
         expects=rule.expects,
+        on_mismatch=rule.on_mismatch,
+        skip_message=rule.skip_message,
+        skip_message_fallback=rule.skip_message_fallback,
     )
 
 

@@ -166,6 +166,10 @@ class DesiredPlan:
     #: Cross-target format mismatches (phase A, also in the caller's warnings): one message
     #: per (component, target) whose content the target's ``expect`` says won't work there.
     format_issues: list[str] = field(default_factory=list)
+    #: Merged components not installed because their content misses an expectation whose
+    #: action is ``skip`` (also in the caller's warnings): ``(ref, target, where, note,
+    #: warning)`` — status shows them missing, doctor warns.
+    format_skips: list[tuple[str, str, str, str, str]] = field(default_factory=list)
     #: ``(canonical ref, target) -> variant ref``: a suffix-less merge fragment that a
     #: same-source per-harness variant replaces on that target (routing, so no row there).
     replaced: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -748,6 +752,8 @@ def _desired_for_target(
             comp, src, tname, driver.link_merge_dest(comp.type), artifact, warnings, root=root
         )
         if lm is not None:
+            # Warn-only by design: skipping would split the link from its merge, and no
+            # link+merge (hook) expectation is runtime-confirmed as breaking its target.
             _check_format(comp, tname, driver, plan, warnings, entries=lm.fragment)
             plan.link_merges.append(lm)
     else:
@@ -765,6 +771,9 @@ def _desired_for_target(
             entries = _hook_entries(comp, tname, driver, artifact, dest, entries, plan, warnings)
             if not entries:
                 return
+        variant = _variant_path(comp, tname, artifact, src, root) if root is not None else ""
+        if _skip_on_mismatch(comp, tname, driver, dest, entries, plan, warnings, variant):
+            return
         _check_format(comp, tname, driver, plan, warnings, entries=entries)
         # Seam: a driver.transform (currently always None) would reshape `entries`
         # here for agents needing semantic translation (e.g. JSON→TOML) before merge.
@@ -846,6 +855,87 @@ def _drop_plugin_root_events(
         warnings.append(note)
         plan.plugin_notes.append(note)  # doctor reports it too
     return kept
+
+
+def _variant_path(comp: Component, tname: str, artifact: Path, src: Source, root: Path) -> str:
+    """The exact per-harness variant file that would replace ``comp`` on ``tname`` (T16),
+    relative to the source repo (``--subdir`` included) — or ``""`` when none can be named.
+
+    Variants are found only by the convention scan (also used for Claude plugins): a
+    ``<type dir>/<name>-<target>.json`` file. So a path is named when that scan is what
+    discovers this source (no ``agentry.yaml`` descriptor, no apm package) and the
+    component is one the scan itself produced — a ``mcp/<name>.json`` file, the root
+    ``.mcp.json`` (``mcp``), or an inline plugin.json entry (``plugin-mcp``). Everything
+    else (an explicit ``path:``, a descriptor-placed file) gets ``""``: no hint is better
+    than one that names a location that wouldn't be picked up.
+    """
+    layout = discovery.LAYOUT.get(comp.type)
+    base = effective_root(root, src)
+    if layout is None or comp.path is not None:
+        return ""
+    if discovery.load_descriptor(base) is not None:
+        return ""  # a descriptor replaces the convention scan: no variant is discovered
+    is_plugin = (base / plugin_manifest.MANIFEST_PATH).is_file()
+    if (base / discovery.APM_PACKAGE_DIR).is_dir() and not is_plugin:
+        return ""  # an apm package is read from .apm/, not the convention dirs
+    in_type_dir = artifact.parent == base / layout.subdir and artifact.stem == comp.name
+    root_mcp = (
+        comp.type is ComponentType.MCP
+        and comp.name == discovery.ROOT_MCP_COMPONENT
+        and artifact.parent == base
+        and artifact.name in discovery.ROOT_MCP_NAMES
+    )
+    inline = is_plugin and plugin_manifest.is_manifest(artifact)
+    if not (in_type_dir or root_mcp or inline):
+        return ""
+    rel = f"{layout.subdir}/{comp.name}-{tname}.json"
+    return f"{src.subdir.strip('/')}/{rel}" if src.subdir else rel
+
+
+def _skip_on_mismatch(
+    comp: Component,
+    tname: str,
+    driver: Driver,
+    dest: MergeDest,
+    entries: dict,
+    plan: DesiredPlan,
+    warnings: list[str],
+    variant: str = "",
+) -> bool:
+    """A merged component whose content misses an expectation with ``on_mismatch: skip``
+    isn't installed on ``tname`` (the whole component, never half of it). True if skipped.
+
+    The warning names the offending entries; any copy already installed becomes an orphan
+    and is removed through the normal fingerprint-checked path (a hand-edited one stays).
+    """
+    exp = driver.spec.expect.get(comp.type)
+    if exp is None or exp.on_mismatch != "skip":
+        return False
+    bad = [key for key, entry in entries.items() if check_format(exp, entries={key: entry})]
+    if not bad:
+        return False
+    names = ", ".join(bad)
+    generic = (
+        "{ref}: its content doesn't match what {target} accepts — skipped on {target}. Ship "
+        "a {target}-specific {type}, or override {type} for {target} under target_profiles."
+    )
+    if variant:
+        template = exp.skip_message or generic
+    else:  # never print a variant path that wouldn't work
+        template = exp.skip_message_fallback or exp.skip_message or generic
+    msg = (
+        template.replace("{variant_path}", variant)
+        .replace("{ref}", comp.ref)
+        .replace("{target}", tname)
+        .replace("{type}", comp.type.value)
+        .replace("{name}", comp.name)
+        + f" (entries: {names})"
+    )
+    warnings.append(msg)
+    verb = "uses" if len(bad) == 1 else "use"
+    note = f"skipped on {tname}: {names} {verb} a format {tname} rejects (see warnings)"
+    plan.format_skips.append((comp.ref, tname, f"{dest.file}:{dest.pointer}", note, msg))
+    return True
 
 
 def _check_format(
@@ -2363,21 +2453,37 @@ def status(root: Path, *, planned: Planned | None = None) -> tuple[list[StatusRo
         return state, note, drifted
 
     replaces = {(var, t): canon for (canon, t), var in plan.replaced.items()}
+    # A merge skipped for its format (O1) sits where its merge row would have been: the
+    # table order never depends on how a row came to be missing.
+    comp_rank = {c.ref: i for i, c in enumerate(augmented.components)}
+    target_rank = {t: i for i, t in enumerate(augmented.targets)}
+
+    def order(ref: str, target: str) -> tuple[int, int]:
+        return (comp_rank.get(ref, len(comp_rank)), target_rank.get(target, len(target_rank)))
+
+    merge_rows: list[tuple[tuple[int, int], StatusRow]] = [
+        (order(ref, target), StatusRow(ref, target, where, "missing", why))
+        for ref, target, where, why, _msg in plan.format_skips
+    ]
     for dm in merges:
         state, note, drifted = merge_state(
             (dm.component, dm.target), dm.dest, dm.fragment, dm.kept, dm.bare
         )
-        rows.append(
-            StatusRow(
-                dm.component,
-                dm.target,
-                f"{dm.dest.file}:{dm.dest.pointer}",
-                state,
-                note,
-                drifted,
-                replaces.get((dm.component, dm.target)),
+        merge_rows.append(
+            (
+                order(dm.component, dm.target),
+                StatusRow(
+                    dm.component,
+                    dm.target,
+                    f"{dm.dest.file}:{dm.dest.pointer}",
+                    state,
+                    note,
+                    drifted,
+                    replaces.get((dm.component, dm.target)),
+                ),
             )
         )
+    rows.extend(row for _, row in sorted(merge_rows, key=lambda pair: pair[0]))
     for dg in generates:
         where = ", ".join(dg.spec.produces)
         state = "ok" if gen_inst.produces_present(root, dg.spec) else "missing"
