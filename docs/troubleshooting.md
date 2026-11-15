@@ -606,6 +606,10 @@ another kind (`tools/dirtool.py`, or one with no extension), would be ignored th
 skips it on OpenCode. The text in parentheses says which. Other targets still get it. `agentry status` shows it as
 `missing`, and `agentry doctor` lists it under `format`.
 
+The suggested file sits in the folder the tool came from: `tools/` by default, or the folder of
+the path it was added with (a tool added with `--path scripts/fmt.py` is pointed at
+`scripts/fmt.ts`).
+
 **Fix.** Do what the warning says: ship the tool as one file, such as `tools/dirtool.ts`. A
 tool's default location is a folder, so a single-file tool needs its path given explicitly:
 either the consumer adds it with `agentry add <source>/tool/dirtool --path tools/dirtool.ts`, or

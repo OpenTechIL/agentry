@@ -47,13 +47,14 @@ DRIVER = Driver(
                 expects="a single .ts or .js file",
                 on_mismatch="skip",
                 # `--path` resolves under the source's effective root (its --subdir
-                # included), so `tools/{name}.ts` is right as printed.
+                # included); `{src_dir}` is the folder the tool came from (`tools/`, or the
+                # folder of its explicit `path:`), so the suggested path is right as printed.
                 skip_message=(
                     "{ref}: OpenCode only loads single-file tools (.ts/.js directly in "
                     ".opencode/tools/); this tool isn't one, so it was skipped on "
-                    "opencode. Ship it as one file, tools/{name}.ts or .js, and add it with "
-                    "`agentry add {source}/tool/{name} --path tools/{name}.ts`, or list it in "
-                    "the source's agentry.yaml."
+                    "opencode. Ship it as one file, {src_dir}{name}.ts or .js, and add it "
+                    "with `agentry add {source}/tool/{name} --path {src_dir}{name}.ts`, or "
+                    "list it in the source's agentry.yaml."
                 ),
             ),
             _C.MCP: FormatExpectation(

@@ -32,12 +32,13 @@ def _line(
     name: str = "dirtool",
     source: str = "s",
     why: str = "'dirtool' is a directory, not a single file",
+    src_dir: str = "tools/",
 ) -> str:
     return (
         f"{ref}: OpenCode only loads single-file tools (.ts/.js directly in .opencode/tools/); "
         "this tool isn't one, so it was skipped on opencode. "
-        f"Ship it as one file, tools/{name}.ts or .js, and add it with "
-        f"`agentry add {source}/tool/{name} --path tools/{name}.ts`, "
+        f"Ship it as one file, {src_dir}{name}.ts or .js, and add it with "
+        f"`agentry add {source}/tool/{name} --path {src_dir}{name}.ts`, "
         f"or list it in the source's agentry.yaml. ({why})"
     )
 
@@ -192,6 +193,41 @@ def test_single_file_of_another_kind_is_skipped(tmp_path: Path, fname: str):
     assert res.warnings.count(_line("s/tool/helper", "helper", why=why)) == 1
     assert (proj / ".claude/tools/helper").exists()  # other targets unaffected
     assert sync(proj).created == []  # and the skip is stable
+
+
+@pytest.mark.parametrize(
+    ("rel", "src_dir"),
+    [("scripts/fmt.py", "scripts/"), ("lib/tools/fmt.py", "lib/tools/"), ("fmt.py", "")],
+    ids=["other_folder", "nested", "source_root"],
+)
+def test_hint_points_next_to_an_explicit_path(tmp_path: Path, monkeypatch, rel: str, src_dir: str):
+    """A tool added with `--path` outside `tools/` gets a hint naming a `.ts` file next to
+    the original — not `tools/<name>.ts` — and following it verbatim installs the tool."""
+    import re
+    import shlex
+
+    src = tmp_path / "src"
+    (src / rel).parent.mkdir(parents=True, exist_ok=True)
+    (src / rel).write_bytes(b"print('hi')\n")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    store = ConfigStore.create(proj, ["opencode"])
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(src)))
+    store.add_component(Component(source="s", type=_C.TOOL, name="fmt", path=rel))
+    store.save()
+
+    (warning,) = [w for w in sync(proj).warnings if "skipped on opencode" in w]
+    why = f"'{Path(rel).name}' is not a .ts or .js file"
+    assert warning == _line("s/tool/fmt", "fmt", why=why, src_dir=src_dir)
+    (cmd,) = re.findall(r"`(agentry add [^`]+)`", warning)
+
+    (src / f"{src_dir}fmt.ts").write_bytes(_TS)
+    monkeypatch.chdir(proj)
+    res = CliRunner(env={"COLUMNS": "200"}).invoke(app, shlex.split(cmd)[1:])
+    assert res.exit_code == 0, res.output
+    after = sync(proj)
+    assert (proj / ".opencode/tools/fmt.ts").read_bytes() == _TS
+    assert not [w for w in after.warnings if "skipped on opencode" in w]
 
 
 def test_file_only_false_override_lets_the_directory_through(tmp_path: Path):

@@ -988,6 +988,23 @@ def _skip_template(comp: Component, exp: FormatExpectation, variant: Callable[[]
     return _SKIP_GENERIC
 
 
+def _src_dir(comp: Component) -> str:
+    """``{src_dir}`` for a skip message: the source folder a fixed file should go in, as
+    ``--path`` takes it (relative to the source's effective root), with a trailing ``/`` —
+    or ``""`` at the root.
+
+    The folder of the component's explicit ``path:`` when it has one (a tool added with
+    ``--path scripts/fmt.py`` points back at ``scripts/``), else its type's convention
+    folder (``tools/``).
+    """
+    if comp.path:
+        parent = PurePosixPath(comp.path.replace("\\", "/").strip("/")).parent
+    else:
+        layout = discovery.LAYOUT.get(comp.type)
+        parent = PurePosixPath(layout.subdir) if layout else PurePosixPath(".")
+    return "" if str(parent) == "." else f"{parent}/"
+
+
 def _skip_path_artifact(
     comp: Component,
     tname: str,
@@ -1059,6 +1076,7 @@ def _skip_on_mismatch(
         .replace("{type}", comp.type.value)
         .replace("{name}", comp.name)
         .replace("{source}", comp.source)
+        .replace("{src_dir}", _src_dir(comp))
         + suffix
     )
     warnings.append(msg)
