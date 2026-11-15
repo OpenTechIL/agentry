@@ -27,13 +27,18 @@ _LET_THROUGH = {  # a user override: the opencode tool rule without its built-in
 }
 
 
-def _line(ref: str = "s/tool/dirtool", name: str = "dirtool", source: str = "s") -> str:
+def _line(
+    ref: str = "s/tool/dirtool",
+    name: str = "dirtool",
+    source: str = "s",
+    why: str = "'dirtool' is a directory, not a single file",
+) -> str:
     return (
         f"{ref}: OpenCode only loads single-file tools (.ts/.js directly in .opencode/tools/); "
-        "this tool is a directory, so it was skipped on opencode. "
+        "this tool isn't one, so it was skipped on opencode. "
         f"Ship it as one file, tools/{name}.ts or .js, and add it with "
         f"`agentry add {source}/tool/{name} --path tools/{name}.ts`, "
-        "or list it in the source's agentry.yaml."
+        f"or list it in the source's agentry.yaml. ({why})"
     )
 
 
@@ -168,20 +173,25 @@ def test_directory_tool_skip_is_idempotent(tmp_path: Path):
     assert _oc_tools(proj) == ["flat.ts"]
 
 
-def test_single_non_ts_file_is_not_skipped(tmp_path: Path):
-    """Scope: the rule is about directories only — a single file of another kind installs."""
+@pytest.mark.parametrize("fname", ["helper.py", "helper"], ids=["py", "no_extension"])
+def test_single_file_of_another_kind_is_skipped(tmp_path: Path, fname: str):
+    """OpenCode loads only `.ts` / `.js`: a single `.py` or extension-less file would be
+    ignored there too, so it's skipped with the same warning naming the problem."""
     src = tmp_path / "src"
     (src / "tools").mkdir(parents=True)
-    (src / "tools" / "helper.py").write_bytes(b"print('hi')\n")
+    (src / "tools" / fname).write_bytes(b"print('hi')\n")
     proj = tmp_path / "proj"
     proj.mkdir()
-    store = ConfigStore.create(proj, ["opencode"])
+    store = ConfigStore.create(proj, ["claude", "opencode"])
     store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(src)))
-    store.add_component(Component(source="s", type=_C.TOOL, name="helper", path="tools/helper.py"))
+    store.add_component(Component(source="s", type=_C.TOOL, name="helper", path=f"tools/{fname}"))
     store.save()
     res = sync(proj)
-    assert (proj / ".opencode/tools/helper.py").read_bytes() == b"print('hi')\n"
-    assert not [w for w in res.warnings if "skipped on opencode" in w]
+    assert _oc_tools(proj) == []
+    why = f"'{fname}' is not a .ts or .js file"
+    assert res.warnings.count(_line("s/tool/helper", "helper", why=why)) == 1
+    assert (proj / ".claude/tools/helper").exists()  # other targets unaffected
+    assert sync(proj).created == []  # and the skip is stable
 
 
 def test_file_only_false_override_lets_the_directory_through(tmp_path: Path):
@@ -256,3 +266,122 @@ def test_following_the_printed_command_verbatim_installs_the_tool(
     dest = proj / ".opencode/tools/dirtool.ts"
     assert dest.is_file() and not dest.is_symlink() and dest.read_bytes() == _TS
     assert not [w for w in after.warnings if "skipped on opencode" in w]
+
+
+# --- review follow-ups -------------------------------------------------------------------
+
+
+def _descriptor_project(tmp_path: Path, provides: str, *, keep_dir: bool = False) -> Path:
+    """A source whose agentry.yaml lists a single-file tool; the project takes the whole
+    source the way `agentry add s` would (the component named as discovery names it)."""
+    from agentry import discovery
+
+    src = tmp_path / "src"
+    (src / "tools").mkdir(parents=True)
+    (src / "tools" / "dirtool.ts").write_bytes(_TS)
+    if keep_dir:
+        (src / "tools" / "dirtool").mkdir()
+        (src / "tools" / "dirtool" / "index.ts").write_bytes(_TS)
+    (src / "agentry.yaml").write_text(f"version: 1\nprovides:\n  tool:\n{provides}", "utf-8")
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    store = ConfigStore.create(proj, ["opencode"])
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(src)))
+    for d in discovery.discover(src):
+        store.add_component(Component(source="s", type=d.type, name=d.name))
+    store.save()
+    return proj
+
+
+@pytest.mark.parametrize(
+    "provides",
+    ["    - { path: tools/dirtool.ts }\n", "    - { glob: 'tools/*.ts' }\n"],
+    ids=["path", "glob"],
+)
+def test_descriptor_listed_single_file_tool_lands_once_with_its_extension(
+    tmp_path: Path, provides: str
+):
+    """`path:` / `glob:` without `name:` names a tool after the whole file (`dirtool.ts`, since
+    a tool is a dir type); it must land as `.opencode/tools/dirtool.ts`, not `dirtool.ts.ts`.
+    The ref keeps the full name, so existing lock identities don't move."""
+    proj = _descriptor_project(tmp_path, provides)
+    res = sync(proj)
+    assert _oc_tools(proj) == ["dirtool.ts"]
+    assert (proj / ".opencode/tools/dirtool.ts").read_bytes() == _TS
+    assert [c.ref for c in ConfigStore.load(proj).parsed().components] == ["s/tool/dirtool.ts"]
+    assert not [w for w in res.warnings if "skipped on opencode" in w]
+    assert sync(proj).created == []
+
+
+def test_troubleshooting_fix_via_agentry_yaml_holds_end_to_end(tmp_path: Path):
+    """docs/troubleshooting.md: list the single file in agentry.yaml with
+    `path: tools/dirtool.ts` and agentry copies it to `.opencode/tools/dirtool.ts`."""
+    proj = _descriptor_project(tmp_path, "    - { path: tools/dirtool.ts }\n", keep_dir=True)
+    sync(proj)
+    dest = proj / ".opencode/tools/dirtool.ts"
+    assert dest.is_file() and not dest.is_symlink() and dest.read_bytes() == _TS
+    assert _oc_tools(proj) == ["dirtool.ts"]
+
+
+def test_directory_tool_with_a_transform_is_still_skipped(tmp_path: Path):
+    """A transform only applies to single-file link types; on opencode (copy, and tool is a
+    dir type) the raw directory would land, so the path check must still run."""
+    from agentry.models import ComponentTransform
+
+    proj = _project(tmp_path)
+    store = ConfigStore.load(proj)
+    store.doc["components"] = []
+    store.add_component(
+        Component(
+            source="s",
+            type=_C.TOOL,
+            name="dirtool",
+            transform=ComponentTransform(provider="strip-frontmatter"),
+        )
+    )
+    store.save()
+    res = sync(proj)
+    assert _oc_tools(proj) == []
+    assert res.warnings.count(_line()) == 1
+
+
+def test_cli_folds_two_directory_tool_skips_with_a_real_reason(tmp_path: Path, monkeypatch):
+    src = tmp_path / "src"
+    for name in ("one", "two"):
+        (src / "tools" / name).mkdir(parents=True)
+        (src / "tools" / name / "index.ts").write_bytes(_TS)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    store = ConfigStore.create(proj, ["opencode"])
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(src)))
+    for name in ("one", "two"):
+        store.add_component(Component(source="s", type=_C.TOOL, name=name))
+    store.save()
+    monkeypatch.chdir(proj)
+    env = {"COLUMNS": "400", "PATH": "/usr/bin:/bin"}
+    out = CliRunner(env=env).invoke(app, ["sync"]).output
+    for name in ("one", "two"):
+        line = (
+            f"s/tool/{name}: skipped on opencode — '{name}' is a directory, not a single file. "
+            "Run `agentry doctor` (or sync with --verbose) for the fix"
+        )
+        assert out.count(line) == 1, out
+    assert "—  use" not in out and "a format opencode rejects" not in out
+
+
+def test_path_check_only_runs_where_a_skip_rule_exists(tmp_path: Path, monkeypatch):
+    """Cheap early return: a link/copy pair with no `on_mismatch: skip` rule (every claude
+    pair here) never reaches the skip check."""
+    from agentry import reconcile
+
+    calls: list[tuple[str, str]] = []
+    real = reconcile._skip_on_mismatch
+
+    def counting(comp, tname, *a, **kw):
+        calls.append((comp.ref, tname))
+        return real(comp, tname, *a, **kw)
+
+    monkeypatch.setattr(reconcile, "_skip_on_mismatch", counting)
+    proj = _project(tmp_path, targets=("claude", "opencode"), flat=True)
+    sync(proj)
+    assert calls and all(t == "opencode" for _, t in calls)

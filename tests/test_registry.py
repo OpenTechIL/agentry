@@ -714,3 +714,26 @@ def test_catalog_add_repo_discover(tmp_path, monkeypatch, git_source):
     assert ("skill", "code-reviewer") in pairs
     assert ("agent", "planner") in pairs
     assert ("mcp", "github") in pairs
+
+
+def test_build_install_profiles_namespaces_a_copy_default_type():
+    """A type whose built-in default is `copy` (e.g. opencode tools) still gets the catalog's
+    `namespaced` rule — base_dest comes from spec.copy as well as spec.link."""
+    from agentry.drivers.base import Driver, NamespacePolicy
+    from agentry.spec import TargetSpec
+
+    drv = Driver(
+        spec=TargetSpec(name="x", copy={_C.TOOL: ".x/tools/{name}{ext}"}),
+        namespacing=NamespacePolicy(frozenset({_C.TOOL})),
+    )
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=False, namespaced=True)
+    profiles = reg.build_install_profiles(entry, "r", _comps(_C.TOOL), ["x"], {"x": drv})
+    rule = profiles["x"][_C.TOOL]
+    assert rule.strategy is Strategy.COPY and rule.dest == ".x/tools/r/{name}{ext}"
+
+
+def test_build_install_profiles_copy_flag_is_a_noop_on_a_copy_default_type():
+    """opencode tools already install as copies: `copy: true` adds no rule restating that."""
+    entry = RepositoryEntry(source=RegistrySource(url="x"), copy=True, namespaced=True)
+    profiles = reg.build_install_profiles(entry, "r", _comps(_C.TOOL), ["opencode"])
+    assert _C.TOOL not in profiles.get("opencode", {})

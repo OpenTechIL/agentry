@@ -32,7 +32,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - OpenCode tools now install as single files with their extension, as copies, so OpenCode loads
   them. Previously they were silently ignored, and a symlinked tool importing
   `@opencode-ai/plugin` broke every opencode command. Directory-style tools, which OpenCode can't
-  load, are now skipped with a warning.
+  load, are now skipped with a warning, as are single tool files OpenCode ignores (anything but
+  `.ts` / `.js`). Hand edits to `.opencode/tools/*` are overwritten on sync.
+- `target_profiles`: `expect.extension` accepts a list of suffixes. `on_mismatch: skip` on a
+  `link` / `copy` rule needs a path check (`extension` or `file_only`), and is rejected on a
+  `hook` / `mcp` rule using `link` / `copy`, where it could never fire.
+- Catalog `namespaced` / `copy` flags now also apply to component types whose built-in default
+  is a copy.
 
 ## [0.3.3] — 2026-11-15
 

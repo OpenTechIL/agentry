@@ -147,13 +147,18 @@ class SyncResult:
 
 @dataclass(frozen=True)
 class FormatSkip:
-    """A merged component not installed on one target because its content misses an
-    expectation whose action is ``skip`` (``on_mismatch: skip``)."""
+    """A component not installed on one target because it misses an expectation whose
+    action is ``skip`` (``on_mismatch: skip``): a merged component's entries (e.g. a
+    Claude-shaped MCP server on OpenCode), or a link/copy artifact's path (e.g. a directory
+    tool where the target loads only single ``.ts`` / ``.js`` files)."""
 
     ref: str  #: component ref
     target: str
-    where: str  #: ``file:pointer`` the merge would have gone to
-    entries: tuple[str, ...]  #: the offending entry keys
+    #: Where it would have gone: ``file:pointer`` for a merge, the dest path for link/copy.
+    where: str
+    #: The offending entry keys (merge); empty for a path skip.
+    entries: tuple[str, ...]
+    reason: str  #: why, as one clause (e.g. "github uses a format opencode rejects")
     note: str  #: the status-row note
     message: str  #: the full warning, as warned
 
@@ -740,16 +745,19 @@ def _desired_for_target(
         warnings.append(msg)
         plan.skipped.append(msg)
         return
-    if comp.type not in MERGE_TYPES and comp.transform is None:
+    # Copy-with-rewrite: a transformed file replaces the live symlink. Only single-file
+    # link types qualify; anything else installs the raw artifact (with a note below).
+    transformed = (
+        comp.transform is not None and strat is Strategy.LINK and not TYPE_IS_DIR[comp.type]
+    )
+    if comp.type not in MERGE_TYPES and not transformed:
         # A transformed component installs the rewritten output, not this artifact, so
-        # the source file's format says nothing about what lands.
+        # the source file's format says nothing about what lands; otherwise it does.
         if _skip_path_artifact(comp, tname, driver, strat, artifact, plan, warnings):
             return
         _check_format(comp, tname, driver, plan, warnings, artifact=artifact)
     if comp.transform is not None:
-        # Copy-with-rewrite: a transformed file replaces the live symlink. Only
-        # single-file link types qualify; anything else installs normally with a note.
-        if strat is Strategy.LINK and not TYPE_IS_DIR[comp.type]:
+        if transformed:
             plan.transforms.append(
                 DesiredTransform(
                     comp.ref,
@@ -993,6 +1001,9 @@ def _skip_path_artifact(
     that loads only single files). True if skipped."""
     if strat not in (Strategy.LINK, Strategy.COPY):
         return False
+    exp = driver.spec.expect.get(comp.type)
+    if exp is None or exp.on_mismatch != "skip":
+        return False  # cheap: no stat or dest until a skip rule exists
     ext = _ext(artifact)
     dest = (
         driver.link_dest(comp.type, comp.name, ext)
@@ -1032,14 +1043,15 @@ def _skip_on_mismatch(
         names = ", ".join(bad)
         suffix = f" (entries: {names})"
         verb = "uses" if len(bad) == 1 else "use"
-        note = f"skipped on {tname}: {names} {verb} a format {tname} rejects (see warnings)"
+        reason = f"{names} {verb} a format {tname} rejects"
     else:
         problems = check_format(exp, artifact=artifact)
         if not problems:
             return False
         bad = []
-        suffix = ""
-        note = f"skipped on {tname}: {'; '.join(problems)} (see warnings)"
+        reason = "; ".join(problems)
+        suffix = f" ({reason})"
+    note = f"skipped on {tname}: {reason} (see warnings)"
     msg = (
         _skip_template(comp, exp, variant)
         .replace("{ref}", comp.ref)
@@ -1050,7 +1062,7 @@ def _skip_on_mismatch(
         + suffix
     )
     warnings.append(msg)
-    plan.format_skips.append(FormatSkip(comp.ref, tname, where, tuple(bad), note, msg))
+    plan.format_skips.append(FormatSkip(comp.ref, tname, where, tuple(bad), reason, note, msg))
     return True
 
 

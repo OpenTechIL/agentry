@@ -140,7 +140,7 @@ def _merge_dest(rule: ProfileRule, base: TargetSpec | None, ctype: ComponentType
 
 def _to_expectation(rule: ExpectRule) -> FormatExpectation:
     return FormatExpectation(
-        extension=rule.extension,
+        extension=tuple(rule.extension) if isinstance(rule.extension, list) else rule.extension,
         file_only=rule.file_only,
         events=frozenset(rule.events) if rule.events is not None else None,
         require=tuple(rule.require),
