@@ -421,3 +421,167 @@ def test_root_mcp_json_with_subdir_names_the_subdir_path(tmp_path: Path):
     (w,) = [w for w in sync(proj).warnings if "skipped on opencode" in w]
     assert w == _skip_line("s/mcp/mcp", "pkg/mcp/mcp-opencode.json")
     _prove_variant_installs(proj, src / "pkg" / "mcp" / "mcp-opencode.json", "mcp-opencode")
+
+
+# --- review fixes (PR #103) --------------------------------------------------------------
+
+
+def test_skipped_variant_is_told_to_fix_itself_not_ship_a_variant_of_a_variant(tmp_path: Path):
+    """`mcp/fs-opencode.json` still in Claude's shape: no `fs-opencode-opencode.json` hint
+    (it would never be discovered) — the warning says to rewrite that file."""
+    proj = _project(
+        tmp_path, ["claude", "opencode"], {"fs": _CLAUDE_SHAPED, "fs-opencode": _CLAUDE_SHAPED}
+    )
+    res = sync(proj)
+    (w,) = [w for w in res.warnings if "skipped on opencode" in w]
+    assert w == (
+        "s/mcp/fs-opencode: this opencode-specific variant doesn't match what opencode "
+        "accepts — skipped on opencode. Rewrite it in opencode's format (`type: "
+        '"local"` with `command` as one array and `environment`), or override mcp for '
+        "opencode under target_profiles. (entries: fs)"
+    )
+    assert "-opencode-opencode" not in w
+
+
+def _custom_skip(skip_message: str, fallback: str = "") -> dict:
+    return {
+        "opencode": {
+            "mcp": {
+                "strategy": "merge",
+                "file": "opencode.json",
+                "pointer": "mcp",
+                "expect": {
+                    "require": ["type"],
+                    "on_mismatch": "skip",
+                    "skip_message": skip_message,
+                    "skip_message_fallback": fallback,
+                },
+            }
+        }
+    }
+
+
+def _explicit_path_project(tmp_path: Path, profiles: dict) -> Path:
+    src = tmp_path / "src"
+    (src / "servers").mkdir(parents=True)
+    (src / "servers" / "fs.json").write_bytes(json.dumps(_CLAUDE_SHAPED).encode())
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    store = ConfigStore.create(proj, ["opencode"])
+    store.add_source(Source(name="s", type=SourceType.LOCAL, path=str(src)))
+    store.add_component(Component(source="s", type=_C.MCP, name="fs", path="servers/fs.json"))
+    store.doc["target_profiles"] = profiles
+    store.save()
+    return proj
+
+
+def test_skip_message_needing_a_variant_path_falls_back_to_generic_without_one(tmp_path: Path):
+    """A user rule with `{variant_path}` but no fallback, on a component with no variant path:
+    the generic message, never a sentence with a hole in it ("Ship  (…)")."""
+    proj = _explicit_path_project(
+        tmp_path, _custom_skip("{ref}: nope. Ship {variant_path} (a variant) instead.")
+    )
+    (w,) = [w for w in sync(proj).warnings if "skipped on opencode" in w]
+    assert w == (
+        "s/mcp/fs: its content doesn't match what opencode accepts — skipped on opencode. "
+        "Ship a opencode-specific mcp, or override mcp for opencode under target_profiles. "
+        "(entries: fs)"
+    )
+    assert "Ship  " not in w
+
+
+def test_skip_message_without_variant_path_is_used_when_no_path_exists(tmp_path: Path):
+    proj = _explicit_path_project(tmp_path, _custom_skip("{ref}: skipped on {target}, sorry."))
+    (w,) = [w for w in sync(proj).warnings if "skipped on opencode" in w]
+    assert w == "s/mcp/fs: skipped on opencode, sorry. (entries: fs)"
+
+
+def test_variant_path_is_computed_only_when_a_skip_happens(tmp_path: Path, monkeypatch):
+    """No filesystem probing or descriptor parse for pairs that install normally."""
+    from agentry import reconcile
+
+    calls: list[str] = []
+    real = reconcile._variant_path
+
+    def counting(comp, *args, **kwargs):
+        calls.append(comp.ref)
+        return real(comp, *args, **kwargs)
+
+    monkeypatch.setattr(reconcile, "_variant_path", counting)
+    proj = _project(tmp_path, ["claude", "opencode"], {"ok": _OC_SHAPED, "fs": _CLAUDE_SHAPED})
+    sync(proj)
+    assert calls == ["s/mcp/fs"]  # only the skipped pair; not s/mcp/ok, not claude
+
+
+def test_on_mismatch_skip_rejected_on_a_strategy_that_cannot_skip():
+    import pytest
+    from pydantic import ValidationError
+
+    from agentry.models import ProfileRule
+    from agentry.targets import BUILTIN_TARGETS
+
+    skip = {"require": ["type"], "on_mismatch": "skip"}
+    for rule in (
+        {"strategy": "link", "dest": ".x/{name}"},
+        {"strategy": "copy", "dest": ".x/{name}"},
+        {"strategy": "link+merge", "dest": ".x/{name}", "file": "x.json", "pointer": "hooks"},
+    ):
+        with pytest.raises(ValidationError, match="needs strategy 'merge'"):
+            ProfileRule.model_validate({**rule, "expect": skip})
+        ProfileRule.model_validate({**rule, "expect": {**skip, "on_mismatch": "warn"}})
+    ProfileRule.model_validate(
+        {"strategy": "merge", "file": "x.json", "pointer": "mcp", "expect": skip}
+    )
+    # built-ins stay valid: every built-in skip rule sits on a plain merge
+    for spec in BUILTIN_TARGETS.values():
+        for ctype, exp in spec.expect.items():
+            if exp.on_mismatch == "skip":
+                assert ctype in spec.merge
+
+
+def test_doctor_reports_a_skip_once_not_also_as_drift(tmp_path: Path):
+    proj = _project(tmp_path, ["opencode"], {"fs": _CLAUDE_SHAPED})
+    sync(proj)
+    about = [c for c in run_checks(proj) if "s/mcp/fs" in c.message]
+    assert [(c.level, c.category) for c in about] == [("warn", "format")]
+
+
+def test_format_skips_are_named_records(tmp_path: Path):
+    from agentry.reconcile import FormatSkip
+
+    proj = _project(tmp_path, ["opencode"], {"fs": _CLAUDE_SHAPED})
+    res = sync(proj)
+    assert res.format_skips == [
+        FormatSkip(
+            ref="s/mcp/fs",
+            target="opencode",
+            where="opencode.json:mcp",
+            entries=("fs",),
+            note="skipped on opencode: fs uses a format opencode rejects (see warnings)",
+            message=_skip_line(),
+        )
+    ]
+
+
+def test_cli_folds_several_skips_to_one_short_line_each(tmp_path: Path, monkeypatch):
+    proj = _project(tmp_path, ["opencode"], {"fs": _CLAUDE_SHAPED, "gh": _CLAUDE_SHAPED})
+    monkeypatch.chdir(proj)
+    env = {"COLUMNS": "400", "PATH": "/usr/bin:/bin"}
+    out = CliRunner(env=env).invoke(app, ["sync"]).output
+    assert _skip_line() not in out
+    for ref in ("s/mcp/fs", "s/mcp/gh"):  # both fragments define the entry `fs`
+        line = (
+            f"{ref}: skipped on opencode — fs uses a format opencode rejects. "
+            "Run `agentry doctor` (or sync with --verbose) for the fix"
+        )
+        assert out.count(line) == 1
+    verbose = CliRunner(env=env).invoke(app, ["sync", "--verbose"]).output
+    assert _skip_line() in verbose and "skipped on opencode — fs uses" not in verbose
+
+
+def test_cli_prints_a_single_skip_in_full(tmp_path: Path, monkeypatch):
+    proj = _project(tmp_path, ["opencode"], {"fs": _CLAUDE_SHAPED})
+    monkeypatch.chdir(proj)
+    env = {"COLUMNS": "400", "PATH": "/usr/bin:/bin"}
+    out = CliRunner(env=env).invoke(app, ["sync"]).output
+    assert _skip_line() in out

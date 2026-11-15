@@ -605,7 +605,15 @@ s/mcp/github: this MCP server uses Claude's format, which OpenCode rejects; it w
 (or `"remote"`), `command` as one array with the arguments included, and `environment` instead
 of `env`. A single entry in the wrong shape makes OpenCode refuse the whole file, so agentry
 doesn't write it at all. Every other target still gets the server. On OpenCode, `agentry status`
-shows it as `missing`, and `agentry doctor` lists it under `format`.
+shows it as `missing`, and `agentry doctor` lists it once, under `format` (not again as drift:
+`agentry sync` can't fix it).
+
+When several MCP servers are skipped, `agentry sync` prints one short line for each and keeps the
+full warning above for `agentry doctor` and `agentry sync --verbose`:
+
+```text
+s/mcp/github: skipped on opencode — github uses a format opencode rejects. Run `agentry doctor` (or sync with --verbose) for the fix
+```
 
 If an earlier agentry already wrote such an entry, the next sync removes it:
 
@@ -644,6 +652,13 @@ mono/mcp/custom: this MCP server uses Claude's format, which OpenCode rejects; i
 In that case, add a separate OpenCode-shaped MCP component limited to `targets: [opencode]`, or
 override the `mcp` rule for `opencode` under
 [`target_profiles`](config-reference.md#target_profiles).
+
+If the skipped file is already the OpenCode variant (`mcp/github-opencode.json`) but is still in
+Claude's shape, the warning tells you to fix that file:
+
+```text
+s/mcp/github-opencode: this opencode-specific variant doesn't match what opencode accepts — skipped on opencode. Rewrite it in opencode's format (`type: "local"` with `command` as one array and `environment`), or override mcp for opencode under target_profiles. (entries: github)
+```
 
 ### Gemini: a command that isn't a `.toml` file
 

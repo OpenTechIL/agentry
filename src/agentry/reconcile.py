@@ -62,7 +62,7 @@ from .models import (
 from .naming import repo_basename
 from .progname import prog
 from .resolver import effective_root
-from .spec import LinkMergeDest, MergeDest, check_format
+from .spec import FormatExpectation, LinkMergeDest, MergeDest, check_format
 from .targets import check_targets, resolve_targets, unresolved_targets
 
 
@@ -140,6 +140,22 @@ class SyncResult:
     #: ``(summary line, the warnings it stands for)``: the CLI prints the line instead of
     #: those warnings unless ``--verbose`` (ADR-002 §4: one line per plugin pair).
     grouped: list[tuple[str, list[str]]] = field(default_factory=list)
+    #: Merged components skipped for a format their target rejects (``on_mismatch: skip``);
+    #: their full warnings are in ``warnings``. The CLI shortens them when there are several.
+    format_skips: list[FormatSkip] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class FormatSkip:
+    """A merged component not installed on one target because its content misses an
+    expectation whose action is ``skip`` (``on_mismatch: skip``)."""
+
+    ref: str  #: component ref
+    target: str
+    where: str  #: ``file:pointer`` the merge would have gone to
+    entries: tuple[str, ...]  #: the offending entry keys
+    note: str  #: the status-row note
+    message: str  #: the full warning, as warned
 
 
 # -- desired-state computation -------------------------------------------
@@ -167,9 +183,9 @@ class DesiredPlan:
     #: per (component, target) whose content the target's ``expect`` says won't work there.
     format_issues: list[str] = field(default_factory=list)
     #: Merged components not installed because their content misses an expectation whose
-    #: action is ``skip`` (also in the caller's warnings): ``(ref, target, where, note,
-    #: warning)`` — status shows them missing, doctor warns.
-    format_skips: list[tuple[str, str, str, str, str]] = field(default_factory=list)
+    #: action is ``skip`` (also in the caller's warnings) — status shows them missing,
+    #: doctor warns once per pair (format, not drift).
+    format_skips: list[FormatSkip] = field(default_factory=list)
     #: ``(canonical ref, target) -> variant ref``: a suffix-less merge fragment that a
     #: same-source per-harness variant replaces on that target (routing, so no row there).
     replaced: dict[tuple[str, str], str] = field(default_factory=dict)
@@ -771,7 +787,10 @@ def _desired_for_target(
             entries = _hook_entries(comp, tname, driver, artifact, dest, entries, plan, warnings)
             if not entries:
                 return
-        variant = _variant_path(comp, tname, artifact, src, root) if root is not None else ""
+
+        def variant() -> str:  # lazy: stats + a descriptor parse, only once a skip happens
+            return _variant_path(comp, tname, artifact, src, root) if root is not None else ""
+
         if _skip_on_mismatch(comp, tname, driver, dest, entries, plan, warnings, variant):
             return
         _check_format(comp, tname, driver, plan, warnings, entries=entries)
@@ -873,6 +892,8 @@ def _variant_path(comp: Component, tname: str, artifact: Path, src: Source, root
     base = effective_root(root, src)
     if layout is None or comp.path is not None:
         return ""
+    if discovery.harness_suffix(comp.name) is not None:
+        return ""  # already a per-harness variant: `<name>-<t>-<t>.json` is never discovered
     if discovery.load_descriptor(base) is not None:
         return ""  # a descriptor replaces the convention scan: no variant is discovered
     is_plugin = (base / plugin_manifest.MANIFEST_PATH).is_file()
@@ -892,6 +913,40 @@ def _variant_path(comp: Component, tname: str, artifact: Path, src: Source, root
     return f"{src.subdir.strip('/')}/{rel}" if src.subdir else rel
 
 
+#: The ``skip`` warning when the rule names none (``{…}`` placeholders as in skip_message).
+_SKIP_GENERIC = (
+    "{ref}: its content doesn't match what {target} accepts — skipped on {target}. Ship "
+    "a {target}-specific {type}, or override {type} for {target} under target_profiles."
+)
+#: The ``skip`` warning for a component that already *is* the per-harness variant for this
+#: target: no further variant can replace it, so the fix is the file itself.
+_SKIP_VARIANT = (
+    "{ref}: this {target}-specific variant doesn't match what {target} accepts — skipped "
+    "on {target}. Rewrite it in {target}'s format{expects}, or override {type} for "
+    "{target} under target_profiles."
+)
+
+
+def _skip_template(comp: Component, exp: FormatExpectation, variant: Callable[[], str]) -> str:
+    """The ``skip`` warning template for ``comp``, with ``{variant_path}`` already filled.
+
+    ``variant`` is only called here, once a skip is certain (it stats the source and may
+    parse its descriptor). A template that needs ``{variant_path}`` is never used without
+    one: the fallback, else the generic message, takes its place.
+    """
+    if discovery.harness_suffix(comp.name) is not None:
+        expects = f" ({exp.expects})" if exp.expects else ""
+        return _SKIP_VARIANT.replace("{expects}", expects)
+    path = variant()
+    if path:
+        return (exp.skip_message or _SKIP_GENERIC).replace("{variant_path}", path)
+    if exp.skip_message_fallback:
+        return exp.skip_message_fallback.replace("{variant_path}", "")
+    if exp.skip_message and "{variant_path}" not in exp.skip_message:
+        return exp.skip_message
+    return _SKIP_GENERIC
+
+
 def _skip_on_mismatch(
     comp: Component,
     tname: str,
@@ -900,7 +955,7 @@ def _skip_on_mismatch(
     entries: dict,
     plan: DesiredPlan,
     warnings: list[str],
-    variant: str = "",
+    variant: Callable[[], str] = lambda: "",
 ) -> bool:
     """A merged component whose content misses an expectation with ``on_mismatch: skip``
     isn't installed on ``tname`` (the whole component, never half of it). True if skipped.
@@ -915,16 +970,8 @@ def _skip_on_mismatch(
     if not bad:
         return False
     names = ", ".join(bad)
-    generic = (
-        "{ref}: its content doesn't match what {target} accepts — skipped on {target}. Ship "
-        "a {target}-specific {type}, or override {type} for {target} under target_profiles."
-    )
-    if variant:
-        template = exp.skip_message or generic
-    else:  # never print a variant path that wouldn't work
-        template = exp.skip_message_fallback or exp.skip_message or generic
     msg = (
-        template.replace("{variant_path}", variant)
+        _skip_template(comp, exp, variant)
         .replace("{ref}", comp.ref)
         .replace("{target}", tname)
         .replace("{type}", comp.type.value)
@@ -934,7 +981,9 @@ def _skip_on_mismatch(
     warnings.append(msg)
     verb = "uses" if len(bad) == 1 else "use"
     note = f"skipped on {tname}: {names} {verb} a format {tname} rejects (see warnings)"
-    plan.format_skips.append((comp.ref, tname, f"{dest.file}:{dest.pointer}", note, msg))
+    plan.format_skips.append(
+        FormatSkip(comp.ref, tname, f"{dest.file}:{dest.pointer}", tuple(bad), note, msg)
+    )
     return True
 
 
@@ -1092,6 +1141,7 @@ def sync(
     plan = compute_desired(root, augmented, result.warnings, graph.transitive)
     result.summarized["unsupported"] = list(plan.skipped)
     result.summarized["format"] = list(plan.format_issues)
+    result.format_skips = list(plan.format_skips)
     result.summarized["inactive"] = list(plan.inactive)
     result.summarized["plugin"] = list(plan.plugin_unsupported)
     links, copies, merges = plan.links, plan.copies, plan.merges
@@ -2462,8 +2512,8 @@ def status(root: Path, *, planned: Planned | None = None) -> tuple[list[StatusRo
         return (comp_rank.get(ref, len(comp_rank)), target_rank.get(target, len(target_rank)))
 
     merge_rows: list[tuple[tuple[int, int], StatusRow]] = [
-        (order(ref, target), StatusRow(ref, target, where, "missing", why))
-        for ref, target, where, why, _msg in plan.format_skips
+        (order(fs.ref, fs.target), StatusRow(fs.ref, fs.target, fs.where, "missing", fs.note))
+        for fs in plan.format_skips
     ]
     for dm in merges:
         state, note, drifted = merge_state(

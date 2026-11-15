@@ -90,14 +90,18 @@ class FormatExpectation:
     #: What to do with a merged component that misses this expectation: ``"warn"`` (phase A:
     #: install as-is and warn) or ``"skip"`` (don't install it on this target — for content
     #: that would break the whole target config, e.g. OpenCode rejecting a Claude-shaped
-    #: MCP entry; runtime-confirmed per target before a rule is set to it).
+    #: MCP entry; runtime-confirmed per target before a rule is set to it). Only a plain
+    #: ``merge`` honours ``"skip"``: a profile rule pairing it with another strategy is
+    #: rejected, and one inherited onto another strategy never skips (at most it warns).
     on_mismatch: str = "warn"
     #: The ``skip`` warning. ``{ref}`` / ``{target}`` / ``{type}`` / ``{name}`` expand, and
     #: ``{variant_path}`` — the exact per-harness variant file to create (T16), relative to
     #: the source repo (``--subdir`` included). Empty ⇒ a generic message.
     skip_message: str = ""
     #: Used instead when no working variant path can be named (see
-    #: ``reconcile._variant_path``). Empty ⇒ ``skip_message`` with ``{variant_path}`` dropped.
+    #: ``reconcile._variant_path``). Empty ⇒ ``skip_message`` if it doesn't use
+    #: ``{variant_path}``, else the generic message. A component that already is the
+    #: per-harness variant gets a built-in "rewrite this file" message instead of either.
     skip_message_fallback: str = ""
 
 

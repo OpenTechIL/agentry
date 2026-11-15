@@ -396,6 +396,17 @@ class ProfileRule(BaseModel):
             raise ValueError("link+merge profile rule requires 'dest', 'file' and 'pointer'")
         if (self.rewrite_from is None) != (self.rewrite_to is None):
             raise ValueError("'rewrite_from' and 'rewrite_to' must be set together")
+        # Only a plain merge can leave a component out whole; a link, copy or link+merge
+        # (whose link and merge must stay together) can only warn.
+        if (
+            self.expect is not None
+            and self.expect.on_mismatch == "skip"
+            and self.strategy is not Strategy.MERGE
+        ):
+            raise ValueError(
+                f"expect.on_mismatch 'skip' needs strategy 'merge', not "
+                f"'{self.strategy.value}' — use 'warn'"
+            )
         # These two are joined onto the project root by the installers, and they can come
         # from a remote catalog overlay — so they get the same treatment as Component.path.
         if self.dest:

@@ -393,10 +393,17 @@ dataclass that *composes* two things:
      and warn. `skip` is for formats a target *rejects outright*: a merged component (plain merge)
      whose entries violate the rule is **not installed on that target at all** — the whole
      component, never half of it — with the rule's `skip_message` (or a generic one) naming the
-     offending entries; `DesiredPlan.format_skips` gives it a `missing` status row with a note and a
-     `doctor` warning (`--strict` fails). A copy agentry installed earlier becomes an orphan and is
-     removed by the normal fingerprint-checked path; a hand-edited one stays (W4); `keep:` keys are
-     never touched. `link+merge` stays warn-only. A `target_profiles` / source `expect:` override
+     offending entries; `DesiredPlan.format_skips` (`FormatSkip` records) gives it a `missing`
+     status row with a note and one `doctor` `format` warning (`--strict` fails) — no second
+     `drift` row, since sync can't install it. The variant hint (`{variant_path}`) is worked out
+     only once a skip happens; a template needing it is never used without one (fallback, else
+     the generic message), and a component that already *is* the per-harness variant is told to
+     rewrite itself. With two or more skips, `sync` prints one short line per skipped pair and
+     keeps the full warnings for `--verbose` and `doctor`. `skip` is valid only on a `merge`
+     profile rule (a validation error otherwise); a built-in skip rule inherited onto another
+     strategy by a strategy-only override never skips (at most it warns). A copy agentry
+     installed earlier becomes an orphan and is removed by the normal fingerprint-checked path; a
+     hand-edited one stays (W4); `keep:` keys are never touched. `link+merge` stays warn-only. A `target_profiles` / source `expect:` override
      carries its own `on_mismatch` (omitted ⇒ `warn`); omitting `expect:` entirely inherits the
      built-in rule, `skip` included.
    - **Built-ins.**
