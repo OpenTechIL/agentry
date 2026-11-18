@@ -191,7 +191,10 @@ curated components. `agentry add <repo>` consults them in order and synthesizes 
 Components a user would hand-write, installing all of them, a `@name`-selected subset, or a
 `--type`-filtered subset — so catalogs add resolution only, no new install mechanics. The
 catalog is the JSON contract a hosted "artifactory" server would serve, so file and server are
-interchangeable. URL catalogs are cached under `.agentry/repositories/`. `agentry init` seeds this
+interchangeable. URL catalogs are cached under `.agentry/repositories/`. URL fetches always verify TLS;
+when OpenSSL's compiled-in CA location is missing (the frozen PyInstaller builds bake in the
+build machine's path) `registry._ssl_context` loads the first existing OS bundle from
+`SYSTEM_CA_FILES`, and `SSL_CERT_FILE`/`SSL_CERT_DIR` always take precedence. `agentry init` seeds this
 list with agentry's own curated catalog (`agentry` → `registry/repositories.json` on
 `raw.githubusercontent.com`, see `DEFAULT_CATALOG_URL` in `config.py`) so name-based installs
 work on a fresh project; `--no-default-catalog` starts empty.

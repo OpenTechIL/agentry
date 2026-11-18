@@ -113,7 +113,7 @@ def _serve(monkeypatch, body: bytes) -> list[str]:
     """Fake urlopen: serve `body` for any URL, recording what was requested."""
     requested: list[str] = []
 
-    def fake(req, timeout=None):
+    def fake(req, timeout=None, context=None):
         url = getattr(req, "full_url", req)
         requested.append(url)
         return _Resp(body, url)

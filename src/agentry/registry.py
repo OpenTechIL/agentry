@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+import ssl
 import urllib.request
 from collections.abc import Iterable
 from pathlib import Path
@@ -41,6 +43,36 @@ FETCH_TIMEOUT = 15.0
 #: Hard cap on a catalog response. A catalog is a small JSON index; anything larger is a
 #: misconfigured URL or a hostile host, and the body gets written to the store cache.
 MAX_CATALOG_BYTES = 8 * 1024 * 1024
+
+#: CA bundles shipped by common OSes, tried in order when OpenSSL's compiled-in default
+#: location is missing. That happens in the frozen (PyInstaller) builds: the bundled OpenSSL
+#: points at the *build machine's* directory (e.g. /opt/homebrew/etc/openssl@4), which a
+#: user's machine usually doesn't have, so every HTTPS fetch fails certificate verification.
+SYSTEM_CA_FILES: tuple[str, ...] = (
+    "/etc/ssl/cert.pem",  # macOS, Alpine, the BSDs
+    "/etc/ssl/certs/ca-certificates.crt",  # Debian, Ubuntu, Arch
+    "/etc/pki/tls/certs/ca-bundle.crt",  # Fedora, RHEL
+    "/etc/ssl/ca-bundle.pem",  # openSUSE
+)
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """A verifying TLS context that still finds trusted roots in a frozen build.
+
+    ``SSL_CERT_FILE`` / ``SSL_CERT_DIR`` always win (OpenSSL reads them itself). Otherwise,
+    when the default CA file and directory are both missing, load the first OS bundle that
+    exists. Verification is never turned off: with no bundle found, the fetch fails as before.
+    """
+    ctx = ssl.create_default_context()
+    if os.environ.get("SSL_CERT_FILE") or os.environ.get("SSL_CERT_DIR"):
+        return ctx
+    defaults = ssl.get_default_verify_paths()  # cafile/capath are None when they don't exist
+    if not defaults.cafile and not defaults.capath:
+        for bundle in SYSTEM_CA_FILES:
+            if os.path.isfile(bundle):
+                ctx.load_verify_locations(cafile=bundle)
+                break
+    return ctx
 
 
 class RegistryError(RuntimeError):
@@ -181,7 +213,9 @@ def _load_raw(root: Path, registry: Registry) -> str:
             url, headers={"User-Agent": "agentry", "Accept": "application/json"}
         )
         try:
-            with urllib.request.urlopen(req, timeout=FETCH_TIMEOUT) as resp:  # noqa: S310
+            with urllib.request.urlopen(  # noqa: S310
+                req, timeout=FETCH_TIMEOUT, context=_ssl_context()
+            ) as resp:
                 # Re-check after redirects: the pre-flight check only covered the URL we
                 # asked for, and a 3xx can hand us back any scheme urllib is willing to open.
                 final = getattr(resp, "url", url) or url
