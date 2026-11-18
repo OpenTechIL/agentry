@@ -32,7 +32,7 @@ def _fake_urlopen(monkeypatch, *, body: bytes, final_url: str = "https://example
         def __exit__(self, *a):
             return False
 
-    def fake(req, timeout=None):
+    def fake(req, timeout=None, context=None):
         calls["timeout"] = timeout
         return _Resp(body)
 
@@ -69,3 +69,87 @@ def test_successful_fetch_is_cached_in_the_store(tmp_path, monkeypatch):
         raw = reg._load_raw(tmp_path, _registry())
     assert raw == '{"repositories": {}}'
     assert reg._cache_path(tmp_path, _registry()).read_text(encoding="utf-8") == raw
+
+
+# --- TLS trust roots in frozen builds ----------------------------------------------------
+
+
+class _FakeCtx:
+    def __init__(self):
+        self.loaded: list[str] = []
+
+    def load_verify_locations(self, cafile=None, **_):
+        self.loaded.append(cafile)
+
+
+def _ctx_env(monkeypatch, *, cafile, capath, bundles, env=None):
+    import ssl
+
+    ctx = _FakeCtx()
+    monkeypatch.setattr(reg.ssl, "create_default_context", lambda: ctx)
+    monkeypatch.setattr(
+        reg.ssl,
+        "get_default_verify_paths",
+        lambda: ssl.DefaultVerifyPaths(cafile, capath, "SSL_CERT_FILE", "", "SSL_CERT_DIR", ""),
+    )
+    monkeypatch.setattr(reg, "SYSTEM_CA_FILES", tuple(str(b) for b in bundles))
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+    monkeypatch.delenv("SSL_CERT_DIR", raising=False)
+    for k, v in (env or {}).items():
+        monkeypatch.setenv(k, v)
+    return ctx
+
+
+def test_ssl_context_falls_back_to_os_bundle_when_baked_path_missing(tmp_path, monkeypatch):
+    # A PyInstaller build's OpenSSL points at the build machine's dir; on the user's machine
+    # it's absent, so the first existing OS bundle must be loaded (skipping missing ones).
+    present = tmp_path / "cert.pem"
+    present.write_text("x")
+    ctx = _ctx_env(
+        monkeypatch, cafile=None, capath=None, bundles=[tmp_path / "missing.pem", present]
+    )
+    assert reg._ssl_context() is ctx
+    assert ctx.loaded == [str(present)]
+
+
+def test_ssl_context_keeps_working_defaults(tmp_path, monkeypatch):
+    present = tmp_path / "cert.pem"
+    present.write_text("x")
+    ctx = _ctx_env(monkeypatch, cafile=str(present), capath=None, bundles=[present])
+    reg._ssl_context()
+    assert ctx.loaded == []
+
+
+def test_ssl_context_respects_ssl_cert_file(tmp_path, monkeypatch):
+    present = tmp_path / "cert.pem"
+    present.write_text("x")
+    ctx = _ctx_env(
+        monkeypatch, cafile=None, capath=None, bundles=[present], env={"SSL_CERT_FILE": "/x"}
+    )
+    reg._ssl_context()
+    assert ctx.loaded == []
+
+
+def test_fetch_uses_verifying_context(tmp_path, monkeypatch):
+    seen: dict[str, object] = {}
+
+    class _Resp(io.BytesIO):
+        url = "https://example.invalid/c.json"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake(req, timeout=None, context=None):
+        seen["context"] = context
+        return _Resp(b'{"repositories": {}}')
+
+    monkeypatch.setattr(reg.urllib.request, "urlopen", fake)
+    reg._load_raw(tmp_path, _registry())
+    import ssl
+
+    ctx = seen["context"]
+    assert isinstance(ctx, ssl.SSLContext)
+    assert ctx.verify_mode == ssl.CERT_REQUIRED and ctx.check_hostname

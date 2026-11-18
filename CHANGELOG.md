@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Catalog fetches from the prebuilt binaries no longer fail with `CERTIFICATE_VERIFY_FAILED`:
+  when the bundled OpenSSL's CA path (baked in from the build machine) is missing, agentry
+  falls back to the OS CA bundle. `SSL_CERT_FILE` still overrides.
+
 ## [0.3.5] — 2026-11-16
 
 ### Changed
