@@ -62,7 +62,7 @@ jobs:
           - { runner: macos-15,       target: macos-arm64,     ext: "",     pyarch: "" }
           - { runner: windows-latest, target: windows-x86_64,  ext: ".exe", pyarch: "" }
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
@@ -277,7 +277,7 @@ jobs:
     permissions:
       contents: read   # read SHA256SUMS.txt off this repo's release
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resolve version
         id: ver
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
